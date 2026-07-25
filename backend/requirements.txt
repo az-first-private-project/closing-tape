@@ -1,0 +1,37 @@
+# ============================================================
+# GFNA V2 (全球财经新闻聚合器) Python 依赖列表
+# 变更: MySQL → PostgreSQL, 同步 → 异步
+# 安装方式:
+#   pip install -r requirements.txt
+# ============================================================
+
+# ==================== Web 框架 ====================
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+
+# ==================== 数据库 (PostgreSQL 异步) ====================
+sqlalchemy[asyncio]==2.0.27     # 含 asyncio 扩展
+asyncpg==0.29.0                  # PostgreSQL 异步驱动
+psycopg2-binary==2.9.9           # PostgreSQL 同步驱动 (Scrapy 用)
+cryptography==42.0.5
+
+# ==================== 爬虫框架 (同步，不变) ====================
+scrapy==2.11.1
+scrapy-playwright==0.0.40
+playwright==1.42.0
+cssselect==1.2.0
+
+# ==================== AI API (DeepSeek) ====================
+openai==1.13.3
+
+# ==================== 工具库 ====================
+python-dotenv==1.0.1
+python-dateutil==2.9.0.post0
+apscheduler==3.10.4
+pydantic==2.6.3
+
+# ==================== 开发工具 (可选) ====================
+# pytest==8.1.1
+# httpx==0.27.0
+# black==24.3.0
+# ruff==0.3.3

@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+/* ==================== CSS 变量 (shadcn/ui 风格) ==================== */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-primary: #1a73e8;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #1e293b;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-accent: #f8fafc;
+  --color-accent-foreground: #0f172a;
+  --color-destructive: #ef4444;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #1a73e8;
+  --color-success: #0d904f;
+  --color-warning: #f59e0b;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+/* ==================== 深色模式 ==================== */
+.dark {
+  --color-background: #0f172a;
+  --color-foreground: #f8fafc;
+  --color-card: #1e293b;
+  --color-card-foreground: #f8fafc;
+  --color-primary: #3b82f6;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1e293b;
+  --color-secondary-foreground: #f8fafc;
+  --color-muted: #1e293b;
+  --color-muted-foreground: #94a3b8;
+  --color-accent: #1e293b;
+  --color-accent-foreground: #f8fafc;
+  --color-border: #334155;
+  --color-input: #334155;
+  --color-ring: #3b82f6;
+  --color-success: #22c55e;
+  --color-warning: #fbbf24;
+}
+
+/* ==================== 全局样式 ==================== */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+    "微软雅黑", sans-serif;
+}
+
+/* ==================== 毛玻璃效果 ==================== */
+.glass {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dark .glass {
+  background: rgba(15, 23, 42, 0.8);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* ==================== 骨架屏动画 ==================== */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-muted) 25%, var(--color-border) 50%, var(--color-muted) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-lg);
+}
+
+/* ==================== 滚动条美化 ==================== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted-foreground);
+}
+
+/* ==================== 卡片 3D 悬浮 (在 JS 中实现) ==================== */
+.card-3d {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
