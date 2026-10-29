@@ -122,7 +122,11 @@ def test_stock_detail_and_kline(client):
 
     kline = client.get(f"/api/v1/stocks/{code}/kline?limit=60")
     assert kline.status_code == 200
-    assert len(kline.json()["items"]) > 0
+    kline_body = kline.json()
+    assert kline_body["adjust_basis"] == "raw"
+    assert len(kline_body["items"]) > 0
+    for field in ("boll_mid", "boll_upper", "boll_lower"):
+        assert field in kline_body["items"][0]
 
 
 def test_stock_not_found_uses_unified_error(client):
@@ -191,7 +195,9 @@ def test_algo_csv_export(client):
 # ============================================================
 
 def test_backtest_runs_and_persists(client):
-    resp = client.post("/api/v1/backtest/a3?rebalance_days=20&max_positions=5")
+    # end 必须钉在库里最新交易日：默认 today 在数据未更新当天会 DATA_NOT_READY
+    latest = client.get("/api/v1/market/dashboard").json()["trade_date"]
+    resp = client.post(f"/api/v1/backtest/a3?rebalance_days=20&max_positions=5&end={latest}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["bt_id"]
@@ -204,3 +210,19 @@ def test_backtest_runs_and_persists(client):
     again = client.get(f"/api/v1/backtest/{body['bt_id']}")
     assert again.status_code == 200
     assert again.json()["bt_id"] == body["bt_id"]
+
+    # 成交明细接口：复用已落库 trades，不重算
+    trades_resp = client.get(f"/api/v1/backtest/{body['bt_id']}/trades")
+    assert trades_resp.status_code == 200, trades_resp.text
+    trades_body = trades_resp.json()
+    assert trades_body["bt_id"] == body["bt_id"]
+    assert trades_body["algo_code"] == "a3"
+    assert trades_body["count"] == len(body["trades"])
+    if body["trades"]:
+        code = body["trades"][0]["code"]
+        filtered = client.get(f"/api/v1/backtest/{body['bt_id']}/trades?code={code}").json()
+        assert filtered["count"] > 0
+        assert all(t["code"].zfill(6) == code for t in filtered["items"])
+    missing = client.get("/api/v1/backtest/BT-NOT-EXIST/trades")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "NOT_FOUND"

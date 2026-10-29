@@ -178,10 +178,14 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 
 ### 4.2 GET `/api/v1/stocks/{code}/kline?limit=250&start=&end=`
 ```json
-{ "code": "688981", "items": [ { "trade_date": "2026-10-21", "open": 88.1, "high": 92.0,
+{ "code": "688981", "adjust_basis": "raw", "count": 250,
+  "items": [ { "trade_date": "2026-10-21", "open": 88.1, "high": 92.0,
     "low": 87.5, "close": 91.2, "volume": 12345678, "amount": 1.1e9,
-    "pct_chg": 3.636, "ma5": 90.1, "ma20": 88.7, "ma60": 85.2 } ] }
+    "pct_chg": 3.636, "ma5": 90.1, "ma20": 88.7, "ma60": 85.2,
+    "boll_mid": 88.7, "boll_upper": 95.2, "boll_lower": 82.2 } ] }
 ```
+- `adjust_basis` 固定为 `"raw"`：OHLC 为未复权原始价；MA/BOLL 也由同一组未复权收盘价计算（`features.py` 不读 `adj_factor`）。前端画 K 线与回测成交标记均按此口径，不做二次复权换算。
+- `boll_mid/upper/lower` 来自 `fact_feature_daily`；特征缺失的日期返回 null（不是 0）。
 
 ### 4.3 GET `/api/v1/stocks/search?q=&limit=20`
 `{ "items": [ { "code": "688981", "name": "中芯国际", "industry_l1": "电子" } ] }`
@@ -250,6 +254,17 @@ Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positi
   "created_at": "…" }
 ```
 ### 6.2 GET `/api/v1/backtest/{bt_id}` — 同上；`GET /api/v1/backtest/{bt_id}/export.csv` — 净值曲线 CSV。
+
+### 6.3 GET `/api/v1/backtest/{bt_id}/trades?code=`
+```json
+{ "bt_id": "b7d1…", "algo_code": "b1", "code": "600519", "total": 42, "count": 3,
+  "items": [ { "date": "2025-10-23", "code": "600519", "name": "贵州茅台", "side": "buy",
+               "price": 1512.3, "shares": 100, "amount": 151230.0, "fee": 42.8,
+               "reason": "rebalance" } ] }
+```
+- 直接读 `backtest_run.trades`，**不重新计算回测**；`code` 可省略（省略返回全部），过滤按 6 位补零后精确匹配。
+- `shares=0` 的记录是被拒单（`reason ∈ limit_up/limit_down/suspended/no_data`），前端需与真实成交区分。
+- 回测不存在返回 404 `NOT_FOUND`。
 
 ## 7. 前端路由
 
