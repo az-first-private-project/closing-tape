@@ -37,6 +37,12 @@
   --color-alert: #be123c;
   --color-grid: #e2e8f0;
   --color-glow: rgba(26, 115, 232, 0.16);
+  /* 市场温度色带（冷 → 热，五档） */
+  --color-temp-0: #1d4ed8;
+  --color-temp-1: #0e7490;
+  --color-temp-2: #475569;
+  --color-temp-3: #b45309;
+  --color-temp-4: #be123c;
   /* 图表系列色（非涨跌语义） */
   --color-chart-1: #2563eb;
   --color-chart-2: #7c3aed;
@@ -80,6 +86,11 @@
   --color-alert: #fb7185;
   --color-grid: #263449;
   --color-glow: rgba(96, 165, 250, 0.22);
+  --color-temp-0: #60a5fa;
+  --color-temp-1: #67e8f9;
+  --color-temp-2: #cbd5e1;
+  --color-temp-3: #fbbf24;
+  --color-temp-4: #fb7185;
   --color-chart-1: #60a5fa;
   --color-chart-2: #a78bfa;
   --color-chart-3: #22d3ee;

@@ -23,6 +23,7 @@ import IndexCard, {
 import SectorHeatmap from '../components/SectorHeatmap'
 import ScoreRanking from '../components/ScoreRanking'
 import AIReport from '../components/AIReport'
+import MarketTemperature from '../components/MarketTemperature'
 import FreshnessBadge from '../components/FreshnessBadge'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
 import type { IndexQuote, MarginData, SectorQuote, UsIndexQuote } from '../types/market'
@@ -363,6 +364,9 @@ export default function DashboardPage() {
         />
       ) : (
         <>
+          {/* ========== 市场温度计（V6 T3） ========== */}
+          <MarketTemperature tradeDate={selectedDate || undefined} />
+
           {/* ========== 指数多周期对比条 ========== */}
           {indexCards.length > 0 && (
             <div className="card overflow-hidden">

@@ -21,10 +21,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BENCHMARK_INDEX, INDEX_MAP
+from app.core.errors import DataUnavailableError
 from app.core.logging import get_logger
 from app.db.models import (
     DailyReport, DimSectorMember, FactSectorDaily, FactStockDaily, MarginTrading,
-    MarketIndex, SectorScore,
+    MarketIndex, MarketTemperatureDaily, SectorScore,
 )
 from app.db.session import get_db
 from app.engine.index_perf import WINDOW_KEYS, window_returns
@@ -165,6 +166,66 @@ async def get_sectors(
         return {"trade_date": None, "items": []}
     items = await _query_sectors(db, resolved, sector_type)
     return {"trade_date": resolved.isoformat(), "count": len(items), "items": items}
+
+
+@router.get("/temperature")
+async def get_temperature(
+    trade_date: Optional[date] = Query(None, description="交易日，默认最新有温度数据的交易日"),
+    days: int = Query(1, ge=1, le=250, description="1=当日全字段；>1=返回最近 N 个交易日序列"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """市场温度计（V6 T3）。
+
+    - `days=1`：返回指定/最新交易日的全部子项与总分；
+    - `days>1`：返回最近 N 个**有温度数据**的交易日序列（按日期升序）；
+    - 全无数据：按契约返回 `DATA_NOT_READY`（409），而不是空对象。
+    """
+    if trade_date is None:
+        resolved = (await db.execute(
+            select(func.max(MarketTemperatureDaily.trade_date))
+        )).scalar()
+        if resolved is None:
+            raise DataUnavailableError(
+                "还没有市场温度数据",
+                next_action="运行每日管线（temperature 步骤）或 scripts/backfill_temperature.py",
+            )
+    else:
+        resolved = trade_date
+        exists = (await db.execute(
+            select(MarketTemperatureDaily.trade_date).where(
+                MarketTemperatureDaily.trade_date == resolved
+            )
+        )).first()
+        if exists is None:
+            raise DataUnavailableError(
+                f"{resolved.isoformat()} 没有市场温度数据",
+                next_action="确认该日是否为交易日，或先运行回填脚本",
+                detail={"trade_date": resolved.isoformat()},
+            )
+
+    if days == 1:
+        row = (await db.execute(
+            select(MarketTemperatureDaily).where(
+                MarketTemperatureDaily.trade_date == resolved
+            )
+        )).scalar_one()
+        return {
+            **_temperature_payload(row),
+            "freshness": await get_freshness_items(db, ["market_temperature"]),
+        }
+
+    rows = (await db.execute(
+        select(MarketTemperatureDaily)
+        .where(MarketTemperatureDaily.trade_date <= resolved)
+        .order_by(MarketTemperatureDaily.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+    series = [_temperature_point(row) for row in reversed(rows)]
+    return {
+        "trade_date": resolved.isoformat(),
+        "count": len(series),
+        "series": series,
+    }
 
 
 @router.get("/sector/{sector_code}")
@@ -448,6 +509,36 @@ async def _query_report(db: AsyncSession, trade_date: date) -> dict | None:
         "model": row.model,
         "is_fallback": bool(row.is_fallback),
         "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _temperature_point(row: MarketTemperatureDaily) -> dict:
+    """温度序列中的单个交易日数据点。"""
+    return {
+        "trade_date": row.trade_date.isoformat(),
+        "temp_score": _f(row.temp_score),
+        "confidence": row.confidence,
+        "above_ma20_ratio": _f(row.above_ma20_ratio),
+        "amount_vs_ma20": _f(row.amount_vs_ma20),
+        "index_vol_annual": _f(row.index_vol_annual),
+        "up_count": row.up_count,
+        "down_count": row.down_count,
+        "flat_count": row.flat_count,
+        "total_count": row.total_count,
+        "limit_up_count": row.limit_up_count,
+        "limit_down_count": row.limit_down_count,
+        "median_pct": _f(row.median_pct),
+        "amount": _f(row.amount),
+    }
+
+
+def _temperature_payload(row: MarketTemperatureDaily) -> dict:
+    """单日全字段（含六个子项的原始值/得分/说明）。"""
+    return {
+        **_temperature_point(row),
+        "components": row.components or {},
+        "src": row.src,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 

@@ -155,6 +155,30 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `days=1`（默认）：`{ "trade_date": "2026-10-26", "items": [ /* 与 dashboard.indices 同结构，含多周期收益与相对300字段 */ ] }`
 - `days>1`：`{ "trade_date": "2026-10-26", "series": { "sh000001": [ { "trade_date": "…", "open": …, "high": …, "low": …, "close": …, "pct_chg": …, "volume": …, "amount": … } ] } }`（序列模式不附带多周期收益字段）
 
+### 3.4 GET `/api/v1/market/temperature?trade_date=&days=`
+市场温度计（V6 T3）。无 `trade_date` 取库内最新交易日；`days` 取值 1–250，默认 1。
+
+`days=1`：
+```json
+{ "trade_date": "2026-10-26", "temp_score": 41.3, "confidence": "ok",
+  "up_count": 2082, "down_count": 2991, "flat_count": 144, "total_count": 5217,
+  "limit_up_count": 65, "limit_down_count": 34, "median_pct": -0.495,
+  "above_ma20_ratio": 0.2149, "amount": 1611431825081.23,
+  "amount_vs_ma20": 0.963, "index_vol_annual": 15.112,
+  "components": { "available_count": 6, "total_count": 6,
+                  "items": [ { "key": "up_ratio", "label": "上涨占比", "unit": "%",
+                               "raw": 0.3991, "score": 34.9, "weight": 0.3,
+                               "direction": 1, "available": true, "note": "…" } ] },
+  "src": "engine", "updated_at": "…", "freshness": [ /* Freshness[] */ ] }
+```
+
+`days>1`：`{ "trade_date": "2026-10-26", "count": 60, "series": [ /* 每日 trade_date/temp_score/confidence/计数/比率，升序 */ ] }`
+
+- `temp_score` 为 0–100（1 位小数）；子项缺失时存 `null` 且 `confidence` 降级，**不以 0 代替**。
+- `confidence`：`ok` = 6/6 子项可用；`partial` = 4–5 项可用；`insufficient` = 关键项（上涨占比 / 站上 MA20）缺失或可用项 < 4，此时 `temp_score` 为 `null`。
+- `total_count` 为有效交易家数（剔除停牌）；`above_ma20_ratio` 是 0–1 小数；`amount_vs_ma20` 是倍数；`index_vol_annual` 是百分数。
+- 指定日没有温度记录时返回 `409 DATA_NOT_READY`（`detail.trade_date` 指明日期）；行情或特征尚未就绪时应先运行回填/管线，而不是当成 0 分。
+
 ## 4. 个股（E4）
 
 ### 4.1 GET `/api/v1/stocks/{code}`

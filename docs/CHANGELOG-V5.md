@@ -356,3 +356,33 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 对比度（前景/背景）：亮色 up 4.83、down 5.69、flat 4.76、alert 6.29、success 5.47、warning 7.09；暗色卡片 up 5.29、down 8.40、flat 5.71、alert 5.44、success 7.86、warning 8.76；均 ≥4.5:1。
 - 键盘 Tab 可见焦点 `2px solid rgb(26,115,232)`；Dashboard buffered layout-shift **CLS=0**；Console 仅既有 react-router v7 warning。
 - 已知：回测接口在本机 20s 超时（既有后端性能问题，非 T12 引入）；`.card` 为非分层样式，会覆盖部分 Tailwind hover 边框工具类（有意）。
+
+### 7.4 T3 市场温度计（2026-10-29）
+
+**目标**：用 0–100 温度分回答「现在市场能不能做」，只读既有日线/特征表，不引入新数据源。
+
+**后端**
+
+- 新增 `app/engine/breadth.py`：`load_breadth()` 从 `report_input._load_breadth` 原样抽取，日报改为复用（默认不剔除停牌，输出逐字段不变）；温度计传 `exclude_suspended=True`。
+- 新增 `app/engine/market_temperature.py`：六个子项（上涨占比 / 涨停 / 跌停 / 站上 MA20 / 量能比 / 指数 20 日年化波动率），每项输出原值、0–100 归一分、权重、方向、说明；固定分段线性归一化，**不做当日 min–max**，跨日可比。
+- 权重与断点集中在 `app/core/constants.py`（`TEMP_WEIGHTS` / `TEMP_BREAKPOINTS` / `TEMP_COOLING_COMPONENTS`）；跌停与波动率为降温项（`direction=-1`，断点反向）。
+- 缺失子项存 `null` 不补 0：`ok`=6/6；`partial`=4–5 项，权重在可用项上重新归一；`insufficient`=关键项（上涨占比 / 站上 MA20）缺失或可用项 <4，总分 `null`。MA20 覆盖率 <50% 视为该项不可用。
+- 新表 `market_temperature_daily`（迁移 `0002_market_temperature`），列按任务书；`confidence` 因枚举值 `insufficient`（12 字符）无法装入任务书的 `VARCHAR(8)`，放宽为 `VARCHAR(16)`（模型与迁移同步注明）。
+- 管线新增 `temperature` 步骤（排在 `features/scores/sector_scores` 之后），`TASK_DATASET` 映射 `market_temperature`，无新增 cron。
+- 新接口 `GET /api/v1/market/temperature?trade_date=&days=`：单日返回全部字段 + freshness，`days>1` 返回升序 `series`；无记录 409 `DATA_NOT_READY`。
+
+**前端**
+
+- `lib/market.ts`：五档温度带（0–20 极冷 / 20–40 偏冷 / 40–60 中性 / 60–80 偏热 / 80–100 极热），边界归入较热一档；`temperatureLabel()` / `temperatureColor()`。
+- `MarketTemperature.tsx`：纯 SVG 半圆仪表（`pathLength=100` + `stroke-dasharray`，无图表库）+ 六个子项细条（原值 / 归一得分 / ↑↓ / 降温徽标 / 说明）+ 60 日温度迷你曲线（固定 0–100 域，虚线 50，空值断线）。
+- `confidence !== ok` 时顶部显示浅色告警并列出缺失子项；总分缺失显示「—」，不渲染 0；无记录（409）显示独立空状态。
+- 挂载在 DashboardPage 顶部；`useTemperature` 仅在最新交易日视图每 10 分钟刷新，与 `useDashboard` 一致。
+
+**回填与验证（2026-10-29）**
+
+- `scripts/backfill_temperature.py --start 2025-10-01 --end 2026-10-26`：254/254 天完成，跳过 0、失败 0，用时 1.8 分钟；断点文件 `backend/var/temperature_backfill_progress.json`。
+- 手算 2026-10-26：上涨 2082 / 有效 5217 = 0.3991 → 34.9；涨停 65 → 60.0；跌停 34 → 41.0；站上 MA20 1120/5211 = 0.2149 → 12.2；量能比 16114.32 亿 / 16729.38 亿 = 0.963 → 45.4；指数波动率 15.11% → 84.6；加权 = 41.28 → **41.3**，与库/接口一致。
+- SQL 对账 3 个交易日（2026-10-26 / 09-30 / 06-30）上涨、下跌家数完全一致；MA20 手工 JOIN 得到 1120/5211 = 0.2149（±0.0001 内）；成交额与 `sum(fact_stock_daily.amount)` 相同。
+- 日报口径：`build_daily_report_input` 的 breadth 与温度计在 10-26 / 09-30 完全一致；06-30 日报 flat=84、温度计 flat=83，差异来自一条 `close IS NULL` 且未标记停牌的行——日报保持旧口径（不剔除），温度计按任务书剔除停牌，属预期差异。
+- `insufficient` 实测：事务内删除 2026-09-30 特征后回滚，`temp_score=null`、`confidence=insufficient`、`above_ma20` 标记不可用并提示覆盖率 0%；前端显示「温度数据不足，暂不给出总分。缺少：站上 MA20」，仪表为「—」，页面无 `NaN`。
+- 60 日曲线连续（`?days=60` 共 60 点，24.3–79.8，无 0 分断点）；`pytest` 179 passed / 15 skipped（新增 `tests/test_temperature.py` 13 项）；`npm run build` 通过（主包 868.95 kB / gzip 255.74 kB，CSS 37.19 kB）。

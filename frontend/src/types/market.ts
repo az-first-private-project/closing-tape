@@ -188,3 +188,78 @@ export interface SectorDetail {
   recent_trend: SectorTrendPoint[]
   members: SectorMember[]
 }
+
+/** 市场温度子项（T3；raw 单位见 unit） */
+export interface TemperatureComponent {
+  key: string
+  label: string
+  /** "%" / "家" / "倍" */
+  unit: string
+  raw: number | null
+  /** 0–100 归一分；null 表示该项缺数据 */
+  score: number | null
+  weight: number
+  /** 1=升温项，-1=降温项（仅用于标注，得分已反转） */
+  direction: number
+  available: boolean
+  note: string
+}
+
+export interface TemperatureComponents {
+  available_count: number
+  total_count: number
+  items: TemperatureComponent[]
+}
+
+export type TemperatureConfidence = 'ok' | 'partial' | 'insufficient'
+
+/** GET /api/v1/market/temperature?days=1 */
+export interface MarketTemperature {
+  trade_date: string
+  up_count: number | null
+  down_count: number | null
+  flat_count: number | null
+  total_count: number | null
+  limit_up_count: number | null
+  limit_down_count: number | null
+  median_pct: number | null
+  /** 0–1 小数 */
+  above_ma20_ratio: number | null
+  /** 元 */
+  amount: number | null
+  /** 倍数 */
+  amount_vs_ma20: number | null
+  /** 百分数 */
+  index_vol_annual: number | null
+  temp_score: number | null
+  confidence: TemperatureConfidence
+  components: TemperatureComponents
+  src: string | null
+  updated_at: string | null
+  freshness: Freshness[]
+}
+
+/** 温度序列中的单个交易日（days>1） */
+export interface TemperatureSeriesPoint {
+  trade_date: string
+  temp_score: number | null
+  confidence: TemperatureConfidence
+  above_ma20_ratio: number | null
+  amount_vs_ma20: number | null
+  index_vol_annual: number | null
+  up_count: number | null
+  down_count: number | null
+  flat_count: number | null
+  total_count: number | null
+  limit_up_count: number | null
+  limit_down_count: number | null
+  median_pct: number | null
+  amount: number | null
+}
+
+/** GET /api/v1/market/temperature?days>1 */
+export interface TemperatureSeries {
+  trade_date: string
+  count: number
+  series: TemperatureSeriesPoint[]
+}
