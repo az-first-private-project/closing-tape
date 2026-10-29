@@ -4,24 +4,30 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/emoji" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="GFNA - 全球财经新闻聚合器，AI 驱动的中文财经新闻摘要" />
-    <meta name="theme-color" content="#1a73e8" />
+    <meta name="description" content="GFNA - A 股盘后分析、量化选股与财经新闻聚合" />
+    <meta name="theme-color" content="#0f172a" />
 
-    <!-- PWA -->
+    <!-- 首屏前应用主题：默认深色，避免闪白；已手动选择过则尊重本地设置 -->
+    <script>
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('gfna-theme')
+          var theme = saved === 'light' || saved === 'dark' ? saved : 'dark'
+          if (!saved) localStorage.setItem('gfna-theme', theme)
+          document.documentElement.classList.toggle('dark', theme === 'dark')
+        } catch (error) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+
+    <!-- PWA manifest（Service Worker 已在 V5 移除，禁止缓存优先策略） -->
     <link rel="manifest" href="/manifest.json" />
 
-    <title>GFNA - 全球财经新闻聚合器</title>
+    <title>GFNA - 盘后分析与量化选股</title>
   </head>
   <body class="bg-background text-foreground antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- PWA Service Worker 注册 -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-        })
-      }
-    </script>
   </body>
 </html>

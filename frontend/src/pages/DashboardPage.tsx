@@ -26,7 +26,7 @@ import AIReport from '../components/AIReport'
 import FreshnessBadge from '../components/FreshnessBadge'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
 import type { IndexQuote, MarginData, SectorQuote, UsIndexQuote } from '../types/market'
-import { fmtPct, fmtScore, fmtYi } from '../lib/format'
+import { fmtPct, fmtScore, fmtYi, pctColor } from '../lib/format'
 
 /** 核心指数展示顺序：上证/深证/创业板/科创50/沪深300/中证500/中证1000，其余按后端顺序追加 */
 const PREFERRED_INDEX_ORDER = [
@@ -98,12 +98,12 @@ function StatBadge({
   sub?: string
   tone?: 'up' | 'down' | 'neutral'
 }) {
-  const color = tone === 'up' ? 'text-red-500' : tone === 'down' ? 'text-green-500' : 'text-foreground'
+  const color = tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-foreground'
   return (
-    <div className="bg-card border border-border rounded-lg p-3 text-center" title={sub}>
+    <div className="card p-3 text-center" title={sub}>
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`text-sm font-semibold mt-1 tabular-nums ${color}`}>{value}</p>
-      {sub && <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
+      <p className={`text-sm font-semibold mt-1 num ${color}`}>{value}</p>
+      {sub && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{sub}</p>}
     </div>
   )
 }
@@ -112,7 +112,7 @@ function StatBadge({
 function MarginOverview({ margin }: { margin: MarginData | null }) {
   if (!margin) {
     return (
-      <div className="bg-card border border-border rounded-xl p-4 text-sm text-muted-foreground">
+      <div className="card p-4 text-sm text-muted-foreground">
         融资融券数据暂无（采集任务可能尚未运行，见「任务监控」）。
       </div>
     )
@@ -126,7 +126,7 @@ function MarginOverview({ margin }: { margin: MarginData | null }) {
     margin.margin_balance !== null || margin.short_balance !== null
   if (!hasAnyValue) {
     return (
-      <div className="bg-card border border-border rounded-xl p-4 text-sm text-muted-foreground">
+      <div className="card p-4 text-sm text-muted-foreground">
         暂无融资融券数据（该交易日采集任务可能未成功，见「任务监控」）。
       </div>
     )
@@ -166,7 +166,7 @@ function SectorRankList({ title, sectors }: { title: string; sectors: SectorQuot
   if (list.length === 0) return null
 
   return (
-    <div className="bg-card border border-border rounded-xl p-4">
+    <div className="card p-4">
       <h3 className="font-semibold mb-3">{title}</h3>
       <div className="space-y-2">
         {list.map((sector, index) => {
@@ -186,10 +186,10 @@ function SectorRankList({ title, sectors }: { title: string; sectors: SectorQuot
                   )}
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
-                  <span className="text-xs text-muted-foreground tabular-nums">
+                  <span className="text-xs text-muted-foreground num">
                     {sector.composite_score === null ? '未评分' : `${fmtScore(sector.composite_score)}/10`}
                   </span>
-                  <span className={`text-sm font-semibold tabular-nums ${(sector.pct_chg ?? 0) >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                  <span className={`text-sm font-semibold num ${pctColor(sector.pct_chg)}`}>
                     {fmtPct(sector.pct_chg)}
                   </span>
                 </div>
@@ -204,7 +204,7 @@ function SectorRankList({ title, sectors }: { title: string; sectors: SectorQuot
                       title={strengthLeader.rank_text ?? undefined}
                     >
                       实力龙头 {strengthLeader.name}
-                      <span className="ml-1 text-red-500 tabular-nums">{fmtPct(strengthLeader.change_pct)}</span>
+                      <span className={`ml-1 num ${pctColor(strengthLeader.change_pct)}`}>{fmtPct(strengthLeader.change_pct)}</span>
                     </span>
                   )}
                   {sentimentLeader && (
@@ -213,7 +213,7 @@ function SectorRankList({ title, sectors }: { title: string; sectors: SectorQuot
                       title={sentimentLeader.rank_text ?? undefined}
                     >
                       情绪龙头 {sentimentLeader.name}
-                      <span className="ml-1 text-red-500 tabular-nums">{fmtPct(sentimentLeader.change_pct)}</span>
+                      <span className={`ml-1 num ${pctColor(sentimentLeader.change_pct)}`}>{fmtPct(sentimentLeader.change_pct)}</span>
                     </span>
                   )}
                 </div>
@@ -297,7 +297,7 @@ export default function DashboardPage() {
       {/* ========== 标题栏 + 日期选择 ========== */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">📊 GFNA 盘后分析</h1>
+          <h1 className="text-[28px] font-bold">📊 GFNA 盘后分析</h1>
           <p className="text-sm text-muted-foreground mt-1">
             交易日 {data.trade_date} · {indices.length} 指数 · {sectors.length} 板块 · 评分覆盖{' '}
             {scoredCount}/{totalSectors}
@@ -365,7 +365,7 @@ export default function DashboardPage() {
         <>
           {/* ========== 指数多周期对比条 ========== */}
           {indexCards.length > 0 && (
-            <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="card overflow-hidden">
               <div className="overflow-x-auto scrollbar-thin">
                 <div className="min-w-[860px]">
                   <IndexCompareHeader />
@@ -381,7 +381,7 @@ export default function DashboardPage() {
               <p className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border/60">
                 周期按交易日计算；小字为同周期 A 股指数排名；相对300 单位为百分点。
                 {hasIndexWarming && (
-                  <span className="ml-2 text-amber-600 dark:text-amber-400">
+                  <span className="ml-2 text-warning">
                     部分新纳入指数（中证500 / 中证1000）历史回补中，缺失周期显示 “—”。
                   </span>
                 )}
@@ -393,7 +393,7 @@ export default function DashboardPage() {
           {usCards.length > 0 && (
             <div>
               <p className="text-xs text-muted-foreground mb-2">美股指数（T-1 收盘）</p>
-              <div className="rounded-xl border border-border bg-card overflow-hidden">
+              <div className="card overflow-hidden">
                 <div className="overflow-x-auto scrollbar-thin">
                   <div className="min-w-[860px]">
                     <IndexCompareHeader showRelative={false} />
@@ -432,7 +432,7 @@ export default function DashboardPage() {
       )}
 
       {/* 免责声明 */}
-      <div className="bg-card border border-border rounded-xl p-4 text-xs text-muted-foreground space-y-1">
+      <div className="card p-4 text-xs text-muted-foreground space-y-1">
         <p className="flex items-center gap-1.5">
           <Activity className="w-3.5 h-3.5" />
           数据来自本地行情库，页面展示以「数据新鲜度」标注的采集时间为准。

@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ExternalLink } from 'lucide-react'
-import { Article } from '../lib/api'
+import { Article } from '../api/news'
 import { formatTime, getSourceColor } from '../lib/utils'
 
 interface ArticleCardProps {
@@ -50,8 +50,7 @@ export default function ArticleCard({ article, index }: ArticleCardProps) {
           ref={cardRef}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
-          className="card-3d bg-card border border-border rounded-xl p-5 cursor-pointer
-            hover:border-primary/50 hover:shadow-lg transition-shadow duration-300"
+          className="card card-3d p-5 cursor-pointer hover:border-primary/50 transition-shadow duration-300"
         >
           {/* 头部：来源标签 + 时间 */}
           <div className="flex items-center justify-between mb-3">
@@ -64,7 +63,7 @@ export default function ArticleCard({ article, index }: ArticleCardProps) {
             >
               {article.source_name || '未知来源'}
             </span>
-            <span className="text-xs text-muted-foreground">{publishTime}</span>
+            <span className="text-xs text-muted-foreground num">{publishTime}</span>
           </div>
 
           {/* 标题 */}
@@ -82,8 +81,8 @@ export default function ArticleCard({ article, index }: ArticleCardProps) {
             <span
               className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                 isProcessed
-                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                  : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                  ? 'bg-success/10 text-success'
+                  : 'bg-warning/10 text-warning'
               }`}
             >
               {isProcessed ? '🤖 AI 已总结' : '⏳ 待处理'}

@@ -308,3 +308,51 @@
 `pct_chg` 按「收盘 vs 前收盘」计算。跳空日两者符号可能不同——600000 近 250 日中 28 天、
 000593 中 22 天出现该差异（如 600000 2025-10-24：开 12.99 / 收 12.98 → 阴线，但相对前收 12.97 的 `pct_chg=+0.077%`）。
 tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求颜色严格跟随 `pct_chg`，需另行确认（会与 K 线实体方向矛盾）。
+
+### 7.3 T12 统一设计系统与涨跌语义 token（2026-10-29）
+
+**目标**：深色金融终端基底、等宽数字、细网格/微光、全站 A 股「红涨绿跌」语义；纯 token 层改造，无业务逻辑变更。
+
+**Token 层（`frontend/src/index.css`）**
+
+| 新增/调整 | 值（亮 / 暗） |
+|---|---|
+| `--color-up` / `--color-up-strong` | `#dc2626` / `#991b1b`；`#f87171` / `#fca5a5` |
+| `--color-down` / `--color-down-strong` | `#067647` / `#05603a`；`#4ade80` / `#86efac` |
+| `--color-flat` | `#64748b` / `#94a3b8` |
+| `--color-alert`（与「涨」红区分） | `#be123c` / `#fb7185`（rose） |
+| `--color-success` / `--color-warning` | `#0f766e` / `#92400e`；`#2dd4bf` / `#fbbf24` |
+| `--color-grid` / `--color-glow` | 细网格线 / 卡片 hover 单层微光 |
+| `--color-chart-1..5` | 图表分类色（不参与涨跌语义） |
+| `--font-sans` / `--font-mono` | 中文系统字体栈 / 等宽数字栈 |
+
+- 亮色也保持红涨绿跌，仅调整明度/饱和度，不反转语义；`html.dark { color-scheme: dark }`。
+- 新增 `@utility num`（等宽 + `tabular-nums`）、`.card`（1px 边框 + `--radius-md` + 单层 hover glow）、`.card-grid`（可选细网格纹理）、全局 `:focus-visible` 2px ring；`.glass` 移除 `backdrop-filter`（避免大范围模糊）。
+
+**单一语义源（`frontend/src/lib/`）**
+
+- `format.ts`：`pctColor()` / `priceColorClass()` / `priceBgClass()` / `trendGlyph()`（↑/↓/—）/ `colorVar()`（SVG/canvas 用 `var(--color-up|down|flat)`）。
+- 新增 `color.ts`：`trendHeat()` 用 `color-mix()` 连续插值（±8% 归一化，不再是 5 档阶梯），`CHART_PALETTE` / `chartColor()` 供 Recharts 使用。
+- 全站替换硬编码 `text-red-* / text-green-* / bg-red-* / bg-green-*` 与涨跌色 hex；`KlineChart` 的 MA/BOLL 指标线与新闻源品牌色不属于涨跌语义，保留原 hex。
+
+**排版与容器**
+
+- 所有价格/涨跌幅/计数/表格数字列加 `.num`；表格右对齐列由 `DataTable` 的 `align=right` 自动加 `.num`。
+- 字号阶梯收敛为 11 / 12 / 14 / 18 / 28px；页面 H1 统一 28px。
+- 卡片统一 `.card`；AlgoCard 类型标签改为「色相底 + 前景文字」以保证对比度。
+
+**主题**
+
+- 首次访问默认深色：`index.html` 预渲染脚本在 CSS 前写 `dark` + `localStorage.gfna-theme`，避免首屏闪白；用户手动选择优先并持久化。
+- `KlineChart` 通过 `useTheme()` 触发 `colorEpoch`，主题切换后重读 CSS 变量并 `applyOptions` 重绘 canvas；保留 `MutationObserver` 兜底。
+
+**验证（2026-10-29）**
+
+- 验收 grep：`frontend/src` 内（除 `index.css`）涨跌红/绿 Tailwind 类与语义 hex = **0**；`dark:` 硬编码变体 = 0。
+- `npm run build` 通过：主包 `861.48 kB / gzip 253.59 kB`，Kline chunk `194.96 kB / gzip 63.49 kB`，CSS `35.61 kB / gzip 7.06 kB`。
+- 浏览器（StrictMode + 真实 PG）：清空 localStorage 首访 = `dark` 且写入 `gfna-theme=dark`；切换后 `--color-up/down` 亮 `#dc2626/#067647`、暗 `#f87171/#4ade80`；刷新保持选择。
+- Canvas 像素扫描：600519 K 线暗色 token 命中 1974/1851 px；切亮后亮色 token 1974 px、暗色残留 0（约 1.2s 内重绘完成）。
+- 热力图插值：-5.93% / -2.17% / +2.13% 背景依次变浅/转红，文本恒为前景色，涨跌幅带 ↑/↓，空值显示 `—`。
+- 对比度（前景/背景）：亮色 up 4.83、down 5.69、flat 4.76、alert 6.29、success 5.47、warning 7.09；暗色卡片 up 5.29、down 8.40、flat 5.71、alert 5.44、success 7.86、warning 8.76；均 ≥4.5:1。
+- 键盘 Tab 可见焦点 `2px solid rgb(26,115,232)`；Dashboard buffered layout-shift **CLS=0**；Console 仅既有 react-router v7 warning。
+- 已知：回测接口在本机 20s 超时（既有后端性能问题，非 T12 引入）；`.card` 为非分层样式，会覆盖部分 Tailwind hover 边框工具类（有意）。

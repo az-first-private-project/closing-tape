@@ -29,7 +29,8 @@ import {
 } from 'lightweight-charts'
 import type { BacktestTrade } from '../types/backtest'
 import type { KlineItem } from '../types/stock'
-import { fmtAmount, fmtInt, fmtNumber, fmtPct, fmtVolume, priceColorClass } from '../lib/format'
+import { fmtAmount, fmtInt, fmtNumber, fmtPct, fmtVolume, priceColorClass, trendGlyph } from '../lib/format'
+import { useTheme } from './ThemeProvider'
 import { EmptyState } from './StateViews'
 
 export type KlineAdjustBasis = 'raw' | 'hfq'
@@ -78,7 +79,7 @@ interface ChartColors {
   border: string
 }
 
-function cssColor(name: string, fallback: string): string {
+function cssColor(name: string, fallback = '#64748b'): string {
   if (typeof window === 'undefined') return fallback
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return value || fallback
@@ -86,11 +87,18 @@ function cssColor(name: string, fallback: string): string {
 
 function readColors(): ChartColors {
   return {
-    up: cssColor('--color-up', '#ef4444'),
-    down: cssColor('--color-down', '#22c55e'),
-    muted: cssColor('--color-muted-foreground', '#64748b'),
-    border: cssColor('--color-border', '#e2e8f0'),
+    up: cssColor('--color-up'),
+    down: cssColor('--color-down'),
+    muted: cssColor('--color-muted-foreground'),
+    border: cssColor('--color-border'),
   }
+}
+
+/** 坐标轴/十字光标数字使用设计系统等宽字体 */
+function readMonoFont(): string {
+  if (typeof window === 'undefined') return 'monospace'
+  const mono = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()
+  return mono || getComputedStyle(document.body).fontFamily
 }
 
 function withAlpha(color: string, alpha: number): string {
@@ -176,6 +184,7 @@ export default function KlineChart({
   btId,
 }: KlineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const { theme } = useTheme()
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null)
@@ -191,6 +200,11 @@ export default function KlineChart({
   const [pinnedDate, setPinnedDate] = useState<string | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [colorEpoch, setColorEpoch] = useState(0)
+
+  // 主题切换后显式触发重绘（不能只依赖 CSS：canvas 需要重新读取变量值）
+  useEffect(() => {
+    setColorEpoch((value) => value + 1)
+  }, [theme])
 
   const visibleItems = useMemo(() => items.slice(-range), [items, range])
   const tradesByDate = useMemo(() => groupTradesByDate(trades), [trades])
@@ -214,7 +228,7 @@ export default function KlineChart({
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: colors.muted,
         fontSize: 11,
-        fontFamily: getComputedStyle(document.body).fontFamily,
+        fontFamily: readMonoFont(),
       },
       grid: {
         vertLines: { color: colors.border, style: LineStyle.Dotted },
@@ -548,16 +562,16 @@ export default function KlineChart({
   )
 
   return (
-    <div className="bg-card border border-border rounded-xl p-4">
+    <div className="card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div>
           <h3 className="font-semibold text-sm flex flex-wrap items-center gap-2">
             📈 日线 K 线
-            <span className="text-[10px] font-normal px-1.5 py-0.5 rounded border border-border text-muted-foreground">
+            <span className="text-[11px] font-normal px-1.5 py-0.5 rounded border border-border text-muted-foreground">
               {adjustBasis === 'hfq' ? '后复权' : '未复权'}
             </span>
             {btId && (
-              <span className="text-[10px] font-normal px-1.5 py-0.5 rounded border border-primary/40 text-primary">
+              <span className="text-[11px] font-normal px-1.5 py-0.5 rounded border border-primary/40 text-primary">
                 回测标记
               </span>
             )}
@@ -625,16 +639,16 @@ export default function KlineChart({
 
         {hover && (
           <div
-            className="pointer-events-none absolute z-20 w-[212px] rounded-lg border border-border bg-card/95 p-2.5 text-[11px] shadow-lg backdrop-blur-sm"
+            className="pointer-events-none absolute z-20 w-[212px] rounded-lg border border-border bg-card p-2.5 text-[11px] shadow-lg"
             style={{ left: tooltipLeft, top: 8 }}
           >
             <div className="flex items-center justify-between gap-2 mb-1">
               <span className="font-mono text-muted-foreground">{hover.item.trade_date}</span>
-              <span className={`font-semibold tabular-nums ${priceColorClass(hover.item.pct_chg)}`}>
-                {fmtPct(hover.item.pct_chg)}
+              <span className={`font-semibold num ${priceColorClass(hover.item.pct_chg)}`}>
+                {trendGlyph(hover.item.pct_chg)} {fmtPct(hover.item.pct_chg)}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 num">
               <span className="text-muted-foreground">开</span>
               <span className="text-right">{fmtNumber(hover.item.open, 2)}</span>
               <span className="text-muted-foreground">高</span>
@@ -679,12 +693,12 @@ export default function KlineChart({
               const sideClass = rejected
                 ? 'text-muted-foreground'
                 : trade.side === 'buy'
-                  ? 'text-red-500'
-                  : 'text-green-500'
+                  ? 'text-up'
+                  : 'text-down'
               return (
                 <div
                   key={`${trade.date}-${trade.code}-${trade.side}-${index}`}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 num"
                 >
                   <span className={`font-semibold ${sideClass}`}>{sideLabel}</span>
                   <span className="text-muted-foreground">
@@ -698,7 +712,7 @@ export default function KlineChart({
               )
             })}
           </div>
-          <p className="mt-2 text-[10px] text-muted-foreground">
+          <p className="mt-2 text-[11px] text-muted-foreground">
             当日 OHLC：开 {fmtNumber(pinnedItem.open, 2)} / 高 {fmtNumber(pinnedItem.high, 2)} / 低{' '}
             {fmtNumber(pinnedItem.low, 2)} / 收 {fmtNumber(pinnedItem.close, 2)}。成交价为未复权口径
             （含滑点），与图表一致。

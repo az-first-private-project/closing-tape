@@ -8,7 +8,7 @@ function AnimatedNumber({ value }: { value: number }) {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, type: 'spring', stiffness: 100 }}
-      className="text-3xl font-bold text-foreground tabular-nums"
+      className="text-[28px] font-bold text-foreground num"
     >
       {value.toLocaleString()}
     </motion.span>
@@ -37,22 +37,22 @@ export default function StatsBar() {
       label: '文章总数',
       value: stats?.total_articles ?? 0,
       icon: Newspaper,
-      color: 'text-blue-500',
-      bg: 'bg-blue-50 dark:bg-blue-950',
+      color: 'text-primary',
+      bg: 'bg-primary/10',
     },
     {
       label: '已摘要',
       value: stats?.processed_count ?? 0,
       icon: CheckCircle2,
-      color: 'text-green-500',
-      bg: 'bg-green-50 dark:bg-green-950',
+      color: 'text-success',
+      bg: 'bg-success/10',
     },
     {
       label: '今日新增',
       value: stats?.articles_today ?? 0,
       icon: Radio,
-      color: 'text-orange-500',
-      bg: 'bg-orange-50 dark:bg-orange-950',
+      color: 'text-warning',
+      bg: 'bg-warning/10',
     },
   ]
 
@@ -66,7 +66,7 @@ export default function StatsBar() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.3 }}
-              className="flex items-center gap-3 p-4 rounded-xl border border-border bg-card hover:shadow-md transition-shadow"
+              className="card flex items-center gap-3 p-4"
             >
               <div className={`p-2 rounded-lg ${card.bg}`}>
                 <card.icon className={`w-5 h-5 ${card.color}`} />

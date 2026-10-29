@@ -27,6 +27,7 @@ import {
   fmtPct,
   fmtScore,
   fmtVolume,
+  trendGlyph,
   priceColorClass,
 } from '../lib/format'
 
@@ -36,7 +37,7 @@ const KlineChart = lazy(() => import('../components/KlineChart'))
 /** K 线骨架：T13 统一骨架屏前的过渡实现 */
 function KlineSkeleton() {
   return (
-    <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+    <div className="card p-4 space-y-3">
       <div className="skeleton h-5 w-48" />
       <div className="skeleton h-[360px] w-full" />
       <p className="text-[11px] text-muted-foreground">正在加载 K 线…</p>
@@ -49,7 +50,7 @@ function InfoItem({ label, value, color }: { label: string; value: string; color
   return (
     <div className="flex items-baseline justify-between gap-2 text-xs">
       <span className="text-muted-foreground shrink-0">{label}</span>
-      <span className={`tabular-nums font-medium ${color ?? ''}`}>{value}</span>
+      <span className={`num font-medium ${color ?? ''}`}>{value}</span>
     </div>
   )
 }
@@ -57,10 +58,10 @@ function InfoItem({ label, value, color }: { label: string; value: string; color
 /** 指标卡 */
 function IndicatorCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="bg-card border border-border rounded-lg p-3">
+    <div className="card p-3">
       <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-semibold tabular-nums">{value}</p>
-      {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
+      <p className="mt-1 text-sm font-semibold num">{value}</p>
+      {hint && <p className="text-[11px] text-muted-foreground mt-0.5">{hint}</p>}
     </div>
   )
 }
@@ -68,7 +69,7 @@ function IndicatorCard({ label, value, hint }: { label: string; value: string; h
 /** 行情明细（latest 为所选交易日或最近可用交易日） */
 function LatestQuote({ latest }: { latest: StockLatest }) {
   return (
-    <div className="bg-card border border-border rounded-xl p-4">
+    <div className="card p-4">
       <h3 className="font-semibold text-sm mb-3">行情快照（{latest.trade_date}）</h3>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
         <InfoItem label="开盘" value={fmtNumber(latest.open, 2)} />
@@ -91,7 +92,7 @@ function LatestQuote({ latest }: { latest: StockLatest }) {
 /** 技术指标卡组 */
 function FeaturesPanel({ features, latest }: { features: StockFeatures; latest: StockLatest | null }) {
   return (
-    <div className="bg-card border border-border rounded-xl p-4">
+    <div className="card p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-semibold text-sm">技术指标</h3>
         <div className="flex items-center gap-1.5">
@@ -99,7 +100,7 @@ function FeaturesPanel({ features, latest }: { features: StockFeatures; latest: 
             <span
               className={`text-[11px] px-2 py-0.5 rounded-full border ${
                 features.ma_bullish
-                  ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400'
+                  ? 'border-up/40 bg-up/10 text-up-strong'
                   : 'border-border bg-muted text-muted-foreground'
               }`}
             >
@@ -110,7 +111,7 @@ function FeaturesPanel({ features, latest }: { features: StockFeatures; latest: 
             <span
               className={`text-[11px] px-2 py-0.5 rounded-full border ${
                 features.macd_golden_cross
-                  ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400'
+                  ? 'border-up/40 bg-up/10 text-up-strong'
                   : 'border-border bg-muted text-muted-foreground'
               }`}
             >
@@ -273,25 +274,25 @@ export default function StockDetailPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold">{stock.name}</h1>
+            <h1 className="text-[28px] font-bold">{stock.name}</h1>
             <span className="font-mono text-sm text-muted-foreground">{stock.code}</span>
             {stock.is_st && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-alert/10 text-alert">
                 ST
               </span>
             )}
             {latest?.is_suspended && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/10 text-warning">
                 停牌
               </span>
             )}
             {latest?.is_limit_up && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-up/10 text-up-strong">
                 涨停
               </span>
             )}
             {latest?.is_limit_down && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-300">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-down/10 text-down-strong">
                 跌停
               </span>
             )}
@@ -306,11 +307,11 @@ export default function StockDetailPage() {
 
         {latest && (
           <div className="text-right">
-            <p className={`text-3xl font-bold tabular-nums ${priceColorClass(latest.pct_chg)}`}>
+            <p className={`text-[28px] font-bold num ${priceColorClass(latest.pct_chg)}`}>
               {fmtNumber(latest.close, 2)}
             </p>
-            <p className={`text-sm font-semibold tabular-nums ${priceColorClass(latest.pct_chg)}`}>
-              {fmtPct(latest.pct_chg)}
+            <p className={`text-sm font-semibold num ${priceColorClass(latest.pct_chg)}`}>
+              {trendGlyph(latest.pct_chg)} {fmtPct(latest.pct_chg)}
             </p>
           </div>
         )}
@@ -333,7 +334,7 @@ export default function StockDetailPage() {
         />
       )}
       {selectedDate && stock.trade_date && stock.trade_date !== selectedDate && (
-        <p className="text-xs text-amber-600">
+        <p className="text-xs text-warning">
           所选交易日 {selectedDate} 无该股行情，已显示之前最近的交易日 {stock.trade_date}。
         </p>
       )}
@@ -388,12 +389,12 @@ export default function StockDetailPage() {
           <div className="space-y-2">
             <AlgoRadarChart title="🎯 因子雷达（0–10）" data={radarDimensions} />
             <p className="text-xs text-muted-foreground text-right">
-              综合得分 <span className="font-semibold text-foreground tabular-nums">{fmtScore(scores.composite)}</span>/10
+              综合得分 <span className="font-semibold text-foreground num">{fmtScore(scores.composite)}</span>/10
             </p>
           </div>
         )}
 
-        <div className="bg-card border border-border rounded-xl p-4">
+        <div className="card p-4">
           <h3 className="font-semibold text-sm mb-3">所属板块</h3>
           {stockSectors.length === 0 ? (
             <p className="text-sm text-muted-foreground">暂无板块归属数据</p>
@@ -402,7 +403,7 @@ export default function StockDetailPage() {
               {stockSectors.map((sector) => (
                 <span key={sector.sector_code} className="text-xs px-2.5 py-1 rounded-full border border-border bg-muted/50">
                   {sector.sector_name}
-                  <span className="ml-1 text-muted-foreground font-mono text-[10px]">{sector.sector_code}</span>
+                  <span className="ml-1 text-muted-foreground font-mono text-[11px]">{sector.sector_code}</span>
                 </span>
               ))}
             </div>
@@ -427,7 +428,7 @@ export default function StockDetailPage() {
                       run {signal.tradeDate ?? '—'} · 排名 {signal.row.rank ?? '—'}
                     </p>
                   </div>
-                  <span className="text-sm font-semibold tabular-nums shrink-0">
+                  <span className="text-sm font-semibold num shrink-0">
                     {rowScore(signal.row) === null ? '未评分' : fmtScore(rowScore(signal.row))}
                   </span>
                 </li>
@@ -441,7 +442,7 @@ export default function StockDetailPage() {
       </div>
 
       {/* 免责声明 */}
-      <div className="bg-card border border-border rounded-xl p-4 text-xs text-muted-foreground">
+      <div className="card p-4 text-xs text-muted-foreground">
         本页数据来自本地行情库；指标与因子评分仅作量化研究参考，不构成投资建议。最近信号为各算法最近一次运行的静态快照。
       </div>
     </motion.div>

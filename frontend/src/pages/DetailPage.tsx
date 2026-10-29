@@ -20,7 +20,7 @@ export default function DetailPage() {
   if (isError || !article) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-        <p className="text-destructive text-lg">⚠️ 文章加载失败</p>
+        <p className="text-alert text-lg">⚠️ 文章加载失败</p>
         <Link to="/" className="text-primary hover:underline mt-4 inline-block">
           返回首页
         </Link>
@@ -49,7 +49,7 @@ export default function DetailPage() {
       </Link>
 
       {/* 文章标题 */}
-      <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-4 leading-tight">
+      <h1 className="text-[28px] font-bold text-foreground mb-4 leading-tight">
         {article.title}
       </h1>
 
@@ -83,7 +83,7 @@ export default function DetailPage() {
           <Bot className="w-5 h-5 text-primary" />
           AI 中文摘要 (DeepSeek)
         </h2>
-        <div className="bg-blue-50 dark:bg-blue-950/30 border-l-4 border-primary rounded-r-lg p-4">
+        <div className="bg-primary/5 border-l-4 border-primary rounded-r-lg p-4">
           {article.summary ? (
             <p className="text-foreground leading-relaxed">{article.summary}</p>
           ) : (
@@ -95,7 +95,7 @@ export default function DetailPage() {
       {/* 原文内容 */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">📄 原文内容</h2>
-        <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed whitespace-pre-wrap">
+        <div className="text-muted-foreground leading-relaxed whitespace-pre-wrap text-sm">
           {article.content
             ? article.content.length > 3000
               ? article.content.slice(0, 3000) + '...'
