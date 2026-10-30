@@ -1,17 +1,44 @@
 """
-SQLAlchemy 声明性基类
--------------------
-所有 ORM 模型都继承自这个 Base 类。
-SQLAlchemy 通过它来追踪所有模型定义，并生成 DDL 语句。
+SQLAlchemy 声明性基类（V5）
+==========================
+新增：
+  - 统一命名约定（索引/唯一约束/外键），否则 Alembic autogenerate 会产生随机名字导致迁移对不上；
+  - `TimestampMixin` 统一 UTC 时间列（方案 6.2 要求 TIMESTAMPTZ）。
 """
-from sqlalchemy.orm import DeclarativeBase
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, MetaData
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+NAMING_CONVENTION = {
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+def utcnow() -> datetime:
+    """带时区的当前时间。禁止使用 datetime.utcnow()（naive，坑过 V4）。"""
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
-    """
-    SQLAlchemy 2.0 风格的声明性基类
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
-    继承这个类的子类会自动被 SQLAlchemy 的 metadata 追踪，
-    方便后续使用 Base.metadata.create_all() 创建所有表。
-    """
-    pass
+
+class TimestampMixin:
+    """created_at / updated_at 双列，统一带时区。"""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+__all__ = ["Base", "TimestampMixin", "utcnow", "NAMING_CONVENTION"]

@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GFNA V5 · 行情采集与量化选股改造方案</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --ink:#15181c; --ink2:#4a5158; --ink3:#868e97;
+    --line:#e3e7ec; --line2:#eef1f4;
+    --brand:#1f5fd0; --brandsoft:#eaf1fd;
+    --red:#c0392b; --redsoft:#fdecea; --redline:#f0cfcb;
+    --grn:#0f7a4d; --grnsoft:#e8f6ef; --grnline:#c6e7d7;
+    --amb:#a86a12; --ambsoft:#fdf6e7; --ambline:#ecd9ae;
+    --pur:#6b46c1; --pursoft:#f2edfd; --purline:#ddd0f5;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14.5px;line-height:1.7;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px;margin:0 auto;padding:34px 22px 80px;}
+
+  .eyebrow{font-size:11.5px;letter-spacing:.16em;color:var(--brand);font-weight:800;}
+  h1{font-size:28px;margin:8px 0 8px;letter-spacing:-.02em;line-height:1.3;}
+  .sub{color:var(--ink2);font-size:14.5px;max-width:900px;}
+  header.top{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px;}
+
+  /* TLDR */
+  .tl{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0 4px;}
+  .tlc{background:#fff;border:1px solid var(--line);border-radius:11px;padding:14px 15px;}
+  .tlc .k{font-size:11.5px;color:var(--ink3);}
+  .tlc .v{font-size:18px;font-weight:800;margin-top:3px;letter-spacing:-.01em;}
+  .tlc .d{font-size:11.5px;color:var(--ink2);margin-top:4px;line-height:1.5;}
+
+  h2{font-size:19px;margin:42px 0 6px;display:flex;align-items:baseline;gap:9px;letter-spacing:-.01em;}
+  h2 .no{font-size:11px;color:#fff;background:var(--brand);border-radius:5px;padding:2px 7px;font-weight:800;
+    letter-spacing:.04em;}
+  .lead{color:var(--ink2);font-size:13.8px;margin:5px 0 16px;}
+  h3{font-size:15px;margin:22px 0 8px;}
+
+  .card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:15px 17px;}
+
+  /* callouts */
+  .call{border-radius:10px;padding:13px 16px;font-size:13.3px;line-height:1.75;margin:14px 0;}
+  .call.red{background:var(--redsoft);border:1px solid var(--redline);color:#7a2318;}
+  .call.grn{background:var(--grnsoft);border:1px solid var(--grnline);color:#0b5136;}
+  .call.amb{background:var(--ambsoft);border:1px solid var(--ambline);color:#6f4a10;}
+  .call.blu{background:var(--brandsoft);border:1px solid #cfe0fa;color:#1b3f70;}
+  .call b{font-weight:750;}
+
+  /* tables */
+  .tw{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin:12px 0 16px;}
+  .tw .th{padding:11px 15px;border-bottom:1px solid var(--line2);font-weight:750;font-size:13.5px;
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .tw .th small{font-weight:400;color:var(--ink3);font-size:11.5px;}
+  table{width:100%;border-collapse:collapse;font-size:12.9px;}
+  th{background:#fafbfc;text-align:left;padding:8px 13px;font-weight:700;color:var(--ink2);
+    border-bottom:1px solid var(--line);white-space:nowrap;font-size:12.2px;}
+  td{padding:8px 13px;border-bottom:1px solid var(--line2);vertical-align:top;color:var(--ink2);}
+  tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#fafbfd;}
+  td.mono,.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--ink);}
+  .nowrap{white-space:nowrap;}
+
+  .badge{display:inline-block;font-size:10.5px;font-weight:800;padding:1px 6px;border-radius:4px;
+    border:1px solid;white-space:nowrap;letter-spacing:.02em;}
+  .p0{color:var(--red);background:var(--redsoft);border-color:var(--redline);}
+  .p1{color:var(--amb);background:var(--ambsoft);border-color:var(--ambline);}
+  .p2{color:var(--ink3);background:#f2f4f6;border-color:var(--line);}
+  .keep{color:var(--grn);background:var(--grnsoft);border-color:var(--grnline);}
+  .ref{color:var(--brand);background:var(--brandsoft);border-color:#cfe0fa;}
+  .new{color:var(--pur);background:var(--pursoft);border-color:var(--purline);}
+  .drop{color:#8a8f96;background:#f2f4f6;border-color:var(--line);text-decoration:line-through;}
+
+  /* architecture */
+  .arch{background:#fff;border:1px solid var(--line);border-radius:11px;padding:18px;margin:12px 0;}
+  .layer{border:1px solid var(--line);border-radius:9px;padding:11px 14px;margin-bottom:9px;background:#fbfcfd;}
+  .layer .lt{font-size:12.5px;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:8px;
+    margin-bottom:7px;}
+  .layer .lt span.n{font-size:10.5px;background:#e9edf2;color:var(--ink2);padding:1px 6px;border-radius:4px;}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .chip{font-size:11.5px;padding:2px 8px;border-radius:5px;background:#fff;border:1px solid var(--line);
+    color:var(--ink2);font-family:ui-monospace,Menlo,Consolas,monospace;}
+  .chip.hot{border-color:#cfe0fa;background:var(--brandsoft);color:#1b3f70;}
+  .chip.warn{border-color:var(--redline);background:var(--redsoft);color:#7a2318;}
+  .arrow{text-align:center;color:#b9c1c9;font-size:13px;line-height:1;margin:-4px 0 5px;}
+
+  /* phases */
+  .phase{position:relative;padding-left:27px;margin-bottom:20px;}
+  .phase:before{content:"";position:absolute;left:0;top:5px;width:13px;height:13px;border-radius:50%;
+    background:#fff;border:3px solid var(--brand);}
+  .phase:after{content:"";position:absolute;left:6px;top:22px;bottom:-16px;width:2px;background:var(--line);}
+  .phase:last-child:after{display:none;}
+  .phase .pt{font-weight:800;font-size:15px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .phase .pm{font-size:11.5px;color:var(--brand);font-weight:700;}
+  .phase .pd{font-size:13.3px;color:var(--ink2);margin-top:4px;}
+  .phase ul{margin:7px 0 0;padding-left:17px;font-size:13px;color:var(--ink2);}
+  .phase ul li{margin:2px 0;}
+  .acc{margin-top:7px;background:var(--grnsoft);border:1px solid var(--grnline);border-radius:7px;
+    padding:7px 11px;font-size:12.5px;color:#0b5136;}
+
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 14px;font-size:13px;}
+  .kv .k{color:var(--ink3);font-size:12.5px;}
+  .kv .v{color:var(--ink2);}
+
+  .foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-size:11.8px;
+    color:var(--ink3);line-height:1.8;}
+  @media(max-width:920px){
+    .tl{grid-template-columns:1fr 1fr;}
+    .kv{grid-template-columns:1fr;}
+    table{font-size:12.2px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">改造方案 · REFACTOR PLAN · GFNA V5</div>
+  <h1>从「新闻聚合器 + 演示型看板」到「行情采集 + 量化选股系统」</h1>
+  <div class="sub">
+    对工作区 <span class="mono">grna/</span> 现有代码做了完整通读（74 个 Python 文件、约 6,700 行 + React 前端）。
+    结论比预期更严峻：<b>项目当前无法启动</b>，且「量化选股」整层是硬编码 mock。
+    下面是体检结果、改造范围、功能清单、优先级与实施步骤。
+  </div>
+
+  <div class="tl">
+    <div class="tlc"><div class="k">可运行性</div><div class="v" style="color:#c0392b;">不可启动</div>
+      <div class="d">虚拟环境缺 asyncpg / akshare / yfinance / pandas / numpy 五个关键依赖</div></div>
+    <div class="tlc"><div class="k">个股级行情</div><div class="v" style="color:#c0392b;">0 张表</div>
+      <div class="d">只有指数 / 板块 / 融资融券，全市场个股快照完全缺失</div></div>
+    <div class="tlc"><div class="k">量化算法</div><div class="v" style="color:#c0392b;">Mock</div>
+      <div class="d">117 行硬编码样本，无任何网络请求</div></div>
+    <div class="tlc"><div class="k">需重写/新建</div><div class="v">6 个模块</div>
+      <div class="d">采集、存储、因子、策略、回测、任务编排</div></div>
+  </div>
+</header>
+
+<!-- ================= 01 ================= -->
+<h2><span class="no">01</span>体检结论：先说实话</h2>
+<div class="lead">三句话概括——地基没浇完，演示层已经装修好了。</div>
+
+<div class="call red">
+  <b>① 项目现在跑不起来。</b>实测 <span class="mono">.venv/Scripts/python.exe -m pip list</span>，
+  <span class="mono">asyncpg / akshare / yfinance / pandas / numpy</span> 全部缺失。
+  后端 <span class="mono">create_async_engine("postgresql+asyncpg://…")</span> 在导入阶段就会失败，
+  FastAPI 连启动都做不到。<span class="mono">requirements.txt</span> 里 <span class="mono">yfinance==1.5.2</span>
+  这个版本号<b>存疑</b>（yfinance 长期在 0.2.x 系列，1.5.x 是否存在需联网核实），很可能是当初 pip install 失败的根因。
+</div>
+
+<div class="call red" style="margin-top:10px;">
+  <b>② 「量化选股」整层是假的。</b><span class="mono">westock-tool/scripts/index.js</span> 开头就写着
+  <span class="mono">"Mock CLI"</span>，文件里是 <span class="mono">SAMPLE_DATA</span> 常量：
+  A1 仅 12 条、A2 仅 5 条、A3 仅 5 条、A4 仅 8 条，数据抄自 ROADMAP-V4 文档里 2026-07-26 的样本。
+  没有 fetch、没有请求、没有日期。所以算法中心展示的<b>永远是同一批历史样本</b>，
+  与「当日行情」毫无关系。
+</div>
+
+<div class="call amb" style="margin-top:10px;">
+  <b>③ 分析链路写得很完整，但多个环节恒定返回中性值。</b>
+  技术面需要 30 天历史，而板块表每天只插当天一行且无历史回补 → 首月全部 5.0 分；
+  论坛情绪 <span class="mono">hot_posts</span> 永远是 <span class="mono">None</span> → 5.0；
+  板块资金流用 <span class="mono">df["名称"] == "BK1186"</span> 匹配中文名 → 永不命中 → 5.0。
+  最终所有板块的分数被拉到 5 分附近，排名失去意义。
+</div>
+
+<!-- ================= 02 ================= -->
+<h2><span class="no">02</span>已有资产盘点：哪些能留、哪些是壳</h2>
+<div class="lead">好消息是：真正值钱的部分（新闻采集链路、工程骨架）是好的，可以留着当地基。</div>
+
+<div class="tw">
+  <div class="th">资产清单 <small>按「能否直接复用」排序</small></div>
+  <table>
+    <thead><tr><th style="width:190px">模块</th><th style="width:90px">状态</th><th>实际情况</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>新闻采集链路</b><br><span class="mono" style="font-size:11px">scraper/finance_spider/*</span></td>
+        <td><span class="badge keep">可用</span></td>
+        <td>Scrapy + Playwright 抓 Reuters / Bloomberg / CNBC / MarketWatch，UA 轮换、管道去重（URL 哈希 + 唯一索引）、
+          DeepSeek 摘要、定时调度。这套逻辑与本项目目标无关，但<b>工程质量是全部代码里最好的</b>，可作为「新闻情绪因子」的数据源保留。</td>
+      </tr>
+      <tr>
+        <td><b>FastAPI 骨架</b><br><span class="mono" style="font-size:11px">app/main.py · api/v1/*</span></td>
+        <td><span class="badge keep">可留</span></td>
+        <td>lifespan 建表、CORS、路由注册、健康检查都在。问题只在 import 路径与环境变量。</td>
+      </tr>
+      <tr>
+        <td><b>行情取数</b><br><span class="mono" style="font-size:11px">services/market_data.py · 487 行</span></td>
+        <td><span class="badge keep">半成品</span></td>
+        <td>指数、板块快照、融资融券、北向、美股都写了，<b>且有降级链（东财→同花顺）</b>，这个设计值得保留。
+          但<b>没有任何个股接口</b>；板块成分股函数写了却从未被调用；<span class="mono">amount</span> 字段用「总市值」兜底，语义错位。</td>
+      </tr>
+      <tr>
+        <td><b>技术指标</b><br><span class="mono" style="font-size:11px">technical_analysis.py · 143 行</span></td>
+        <td><span class="badge keep">可留</span></td>
+        <td>MA / RSI / MACD 手写实现正确，三因子打分逻辑合理。<b>可直接复用到个股维度</b>，只需改成批量向量化。</td>
+      </tr>
+      <tr>
+        <td><b>评分引擎</b><br><span class="mono" style="font-size:11px">scoring.py · 429 行</span></td>
+        <td><span class="badge ref">需修</span></td>
+        <td>权重框架（技术 40 / 情绪 35 / 消息 25）成立；DeepSeek 批量判情感的 Prompt 写得不错。
+          但有 3 处硬伤：历史取数排序反了、龙头识别没接、只评 30 个板块。</td>
+      </tr>
+      <tr>
+        <td><b>AI 报告</b><br><span class="mono" style="font-size:11px">report_generator.py · 464 行</span></td>
+        <td><span class="badge ref">需改</span></td>
+        <td>Prompt 结构完整、有降级模板（API 不可用时输出数据摘要），这块做得扎实。
+          问题在存储：报告被塞进<b>第一个板块的 ai_summary 字段</b>，需要一个独立表。</td>
+      </tr>
+      <tr>
+        <td><b>算法服务</b><br><span class="mono" style="font-size:11px">algo_service.py · 427 行</span></td>
+        <td><span class="badge drop">替换</span></td>
+        <td>接口形态（list / cached / run）设计是对的，<b>但底层调的是 mock CLI</b>，
+          且 pe_max / min_score / sort_by 等参数只做白名单、<b>从未拼进命令</b>——参数面板是装饰品。</td>
+      </tr>
+      <tr>
+        <td><b>前端</b><br><span class="mono" style="font-size:11px">React 18 + Vite + TS + Recharts</span></td>
+        <td><span class="badge keep">可留</span></td>
+        <td>页面结构完整（首页 / 详情 / 统计 / DashboardV3 / AlgoCenter / 关于），组件拆分清晰。
+          DashboardV3 的评分榜拿不到分数，是因为后端 <span class="mono">_enrich_with_scores()</span> 是个空函数。</td>
+      </tr>
+      <tr>
+        <td><b>数据库</b><br><span class="mono" style="font-size:11px">PostgreSQL 16</span></td>
+        <td><span class="badge keep">可留</span></td>
+        <td>本机 5432 端口已在监听，服务可用。缺少迁移工具（全裸 <span class="mono">create_all</span>），
+          且 <span class="mono">sql/init.sql</span> 只建了新闻三张表，V3/V4 表靠启动时自动创建。</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="call blu">
+  <b>一句话判断：</b>这个项目的「新闻」部分是完整的，「行情」部分是半成品，「选股」部分是演示壳。
+  改造的正确姿势不是推翻重写，而是<b>把「行情 → 指标 → 因子 → 选股」这条主链补成真的</b>，
+  新闻链路降级为情绪因子输入。
+</div>
+
+<!-- ================= 03 ================= -->
+<h2><span class="no">03</span>缺陷清单（带定位证据）</h2>
+<div class="lead">每条都标了文件与行号，可直接核对。P0 = 阻断，P1 = 功能失真，P2 = 工程债。</div>
+
+<div class="tw">
+  <div class="th">P0 · 阻断级 <small>不修则系统无法产出正确结果</small></div>
+  <table>
+    <thead><tr><th style="width:26px">#</th><th style="width:200px">缺陷</th><th style="width:240px">证据</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>关键依赖缺失</td>
+        <td class="mono">pip list 实测缺 asyncpg/akshare/yfinance/pandas/numpy</td>
+        <td>后端导入即崩，服务起不来</td></tr>
+      <tr><td>2</td><td>依赖版本号存疑</td>
+        <td class="mono">requirements.txt: yfinance==1.5.2</td>
+        <td>pip 解析失败（需联网核实是否真实版本）</td></tr>
+      <tr><td>3</td><td><b>无个股级行情表</b></td>
+        <td class="mono">models_v3.py 仅 4 表：指数/板块/两融/评分</td>
+        <td>没有全市场个股快照与日线，选股无数据可算</td></tr>
+      <tr><td>4</td><td><b>选股算法是 mock</b></td>
+        <td class="mono">westock-tool/scripts/index.js:1-13</td>
+        <td>展示的是固定样本，与当日行情无关</td></tr>
+      <tr><td>5</td><td><b>无历史 → 技术面恒 5.0</b></td>
+        <td class="mono">scoring.py:385-386（rows&lt;20 → return 5.0）</td>
+        <td>上线首月所有板块评分相同，排名失效</td></tr>
+      <tr><td>6</td><td>历史取数方向反了</td>
+        <td class="mono">scoring.py:374-382 order_by(asc).limit(30)</td>
+        <td>取到最早 30 天而非最近 30 天，指标永远滞后</td></tr>
+      <tr><td>7</td><td>评分未回传给前端</td>
+        <td class="mono">analysis.py:421-432 _enrich_with_scores 直接 return sectors</td>
+        <td>Dashboard 评分榜永远空，前端白做</td></tr>
+      <tr><td>8</td><td>数据只进不出（单日快照）</td>
+        <td class="mono">worker.py:150-180 每日只 insert 当天板块行</td>
+        <td>板块序列永远只有 1 个点，画不出趋势</td></tr>
+      <tr><td>9</td><td>历史回补不覆盖板块</td>
+        <td class="mono">init_v3_db.py:backfill_30_days 只回填指数 + 两融</td>
+        <td>即使跑回补，板块技术面仍为 5.0</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">P1 · 功能失真 <small>能跑但结果是错的/空的</small></div>
+  <table>
+    <thead><tr><th style="width:26px">#</th><th style="width:200px">缺陷</th><th style="width:240px">证据</th><th>影响</th></tr></thead>
+    <tbody>
+      <tr><td>10</td><td>龙头识别从未被调用</td>
+        <td class="mono">leader_identifier.py 223 行，全仓库 grep 零引用</td>
+        <td>实力/情绪龙头字段永远为空；worker 注释「已在评分中完成」与事实不符</td></tr>
+      <tr><td>11</td><td>论坛情绪恒中性</td>
+        <td class="mono">sentiment.py:136 if not hot_posts: return 5.0</td>
+        <td>四个情绪子项有一个永远 5 分</td></tr>
+      <tr><td>12</td><td>资金流匹配键错位</td>
+        <td class="mono">sentiment.py:191 df["名称"] == sector_code</td>
+        <td>用 BK 代码比中文名，永不命中 → 5.0</td></tr>
+      <tr><td>13</td><td>算法参数不生效</td>
+        <td class="mono">algo_service.py:259-289 只做白名单，未拼入 cmd</td>
+        <td>调参无效果；缓存键又不含参数 → 更难察觉</td></tr>
+      <tr><td>14</td><td>AI 日报存放位置错误</td>
+        <td class="mono">report_generator.py:331-357 写进第一个板块的 ai_summary</td>
+        <td>日报覆盖了某个板块短评；板块详情页会显示整篇日报</td></tr>
+      <tr><td>15</td><td>日报读取不可靠</td>
+        <td class="mono">analysis.py:396-405 limit(1) 取任意一条</td>
+        <td>可能取到板块短评；顺序依赖数据库返回</td></tr>
+      <tr><td>16</td><td>美股指数写死空数组</td>
+        <td class="mono">analysis.py:91 "us_indices": []</td>
+        <td>已实现的 fetch_us_indices 白写</td></tr>
+      <tr><td>17</td><td>交易日判断只看周末</td>
+        <td class="mono">worker.py:23-27 weekday() &lt; 5</td>
+        <td>法定节假日会跑空任务、写脏数据</td></tr>
+      <tr><td>18</td><td>amount 语义错位</td>
+        <td class="mono">market_data.py:248 get("总市值", get("成交额"))</td>
+        <td>把总市值当成交额，量能类指标全错</td></tr>
+      <tr><td>19</td><td>import 路径不一致</td>
+        <td class="mono">main.py:240 from backend.scripts.init_v4_db</td>
+        <td>本地 <span class="mono">cd backend &amp;&amp; uvicorn app.main:app</span> 下必失败；Docker 下正常</td></tr>
+      <tr><td>20</td><td>兜底导入无保护</td>
+        <td class="mono">algo_service.py:415 _seed_list_fallback 裸 import</td>
+        <td>algo_meta 为空时 /algo/list 直接 500</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">P2 · 工程债</div>
+  <table>
+    <thead><tr><th style="width:200px">问题</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>无迁移工具</td><td>全裸 <span class="mono">Base.metadata.create_all</span>，模型一改就得删库，无法追溯</td></tr>
+      <tr><td>shell 拼接执行 CLI</td><td><span class="mono">create_subprocess_shell</span> + 黑名单过滤，路径含空格即挂；应改 <span class="mono">exec</span> 传参数数组</td></tr>
+      <tr><td>测试覆盖为零</td><td>仅 <span class="mono">tests/test_api.py</span> 覆盖新闻 API，V3/V4 无一条用例</td></tr>
+      <tr><td>演示数据混入生产接口</td><td><span class="mono">/analysis/seed-demo</span> 用 <span class="mono">hash()</span> 造价格，应为 fixtures</td></tr>
+      <tr><td>前端 404 风险</td><td><span class="mono">main.py</span> 还挂着 V1 的 <span class="mono">frontend/css</span>、<span class="mono">frontend/js</span> 静态目录，实际前端已迁 Vite</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ================= 04 ================= -->
+<h2><span class="no">04</span>目标架构</h2>
+<div class="lead">核心主张一句话：<b>把「选股」从「调外部 CLI」改成「算本地数据」</b>。</div>
+
+<div class="arch">
+  <div class="layer">
+    <div class="lt"><span class="n">L1</span>采集层 · ingest <span style="font-weight:400;color:#868e97;font-size:11.5px">（新建）</span></div>
+    <div class="chips">
+      <span class="chip hot">Provider 抽象</span><span class="chip">akshare_em</span>
+      <span class="chip">baostock_fallback</span><span class="chip">交易日历</span>
+      <span class="chip">限频 / 重试 / 断点</span><span class="chip">幂等 upsert</span>
+      <span class="chip warn">数据质量校验</span>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer">
+    <div class="lt"><span class="n">L2</span>存储层 · PostgreSQL <span style="font-weight:400;color:#868e97;font-size:11.5px">（扩展）</span></div>
+    <div class="chips">
+      <span class="chip hot">dim_stock</span><span class="chip hot">fact_stock_daily</span>
+      <span class="chip">fact_sector_daily</span><span class="chip">dim_sector_member</span>
+      <span class="chip">fact_moneyflow</span><span class="chip">fact_feature_daily</span>
+      <span class="chip">stg_run / stg_signal</span><span class="chip">meta_data_quality</span>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer">
+    <div class="lt"><span class="n">L3</span>分析层 · engine <span style="font-weight:400;color:#868e97;font-size:11.5px">（重构）</span></div>
+    <div class="chips">
+      <span class="chip">指标库 MA/RSI/MACD/BOLL/ATR</span><span class="chip">因子库 价值/质量/动量/波动/流动性/情绪</span>
+      <span class="chip">横截面 z-score</span><span class="chip">综合评分</span>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer">
+    <div class="lt"><span class="n">L4</span>选股层 · strategy <span style="font-weight:400;color:#868e97;font-size:11.5px">（替换 mock）</span></div>
+    <div class="chips">
+      <span class="chip hot">条件树引擎</span><span class="chip">内置策略 A1–A4</span>
+      <span class="chip">参数快照 / run_id</span><span class="chip warn">回测（防未来函数）</span>
+      <span class="chip">绩效指标</span>
+    </div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer" style="margin-bottom:0;">
+    <div class="lt"><span class="n">L5</span>服务与展示 <span style="font-weight:400;color:#868e97;font-size:11.5px">（改接口，前端小改）</span></div>
+    <div class="chips">
+      <span class="chip">FastAPI /api/v1</span><span class="chip">数据新鲜度徽标</span>
+      <span class="chip">React Dashboard</span><span class="chip">选股中心</span><span class="chip">任务监控</span>
+    </div>
+  </div>
+</div>
+
+<div class="call grn">
+  <b>为什么不再调 westock-tool：</b>
+  ① 它是 mock，接真版本也无 SLA、5–30 秒响应、无回测能力；
+  ② 一旦全市场日线落库，选股本质是一次 SQL/DataFrame 运算，<b>毫秒级、可复现、参数真生效</b>；
+  ③ 外部 CLI 无法回答「这个策略过去三年赚不赚钱」，而这恰恰是量化选股最该回答的问题。<br>
+  <b>兼容做法：</b>保留 <span class="mono">algo_service</span> 的对外函数签名（list / get_cached_result / run_algo），
+  只把内部实现换成策略引擎 —— 前端 <span class="mono">AlgoCenter.tsx</span> 几乎零改动。
+</div>
+
+<!-- ================= 05 ================= -->
+<h2><span class="no">05</span>数据源选型</h2>
+<div class="lead">这是整个方案最需要论证的一环：数据源决定系统能不能长期稳定跑。</div>
+
+<div class="tw">
+  <div class="th">候选对比 <small>按「个人研究用途、零预算」前提评估</small></div>
+  <table>
+    <thead><tr>
+      <th style="width:120px">维度</th><th style="width:21%">AKShare</th><th style="width:19%">Baostock</th>
+      <th style="width:21%">Tushare Pro</th><th>腾讯 / 新浪行情</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>费用</td><td>免费</td><td>免费</td><td>积分制（部分需付费）</td><td>免费</td></tr>
+      <tr><td>全市场快照</td><td><b>支持</b>（一次拿全市场）</td><td>不支持</td><td>支持（有权限门槛）</td><td>支持（需逐只/分批）</td></tr>
+      <tr><td>历史日线</td><td>支持</td><td><b>支持且复权规范</b></td><td>最规范</td><td>有限</td></tr>
+      <tr><td>财务 / 估值</td><td>支持</td><td>部分</td><td><b>最全</b></td><td>仅实时字段</td></tr>
+      <tr><td>稳定性</td><td>中（依赖东财页面结构）</td><td><b>高</b></td><td>高</td><td>中（非官方）</td></tr>
+      <tr><td>维护频率</td><td>高频变动</td><td>低频</td><td>商业维护</td><td>非官方，随时可能变</td></tr>
+      <tr><td>合规性</td><td>二次封装，需自行限频</td><td>较友好</td><td>官方授权</td><td>非官方接口</td></tr>
+      <tr><td>结论</td><td><span class="badge ref">主源</span> 覆盖全、快照一次到位</td>
+        <td><span class="badge keep">兜底</span> 复权与历史校验</td>
+        <td><span class="badge p2">可选</span> 财务因子升级时再接</td>
+        <td><span class="badge p2">备用</span> 仅补实时</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="call blu">
+  <b>推荐组合：AKShare 主采集 + Baostock 兜底校验 + 本地库为唯一事实源。</b><br>
+  关键原则三条：<br>
+  ① <b>先落库再计算</b>——任何分析只读本地库，不在请求路径上打外部接口，这样接口挂了也不影响看盘；<br>
+  ② <b>Provider 抽象 + 降级链</b>——沿用现有「东财→同花顺」的思路，扩成 <span class="mono">akshare → baostock → 缓存快照</span>；<br>
+  ③ <b>每个数据集都要有「新鲜度」元信息</b>——前端必须能显示「这份数据是几点几分抓的、覆盖多少只」，否则用户无法判断信号是否可信。
+</div>
+
+<div class="call amb">
+  <b>合规提示（必须写进代码注释与文档）：</b>AKShare 本质是对公开页面的二次封装，不是交易所授权接口。
+  落地时须限频（建议全市场快照 ≤ 1 次/分钟、历史回补 ≤ 2 请求/秒）、固定 UA、遵守目标站点条款；
+  <b>不实现任何绕过反爬、验证码识别、代理池轮换</b>。数据仅用于个人研究，不得对外分发或商用。
+</div>
+
+<!-- ================= 06 ================= -->
+<h2><span class="no">06</span>数据模型改造</h2>
+<div class="lead">新增 7 张表，其中 3 张是这套系统的地基。</div>
+
+<div class="tw">
+  <div class="th">dim_stock · 标的维度表 <span class="badge new" style="margin-left:auto">新建</span></div>
+  <table>
+    <thead><tr><th style="width:150px">字段</th><th style="width:120px">类型</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">code</td><td>CHAR(6) PK</td><td>6 位代码；与交易所组合唯一</td></tr>
+      <tr><td class="mono">exchange / board</td><td>VARCHAR</td><td>SH/SZ/BJ；主板/创业板/科创板/北交所（涨跌停幅度不同，回测必须区分）</td></tr>
+      <tr><td class="mono">name / industry_l1 / industry_l2</td><td>VARCHAR</td><td>名称、申万一级/二级（行业中性化与集中度约束要用）</td></tr>
+      <tr><td class="mono">ownership</td><td>VARCHAR</td><td>央企/地方国企/民企/外资 → 支撑现有 A3 策略</td></tr>
+      <tr><td class="mono">list_date / delist_date</td><td>DATE</td><td><b>退市标的必须保留</b>，否则回测有严重幸存者偏差</td></tr>
+      <tr><td class="mono">is_st / status</td><td>BOOLEAN / SMALLINT</td><td>ST 标记（多数策略需剔除）、正常/停牌/退市</td></tr>
+      <tr><td class="mono">total_share / float_share</td><td>NUMERIC</td><td>总股本、流通股本（算市值与换手的基础）</td></tr>
+      <tr><td class="mono">updated_at</td><td>TIMESTAMPTZ</td><td>—</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">fact_stock_daily · 个股日线（核心） <span class="badge new" style="margin-left:auto">新建</span></div>
+  <table>
+    <thead><tr><th style="width:150px">字段</th><th style="width:120px">类型</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">code + trade_date</td><td>联合 PK</td><td>按年分区（<span class="mono">PARTITION BY RANGE(trade_date)</span>），5 年约 650 万行（6 个年度分区 + 预建下一年），分区后查询仍走索引</td></tr>
+      <tr><td class="mono">open/high/low/close</td><td>NUMERIC(12,3)</td><td>未复权原始价</td></tr>
+      <tr><td class="mono">pre_close</td><td>NUMERIC(12,3)</td><td>前收盘，判断涨跌停必需</td></tr>
+      <tr><td class="mono">pct_chg / amplitude</td><td>NUMERIC(6,3)</td><td>涨跌幅、振幅（%）</td></tr>
+      <tr><td class="mono">volume / amount</td><td>BIGINT / NUMERIC(20,2)</td><td>成交量（股）、成交额（元）<b>两者严格区分，不能互相兜底</b></td></tr>
+      <tr><td class="mono">turnover_rate</td><td>NUMERIC(8,4)</td><td>换手率（%）</td></tr>
+      <tr><td class="mono">adj_factor</td><td>NUMERIC(12,6)</td><td><b>复权因子——回测的正确性全靠它</b>，缺了它所有收益率都是错的</td></tr>
+      <tr><td class="mono">market_cap / float_cap</td><td>NUMERIC(20,2)</td><td>总市值、流通市值</td></tr>
+      <tr><td class="mono">pe_ttm / pb / ps_ttm / dv_ttm</td><td>NUMERIC</td><td>估值快照（亏损股 PE 为负，筛选时须显式处理）</td></tr>
+      <tr><td class="mono">is_limit_up / is_limit_down / is_suspended</td><td>BOOLEAN</td><td><b>回测「不可成交」判定依据</b>，没有这三列的回测结果一律不可信</td></tr>
+      <tr><td class="mono">src / updated_at</td><td>VARCHAR / TIMESTAMPTZ</td><td>来源标识与更新时间，用于数据追溯</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">dim_sector_member · 板块成分（带生效区间） <span class="badge new" style="margin-left:auto">新建</span></div>
+  <table>
+    <thead><tr><th style="width:150px">字段</th><th style="width:120px">类型</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">sector_code / stock_code</td><td>联合 PK 之一</td><td>板块与成分股</td></tr>
+      <tr><td class="mono">effective_from / effective_to</td><td>DATE</td><td><b>SCD2 缓慢变化维</b>。板块成分会调整，只存「当前成分」会让历史回测用到未来信息</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">其余 4 张 <small>可随阶段推进补</small></div>
+  <table>
+    <thead><tr><th style="width:180px">表</th><th style="width:90px">优先级</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">fact_feature_daily</td><td><span class="badge p1">P1</span></td>
+        <td>预计算指标（MA/RSI/MACD/ATR/动量/波动/量比）。预计算而非查询时算，是全市场选股做到秒级的关键</td></tr>
+      <tr><td class="mono">fact_moneyflow</td><td><span class="badge p1">P1</span></td>
+        <td>个股主力净流入 T0–T4、北向持股比例。现有 A2 策略的输入</td></tr>
+      <tr><td class="mono">stg_run / stg_signal</td><td><span class="badge p1">P1</span></td>
+        <td>每次选股运行的元信息（run_id、参数快照、数据版本、耗时）+ 信号明细。<b>没有 run 记录的策略结果不可复现</b></td></tr>
+      <tr><td class="mono">meta_data_quality</td><td><span class="badge p0">P0</span></td>
+        <td>每个数据集：最后成功时间、行数、覆盖率、异常数。<b>前端「数据新鲜度」徽标的唯一来源</b>——这是量化系统可信度的底线</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="call amb">
+  <b>现有表的处置：</b>
+  <span class="mono">sector_daily</span> 保留但补充「历史回补」；<span class="mono">sector_score</span> 保留评分字段，
+  但<b>把日报拆到独立的 <span class="mono">daily_report</span> 表</b>（终止 <span class="mono">sector_code="__daily_report__"</span> 这个 hack）；
+  <span class="mono">algo_results</span> 改为存策略输出快照（含 run_id），不再是「CLI 输出缓存」。
+</div>
+
+<!-- ================= 07 ================= -->
+<h2><span class="no">07</span>功能清单与优先级</h2>
+<div class="lead">按模块编号，后文实施步骤直接引用这些编号。</div>
+
+<div class="tw">
+  <div class="th">模块 A · 采集 <span class="badge p0" style="margin-left:auto">主体 P0</span></div>
+  <table>
+    <thead><tr><th style="width:52px">编号</th><th style="width:200px">功能</th><th style="width:60px">优先级</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">A1</td><td>股票池同步</td><td><span class="badge p0">P0</span></td><td>全市场标的 + 退市标记 + ST 标记 + 行业归属，日更</td></tr>
+      <tr><td class="mono">A2</td><td><b>全市场当日快照</b></td><td><span class="badge p0">P0</span></td><td>一次请求拿全市场（约 5,400 只，以交易所披露为准），落库到 fact_stock_daily</td></tr>
+      <tr><td class="mono">A3</td><td>历史日线回补</td><td><span class="badge p0">P0</span></td><td>近 5 年，分批 + 限频 + 断点续传；优先「按市场批量」而非逐只，首次约 2–4 小时</td></tr>
+      <tr><td class="mono">A4</td><td>板块日线与成分</td><td><span class="badge p0">P0</span></td><td>板块指数日线回补 + 成分股 SCD2 快照</td></tr>
+      <tr><td class="mono">A5</td><td>资金与两融</td><td><span class="badge p1">P1</span></td><td>个股主力净流入、北向持股、融资余额（已有 market 级，扩到个股）</td></tr>
+      <tr><td class="mono">A6</td><td>指数日线</td><td><span class="badge p1">P1</span></td><td>A 股四指数（已有）+ 美股三指数（已写但未接）</td></tr>
+      <tr><td class="mono">A7</td><td>真实交易日历</td><td><span class="badge p0">P0</span></td><td>用交易所日历替代 <span class="mono">weekday()&lt;5</span>，解决节假日跑空</td></tr>
+      <tr><td class="mono">A8</td><td>采集编排</td><td><span class="badge p0">P0</span></td><td>任务优先级、并发上限、指数退避、DB 分布式锁（防多进程重复跑）、断点</td></tr>
+      <tr><td class="mono">A9</td><td><b>数据质量校验</b></td><td><span class="badge p0">P0</span></td><td>行数阈值、缺失率、涨跌幅越界、价格跳变、重复行；不合格则标记并阻断下游</td></tr>
+      <tr><td class="mono">A10</td><td>新鲜度面板</td><td><span class="badge p1">P1</span></td><td>每个数据集最后成功时间 / 覆盖率 / 异常数</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">模块 B–C · 存储与特征</div>
+  <table>
+    <thead><tr><th style="width:52px">编号</th><th style="width:200px">功能</th><th style="width:60px">优先级</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">B1</td><td>表结构 + 分区 + 索引</td><td><span class="badge p0">P0</span></td><td>fact_stock_daily 按年分区；(code, trade_date) 主键 + trade_date 索引</td></tr>
+      <tr><td class="mono">B2</td><td>Alembic 迁移</td><td><span class="badge p1">P1</span></td><td>终止裸 create_all，模型变更可追溯</td></tr>
+      <tr><td class="mono">B3</td><td>视图层</td><td><span class="badge p1">P1</span></td><td><span class="mono">v_stock_latest</span>（最新快照）、<span class="mono">v_stock_features</span></td></tr>
+      <tr><td class="mono">C1</td><td>指标批量计算</td><td><span class="badge p0">P0</span></td><td>向量化算全市场，复用现有 MA/RSI/MACD，新增 BOLL/ATR/量比/动量</td></tr>
+      <tr><td class="mono">C2</td><td>因子库</td><td><span class="badge p1">P1</span></td><td>价值（PE/PB/PS/股息）、质量（ROE/毛利/现金流）、动量、波动、流动性、情绪</td></tr>
+      <tr><td class="mono">C3</td><td>横截面标准化</td><td><span class="badge p1">P1</span></td><td>行业内 z-score 或分位，避免「银行 PE 永远低于半导体」的跨行业误比较</td></tr>
+      <tr><td class="mono">C4</td><td>综合评分</td><td><span class="badge p1">P1</span></td><td>沿用 40/35/25 框架，权重配置化</td></tr>
+      <tr><td class="mono">C5</td><td>修复板块分析</td><td><span class="badge p0">P0</span></td><td>历史取数方向修正、评分回传前端、真正调用龙头识别、情绪三子项接真数据</td></tr>
+      <tr><td class="mono">C6</td><td>AI 日报独立化</td><td><span class="badge p1">P1</span></td><td>独立表 + 结构化输出（结论/依据/风险），并引用具体数据</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">模块 D · 选股与回测 <span class="badge p0" style="margin-left:auto">本方案核心</span></div>
+  <table>
+    <thead><tr><th style="width:52px">编号</th><th style="width:200px">功能</th><th style="width:60px">优先级</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">D1</td><td>条件树引擎</td><td><span class="badge p0">P0</span></td><td>支持 AND/OR、区间、排名分位、行业约束；纯本地计算</td></tr>
+      <tr><td class="mono">D2</td><td><b>4 个策略重写</b></td><td><span class="badge p0">P0</span></td><td>A1 MACD 金叉×低估值（须加 PE&gt;0 过滤）、A2 均线多头×主力 5 日加仓、A3 央企×综合评分、A4 高股息×低估值</td></tr>
+      <tr><td class="mono">D3</td><td>参数真实生效</td><td><span class="badge p0">P0</span></td><td>参数进入计算 + 缓存键含参数 + run_id 快照，保证可复现</td></tr>
+      <tr><td class="mono">D4</td><td><b>回测引擎</b></td><td><span class="badge p1">P1</span></td><td>T 日收盘出信号 → T+1 开盘成交；手续费/印花税/滑点；涨跌停与停牌不可成交；剔除 ST</td></tr>
+      <tr><td class="mono">D5</td><td>绩效指标</td><td><span class="badge p1">P1</span></td><td>年化收益、最大回撤、夏普、胜率、盈亏比、换手率、相对基准超额</td></tr>
+      <tr><td class="mono">D6</td><td>自定义筛选器</td><td><span class="badge p2">P2</span></td><td>前端条件构建器（可后期做）</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="tw">
+  <div class="th">模块 E–F · 服务、前端与工程</div>
+  <table>
+    <thead><tr><th style="width:52px">编号</th><th style="width:200px">功能</th><th style="width:60px">优先级</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">E1</td><td>统一响应与错误码</td><td><span class="badge p1">P1</span></td><td>数据缺失时返回明确原因，而不是 500 或空数组</td></tr>
+      <tr><td class="mono">E2</td><td>数据新鲜度徽标</td><td><span class="badge p0">P0</span></td><td>每个数据卡片标注「来源 + 数据时间 + 覆盖率」</td></tr>
+      <tr><td class="mono">E3</td><td>选股中心改造</td><td><span class="badge p1">P1</span></td><td>参数真生效、显示 run 元信息、结果可导出 CSV</td></tr>
+      <tr><td class="mono">E4</td><td>个股详情页</td><td><span class="badge p1">P1</span></td><td>K 线 + 指标 + 因子雷达 + 所属板块</td></tr>
+      <tr><td class="mono">E5</td><td>任务监控页</td><td><span class="badge p1">P1</span></td><td>最近运行、失败原因、一键重跑</td></tr>
+      <tr><td class="mono">F1</td><td>依赖修复与锁定</td><td><span class="badge p0">P0</span></td><td>修正 requirements，用 lock 文件固定，区分 dev/prod</td></tr>
+      <tr><td class="mono">F2</td><td>任务编排升级</td><td><span class="badge p2">P2</span></td><td>先单进程 + DB 锁；量大再上 Celery / Arq</td></tr>
+      <tr><td class="mono">F3</td><td>日志结构化</td><td><span class="badge p2">P2</span></td><td>JSON 日志 + 任务 ID 贯穿，便于排查采集失败</td></tr>
+      <tr><td class="mono">F4</td><td>测试</td><td><span class="badge p1">P1</span></td><td>采集幂等、指标对已知值、回测口径（含未来函数检测）三类必须有</td></tr>
+      <tr><td class="mono">F5</td><td>配置化</td><td><span class="badge p2">P2</span></td><td>策略权重、自选池、阈值全部配置化</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ================= 08 ================= -->
+<h2><span class="no">08</span>实施步骤</h2>
+<div class="lead">六个阶段，每个阶段都有可验证的验收口径。顺序不可乱——后一阶段依赖前一阶段的数据。</div>
+
+<div class="phase">
+  <div class="pt">阶段 0 · 止血：让系统能起来 <span class="pm">约 1–2 人日</span> <span class="badge p0">P0</span></div>
+  <div class="pd">先把「跑不起来」和「明显算错」解决，不做新功能。</div>
+  <ul>
+    <li>F1 修依赖：补齐 asyncpg / akshare / yfinance / pandas / numpy，核实 <span class="mono">yfinance</span> 版本号后重新锁定</li>
+    <li>修 import：统一 <span class="mono">from app.scripts…</span> 或改成包内相对导入，消除本地/Docker 差异</li>
+    <li>C5 局部：修 <span class="mono">_calc_technical_for_sector</span> 排序方向；<span class="mono">_enrich_with_scores</span> 接上真实评分</li>
+    <li>把 <span class="mono">_query_report</span> 与日报存储临时指向独立表，先消除串数据</li>
+  </ul>
+  <div class="acc">验收：<span class="mono">/health</span> 返回 database=connected；<span class="mono">/api/v1/analysis/dashboard</span> 的 sectors 每条带 technical/composite 分数；<span class="mono">/api/v1/algo/list</span> 不再 500。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 1 · 数据地基：全市场个股行情 <span class="pm">约 5–7 人日</span> <span class="badge p0">P0</span></div>
+  <div class="pd">这一步做完，项目才第一次拥有「当日行情」。是整个方案的分水岭。</div>
+  <ul>
+    <li>B1 建 dim_stock / fact_stock_daily / dim_sector_member / meta_data_quality</li>
+    <li>A1 股票池同步（含退市、ST、行业、所有制）</li>
+    <li>A2 全市场当日快照落库（一次请求 → 5,400 行）</li>
+    <li>A3 近 5 年日线回补，分批限频 + 断点续传（预计首次 2–4 小时，建议夜间执行；先补 1 年打通链路，再异步补齐前 4 年）</li>
+    <li>A4 板块日线 + 成分 SCD2 回补</li>
+    <li>A7 交易日历；A8 采集编排（DB 锁 + 重试）；A9 质量校验</li>
+  </ul>
+  <div class="acc">验收：任取 3 个交易日，全市场覆盖率 ≥ 95%；任取 1 只股票可查到连续 5 年日线且无缺日（除停牌）；重复执行同一采集任务不产生重复行。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 2 · 真选股：替换 mock <span class="pm">约 4–5 人日</span> <span class="badge p0">P0</span></div>
+  <div class="pd">保留 <span class="mono">algo_service</span> 对外签名，换掉内部实现，前端不用大改。</div>
+  <ul>
+    <li>C1 指标批量计算 → fact_feature_daily</li>
+    <li>D1 条件树引擎 + D2 四个策略按真实数据重写</li>
+    <li>D3 参数生效 + run_id 快照；<span class="mono">algo_results</span> 改存 run 结果</li>
+    <li>退役 <span class="mono">westock-tool/</span>（保留目录并标注 <span class="mono">DEPRECATED</span>，不删除历史）</li>
+  </ul>
+  <div class="acc">验收：同一交易日、同一参数连跑两次结果完全一致；改 <span class="mono">pe_max</span> 从 15→30 结果集明显变化（证明参数真的生效）；A1 结果中不再出现 PE 为负的标的。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 3 · 可信度：回测与质量 <span class="pm">约 3–4 人日</span> <span class="badge p1">P1</span></div>
+  <div class="pd">让「这个策略赚不赚钱」第一次成为可回答的问题。</div>
+  <ul>
+    <li>D4 回测引擎（T+1 成交、费用、涨跌停/停牌不可成交）</li>
+    <li>D5 绩效指标 + 相对基准超额</li>
+    <li>F4 三类测试：采集幂等 / 指标对已知值 / 回测未来函数检测</li>
+    <li>E2 数据新鲜度徽标（后端 + 前端）</li>
+  </ul>
+  <div class="acc">验收：任选策略跑 5 年回测（覆盖多个市场环境），净值曲线与逐笔成交明细可导出；人为把 T+1 价格换成 T 日价格，测试应报「未来函数」失败。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 4 · 分析增强：因子与板块 <span class="pm">约 3–4 人日</span> <span class="badge p1">P1</span></div>
+  <ul>
+    <li>C2 因子库 + C3 横截面标准化 + C4 综合评分</li>
+    <li>C5 板块分析修复：龙头识别真正接入、论坛情绪接真实数据、资金流匹配改中文名</li>
+    <li>C6 AI 日报独立表 + 结构化输出，Prompt 中强制引用具体数字</li>
+    <li>A5 个股资金流与北向（A2 策略输入）</li>
+  </ul>
+  <div class="acc">验收：板块技术分不再全部 5.0，分布有明显区分度；<span class="mono">strength_leaders</span> 非空；日报能追到引用的板块与数值。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 5 · 交付与运维 <span class="pm">约 2–3 人日</span> <span class="badge p1">P1</span></div>
+  <ul>
+    <li>E3 选股中心改造、E4 个股详情页、E5 任务监控页</li>
+    <li>B2 Alembic 迁移、F3 结构化日志</li>
+    <li>清理 <span class="mono">seed-demo</span>（挪进 fixtures）、修正静态目录、更新 README 与架构文档</li>
+  </ul>
+  <div class="acc">验收：全新环境按 README 从零部署，30 分钟内能跑出第一份当日选股结果。</div>
+</div>
+
+<div class="phase">
+  <div class="pt">阶段 6 · 进阶（可选） <span class="pm">按需</span> <span class="badge p2">P2</span></div>
+  <ul>
+    <li>因子有效性检验（IC / IR / 分层回测）</li>
+    <li>组合优化（行业中性、风险预算）</li>
+    <li>自定义筛选器 D6、Celery 任务队列 F2</li>
+  </ul>
+</div>
+
+<!-- ================= 09 ================= -->
+<h2><span class="no">09</span>关键风险</h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th style="width:180px">风险</th><th style="width:70px">等级</th><th>应对</th></tr></thead>
+    <tbody>
+      <tr><td>AKShare 接口变动或被限流</td><td><span class="badge p0">高</span></td>
+        <td>Provider 抽象 + 双源降级 + 本地库为唯一事实源；采集失败不影响已落库数据的使用，前端显示新鲜度而非报错</td></tr>
+      <tr><td>首次全量回补耗时超预期</td><td><span class="badge p0">高</span></td>
+        <td>优先用「按市场批量」接口而非逐只；分批 + 断点续传 + 夜间执行；先回补 1 年打通链路，再异步补齐前 4 年</td></tr>
+      <tr><td>复权口径错误导致回测失真</td><td><span class="badge p0">高</span></td>
+        <td>强制存 adj_factor；用 Baostock 交叉校验 3–5 只样本的前复权价；回测统一用「后复权价算收益」</td></tr>
+      <tr><td>未来函数（用到当日收盘后才知道的信息）</td><td><span class="badge p0">高</span></td>
+        <td>回测严格 T+1 成交；代码层面禁止 <span class="mono">shift(-1)</span>；专门写一条未来函数检测用例</td></tr>
+      <tr><td>幸存者偏差</td><td><span class="badge p1">中</span></td>
+        <td>dim_stock 保留退市标的与 delist_date；回测时按当日「在市」过滤，而不是按今天的股票池</td></tr>
+      <tr><td>数据量增长（5 年约 650 万行 / 约 2–2.5 GB）</td><td><span class="badge p2">低</span></td>
+        <td>PostgreSQL 分区 + 索引完全够用；按年分区，冷数据可归档</td></tr>
+      <tr><td>合规边界</td><td><span class="badge p1">中</span></td>
+        <td>限频、固定 UA、遵守站点条款；不实现反爬绕过；数据仅个人研究，不对外分发</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="call red">
+  <b>必须提前接受的一点：</b>改造完成后，你得到的是「一套可信的数据与信号系统」，<b>不是「一套能稳定赚钱的策略」</b>。
+  量化选股的价值在于把决策变得可复现、可归因、可证伪；回测好看的策略在实盘失效是常态。
+  系统设计里必须始终保留「数据新鲜度」与「回测≠实盘」这两条警示。
+</div>
+
+<!-- ================= 10 ================= -->
+<h2><span class="no">10</span>决策定稿与 5 年口径的补充影响</h2>
+<div class="lead">五个决策已定：市场范围/颗粒/数据源/交付重心取默认，<b>历史深度上调为 5 年</b>。以下把这一个变更带来的连锁影响补全。</div>
+
+<div class="tw">
+  <div class="th">决策定稿 <small>已确认，可直接进入编码</small></div>
+  <table>
+    <thead><tr><th style="width:130px">决策点</th><th style="width:170px">定稿</th><th style="width:90px">状态</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td><b>① 市场范围</b></td><td>A 股（沪 / 深 / 北）</td><td><span class="badge keep">默认</span></td>
+        <td>复用现有 AKShare 链路最省事；港股需另接代码体系与交易规则，收益不匹配成本</td></tr>
+      <tr><td><b>② 历史深度</b></td><td><b>近 5 年</b></td><td><span class="badge p0">已调整</span></td>
+        <td>回测窗口需覆盖至少一轮完整牛熊，否则策略容易被单一市场环境过拟合</td></tr>
+      <tr><td><b>③ 数据颗粒</b></td><td>仅日线</td><td><span class="badge keep">默认</span></td>
+        <td>分钟线是日线的 240 倍数据量，选股策略以日频调仓为主，无此必要</td></tr>
+      <tr><td><b>④ 数据源</b></td><td>AKShare 主 + Baostock 兜底</td><td><span class="badge keep">默认</span></td>
+        <td>零预算下覆盖最全；Baostock 用来交叉校验复权口径，不必付费</td></tr>
+      <tr><td><b>⑤ 交付重心</b></td><td>先出信号 + 回测必做</td><td><span class="badge keep">默认</span></td>
+        <td>没有回测的信号无法判断有效性；组合优化后置到阶段 6</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 style="margin-top:24px;">5 年带来四个具体变化（不只是数字变大）</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th style="width:130px">维度</th><th style="width:200px">3 年口径</th><th style="width:200px">5 年口径（定稿）</th><th>要动的设计</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>数据量</b></td>
+        <td>约 400 万行</td>
+        <td><b>约 650 万行</b><br><span style="color:#868e97">含退市标的后可达约 730 万行</span></td>
+        <td>体积估算约 2–2.5 GB（含索引）。仍在单机 PostgreSQL 舒适区，但必须分区，不能一张大表裸跑</td>
+      </tr>
+      <tr>
+        <td><b>分区策略</b></td>
+        <td>3 个年度分区</td>
+        <td><b>6 个年度分区</b><br><span style="color:#868e97">2021–2026 + 预建 2027 + default</span></td>
+        <td>建表时一次性预建全部分区；采集任务需带「自动建下一年分区」逻辑，否则跨年那天写入会失败</td>
+      </tr>
+      <tr>
+        <td><b>回补耗时</b></td>
+        <td>首次 1–3 小时</td>
+        <td><b>首次 2–4 小时</b></td>
+        <td>请求次数不变（仍是每只股票一次全历史），但单次返回体积更大、失败重拉成本更高；建议夜间执行 + 断点续传 + 失败清单重试</td>
+      </tr>
+      <tr>
+        <td><b>回测可信度</b></td>
+        <td>覆盖约 1 轮半周期</td>
+        <td><b>覆盖多轮极端环境</b></td>
+        <td>5 年窗口能穿过调整期与反弹期两类环境，策略在不同市况下的表现差异才能被看见——<b>这是上调到 5 年最实质的收益</b></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="call amb">
+  <b>5 年口径下新增的两条硬约束（务必写进开发清单）：</b><br>
+  ① <b>退市标的必须入库。</b>窗口拉到 5 年，退市股数量显著增加。若只按「今天还在交易的股票」建池，
+  回测会自动剔除所有后来退市的失败案例，收益率虚高——这是最典型的幸存者偏差。
+  <span class="mono">dim_stock</span> 必须保留 <span class="mono">delist_date</span>，回测按「当日在市」过滤。<br>
+  ② <b>复权因子必须按 5 年区间回溯。</b>5 年内会发生多次送转与分红，若 <span class="mono">adj_factor</span> 起点取错，
+  早期价格会被系统性放大或缩小，回测收益率直接失真。落地时用 Baostock 抽 5–10 只标的做交叉校验。
+</div>
+
+<div class="call grn">
+  <b>工时相应调整：</b>阶段 1（数据地基）由 4–6 人日上调为 <b>5–7 人日</b>（多出的部分在分区预建、回补重试与复权校验）。<br>
+  整体由 17–24 人日调整为 <b>18–26 人日</b>；其中阶段 0–2（能出第一份真实选股结果）约 <b>10–14 人日</b>。<br>
+  其余阶段的估算不变——分析层与策略层的复杂度不随历史长度线性增长。
+</div>
+
+<div class="call blu">
+  <b>建议的回补推进节奏（避免一次性 4 小时卡住进度）：</b>
+  先回补最近 1 年打通「采集 → 落库 → 指标 → 选股」全链路（约 30–50 分钟），
+  验证无误后再异步补齐前 4 年。这样阶段 1 的验收不必等到全量回补结束。
+</div>
+
+<div class="foot">
+  <b>核对方式：</b>本方案中所有关于现状的判断均来自对工作区 <span class="mono">grna/</span> 的实际读取与命令验证：
+  依赖缺失由 <span class="mono">pip list</span> 实测；mock 结论来自 <span class="mono">westock-tool/scripts/index.js</span> 源码；
+  其余条目均标注了文件与行号，可直接打开比对。<br>
+  <b>两处标注「需核实」：</b>① <span class="mono">yfinance==1.5.2</span> 是否真实存在（当前环境无法联网核对 PyPI）；
+  ② 全市场标的数量按约 5,400 只估算，实际以交易所披露为准。<br>
+  <b>说明：</b>本文件为改造方案，不含投资建议；系统输出的任何量化信号仅供个人研究，不构成买卖依据。
+</div>
+
+</div>
+</body>
+</html>

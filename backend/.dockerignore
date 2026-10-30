@@ -1,0 +1,10 @@
+# 构建上下文排除（backend 镜像）
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+logs/
+*.log
+tests/

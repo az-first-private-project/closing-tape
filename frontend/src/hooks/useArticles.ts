@@ -1,4 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+/**
+ * 新闻数据 Hook（契约第 2 节，字段与 V2 兼容）
+ */
+import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchArticles,
   fetchArticle,
@@ -8,27 +12,36 @@ import {
   fetchSourceDistribution,
   fetchKeywords,
   fetchProcessingStatus,
-} from '../lib/api'
+  fetchSources,
+  triggerAutoCrawl,
+  fetchAutoCrawlStatus,
+  type AutoCrawlState,
+} from '../api/news'
 
-// ==================== 文章列表 ====================
+/** 同一浏览器会话 10 分钟内最多触发一次自动抓取 */
+const AUTO_CRAWL_KEY = 'gfna:news-auto-crawl-at'
+const AUTO_CRAWL_INTERVAL_MS = 10 * 60 * 1000
+const AUTO_CRAWL_POLL_MS = 4000
+
+/** 文章列表（翻页保留旧数据，避免闪烁） */
 export function useArticles(page: number, sourceId?: number | null) {
   return useQuery({
     queryKey: ['articles', page, sourceId],
     queryFn: () => fetchArticles(page, 20, sourceId),
-    placeholderData: (prev) => prev, // 翻页时保留旧数据，避免闪烁
+    placeholderData: (prev) => prev,
   })
 }
 
-// ==================== 文章详情 ====================
+/** 文章详情 */
 export function useArticle(id: number) {
   return useQuery({
     queryKey: ['article', id],
     queryFn: () => fetchArticle(id),
-    enabled: !!id,
+    enabled: Number.isFinite(id) && id > 0,
   })
 }
 
-// ==================== 搜索 ====================
+/** 搜索 */
 export function useSearch(q: string, page: number) {
   return useQuery({
     queryKey: ['search', q, page],
@@ -37,16 +50,25 @@ export function useSearch(q: string, page: number) {
   })
 }
 
-// ==================== 统计数据 ====================
+/** 顶部新闻统计（30 秒轮询） */
 export function useStats() {
   return useQuery({
     queryKey: ['stats'],
     queryFn: fetchStats,
-    refetchInterval: 30_000, // 每 30 秒自动刷新
+    refetchInterval: 30_000,
   })
 }
 
-export function useDailyTrend(days: number = 30) {
+/** 新闻来源（前端不再写死来源） */
+export function useSources() {
+  return useQuery({
+    queryKey: ['news-sources'],
+    queryFn: fetchSources,
+    staleTime: 30 * 60 * 1000,
+  })
+}
+
+export function useDailyTrend(days = 30) {
   return useQuery({
     queryKey: ['daily-trend', days],
     queryFn: () => fetchDailyTrend(days),
@@ -73,4 +95,70 @@ export function useProcessingStatus() {
     queryFn: fetchProcessingStatus,
     refetchInterval: 30_000,
   })
+}
+
+/**
+ * 打开网站自动抓取新闻。
+ * - 会话内 10 分钟节流（sessionStorage），服务端还有并发锁 + 冷却；
+ * - 抓取期间旧文章保持展示，结束后自动刷新列表/统计。
+ */
+export function useAutoCrawl() {
+  const queryClient = useQueryClient()
+  const [crawling, setCrawling] = useState(false)
+  const [lastResult, setLastResult] = useState<AutoCrawlState['last_result']>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const last = Number(sessionStorage.getItem(AUTO_CRAWL_KEY) || 0)
+    const shouldTrigger = Date.now() - last >= AUTO_CRAWL_INTERVAL_MS
+    if (shouldTrigger) {
+      // 先落时间戳再请求：StrictMode 双执行 / 快速刷新都不会重复触发
+      sessionStorage.setItem(AUTO_CRAWL_KEY, String(Date.now()))
+    }
+
+    const poll = async () => {
+      try {
+        const state = await fetchAutoCrawlStatus()
+        if (cancelled) return
+        if (state.running) {
+          setCrawling(true)
+          timer = setTimeout(poll, AUTO_CRAWL_POLL_MS)
+          return
+        }
+        setCrawling(false)
+        if (state.last_result) {
+          setLastResult(state.last_result)
+          void queryClient.invalidateQueries({ queryKey: ['articles'] })
+          void queryClient.invalidateQueries({ queryKey: ['search'] })
+          void queryClient.invalidateQueries({ queryKey: ['stats'] })
+          void queryClient.invalidateQueries({ queryKey: ['news-sources'] })
+        }
+      } catch {
+        if (!cancelled) setCrawling(false)
+      }
+    }
+
+    const start = async () => {
+      try {
+        const state = shouldTrigger ? await triggerAutoCrawl() : await fetchAutoCrawlStatus()
+        if (cancelled) return
+        if (state.status === 'started' || state.running) {
+          setCrawling(true)
+          timer = setTimeout(poll, 2500)
+        }
+      } catch {
+        if (!cancelled) setCrawling(false)
+      }
+    }
+
+    void start()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [queryClient])
+
+  return { crawling, lastResult }
 }

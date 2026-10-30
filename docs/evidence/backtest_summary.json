@@ -1,0 +1,102 @@
+{
+  "a1": {
+    "http": 200,
+    "bt_id": "2f34fd08-8066-418e-9a3a-d7683ec17ed2",
+    "calendar_source": "db",
+    "effective_start": "2025-11-06",
+    "start_trimmed": true,
+    "metrics": {
+      "total_return": 0.010254,
+      "annual_return": 0.01124,
+      "max_drawdown": -0.028665,
+      "sharpe": 0.3923,
+      "sortino": 0.5207,
+      "calmar": 0.3921,
+      "win_rate": 0.6667,
+      "profit_loss_ratio": 1.7321,
+      "turnover": 0.978432,
+      "trade_count": 20,
+      "benchmark_return": -0.102066,
+      "excess_return": 0.11232,
+      "volatility": 0.029609,
+      "adjusted": true
+    },
+    "curve_points": 231,
+    "trades": 20
+  },
+  "a2": {
+    "http": 200,
+    "bt_id": "17a20078-fb9f-47b0-bfc1-782b42898297",
+    "calendar_source": "db",
+    "effective_start": "2025-11-06",
+    "start_trimmed": true,
+    "metrics": {
+      "total_return": -0.096885,
+      "annual_return": -0.105645,
+      "max_drawdown": -0.162831,
+      "sharpe": -1.0602,
+      "sortino": -1.5578,
+      "calmar": -0.6488,
+      "win_rate": 0.4262,
+      "profit_loss_ratio": 0.9638,
+      "turnover": 6.10583,
+      "trade_count": 132,
+      "benchmark_return": -0.102066,
+      "excess_return": 0.005181,
+      "volatility": 0.100548,
+      "adjusted": true
+    },
+    "curve_points": 231,
+    "trades": 135
+  },
+  "a3": {
+    "http": 200,
+    "bt_id": "919e1222-7eae-4b7e-9fcb-e47dea10f41b",
+    "calendar_source": "db",
+    "effective_start": "2025-11-06",
+    "start_trimmed": true,
+    "metrics": {
+      "total_return": -0.120005,
+      "annual_return": -0.1307,
+      "max_drawdown": -0.142127,
+      "sharpe": -1.8126,
+      "sortino": -2.4046,
+      "calmar": -0.9196,
+      "win_rate": 0.3333,
+      "profit_loss_ratio": 0.7028,
+      "turnover": 3.105901,
+      "trade_count": 70,
+      "benchmark_return": -0.102066,
+      "excess_return": -0.017939,
+      "volatility": 0.075676,
+      "adjusted": true
+    },
+    "curve_points": 231,
+    "trades": 70
+  },
+  "a4": {
+    "http": 200,
+    "bt_id": "7061a9ad-cdbf-4e64-a676-a1f9511e72f5",
+    "calendar_source": "db",
+    "effective_start": "2025-11-06",
+    "start_trimmed": true,
+    "metrics": {
+      "total_return": -0.003916,
+      "annual_return": -0.00429,
+      "max_drawdown": -0.038506,
+      "sharpe": -0.1027,
+      "sortino": -0.1039,
+      "calmar": -0.1114,
+      "win_rate": 0.5556,
+      "profit_loss_ratio": 0.7325,
+      "turnover": 0.830145,
+      "trade_count": 18,
+      "benchmark_return": -0.102066,
+      "excess_return": 0.09815,
+      "volatility": 0.035693,
+      "adjusted": true
+    },
+    "curve_points": 231,
+    "trades": 18
+  }
+}

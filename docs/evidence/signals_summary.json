@@ -1,0 +1,169 @@
+{
+  "a1": {
+    "count": 1,
+    "run_id": "24cfdcc5-ad07-48fd-8eed-4b3e138f684c",
+    "universe": 42,
+    "data_version": "2026-10-21:b51",
+    "items": [
+      {
+        "code": "600111",
+        "name": "北方稀土",
+        "score": 33.5027,
+        "pe": 33.5027,
+        "dv": 1.2157
+      }
+    ]
+  },
+  "a2": {
+    "count": 9,
+    "run_id": "6969ee8d-2bf8-4722-8ce7-b2aa3125886c",
+    "universe": 42,
+    "data_version": "2026-10-21:b51",
+    "items": [
+      {
+        "code": "688981",
+        "name": "中芯国际",
+        "score": 13151.65,
+        "pe": 72.1611,
+        "dv": 0.0
+      },
+      {
+        "code": "600690",
+        "name": "海尔智家",
+        "score": 5836.4646,
+        "pe": 17.9994,
+        "dv": 1.7238
+      },
+      {
+        "code": "600048",
+        "name": "保利发展",
+        "score": 5596.3067,
+        "pe": 21.3839,
+        "dv": 0.0671
+      },
+      {
+        "code": "600000",
+        "name": "浦发银行",
+        "score": 5215.9427,
+        "pe": 17.9998,
+        "dv": 2.4761
+      },
+      {
+        "code": "300760",
+        "name": "迈瑞医疗",
+        "score": 4870.8471,
+        "pe": 28.4779,
+        "dv": 3.9339
+      },
+      {
+        "code": "600519",
+        "name": "贵州茅台",
+        "score": 3084.9095,
+        "pe": 20.1336,
+        "dv": 3.969
+      }
+    ]
+  },
+  "a3": {
+    "count": 6,
+    "run_id": "7a3d1f9a-51d2-4e73-83c3-941ec3c3e639",
+    "universe": 42,
+    "data_version": "2026-10-21:b51",
+    "items": [
+      {
+        "code": "600036",
+        "name": "招商银行",
+        "score": 7.1,
+        "pe": 7.3022,
+        "dv": 4.7682
+      },
+      {
+        "code": "601988",
+        "name": "中国银行",
+        "score": 6.88,
+        "pe": 9.7838,
+        "dv": 3.1257
+      },
+      {
+        "code": "601088",
+        "name": "中国神华",
+        "score": 6.62,
+        "pe": 17.8579,
+        "dv": 4.0796
+      },
+      {
+        "code": "601857",
+        "name": "中国石油",
+        "score": 6.4,
+        "pe": 12.9485,
+        "dv": 4.0605
+      },
+      {
+        "code": "601318",
+        "name": "中国平安",
+        "score": 6.32,
+        "pe": 5.6202,
+        "dv": 7.1875
+      },
+      {
+        "code": "600893",
+        "name": "航发动力",
+        "score": 6.07,
+        "pe": 35.7201,
+        "dv": 1.7216
+      }
+    ]
+  },
+  "a4": {
+    "count": 4,
+    "run_id": "a685e137-49fe-47bb-b429-6cf67ed18eed",
+    "universe": 42,
+    "data_version": "2026-10-21:b51",
+    "items": [
+      {
+        "code": "601318",
+        "name": "中国平安",
+        "score": 7.1875,
+        "pe": 5.6202,
+        "dv": 7.1875
+      },
+      {
+        "code": "601668",
+        "name": "中国建筑",
+        "score": 6.0266,
+        "pe": 5.9342,
+        "dv": 6.0266
+      },
+      {
+        "code": "600036",
+        "name": "招商银行",
+        "score": 4.7682,
+        "pe": 7.3022,
+        "dv": 4.7682
+      },
+      {
+        "code": "601857",
+        "name": "中国石油",
+        "score": 4.0605,
+        "pe": 12.9485,
+        "dv": 4.0605
+      }
+    ]
+  },
+  "freshness": {
+    "stock_universe": "error",
+    "stock_daily": "ok",
+    "stock_features": "ok",
+    "stock_scores": "ok",
+    "sector_daily": "ok",
+    "sector_members": "unknown",
+    "moneyflow": "unknown",
+    "valuation": "ok",
+    "index_daily": "error",
+    "margin": "ok",
+    "trade_calendar": "ok",
+    "news": "unknown",
+    "algo_run": "ok",
+    "daily_report": "ok"
+  }
+}

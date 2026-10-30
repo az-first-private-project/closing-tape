@@ -1,226 +1,219 @@
 """
-GFNA (全球财经新闻聚合器) — FastAPI 主入口 (V2 PostgreSQL 异步版)
-==============================================================
-启动方式: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-API 文档: http://localhost:8000/docs (Swagger UI)
-"""
-import sys
-import os
+GFNA V5 FastAPI 入口
+====================
+启动：
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+文档：
+    /docs  /redoc
+健康检查：
+    /health  → 含数据库状态、最新交易日、数据是否就绪
 
-# 将 backend 目录添加到 Python 路径
+V5 相对 V4 的变化：
+  - 去掉了 V1 静态目录挂载（`frontend/css`、`frontend/js` 早就不存在，只制造 404）
+  - 统一异常 → 统一错误响应体（方案 E1）
+  - 建表改为"引导脚本 + Alembic"，启动时只做轻量检查（`AUTO_CREATE_TABLES=1` 时保留兜底）
+  - 调度器只在 `SCHEDULER_ENABLED=1` 时启动
+"""
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import uuid
+from contextlib import asynccontextmanager
+
+# 允许 `python -m app.main` 与 `uvicorn app.main:app` 两种方式都能找到包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 【Windows 修复】必须在任何 asyncio 相关导入之前设置
+# 【Windows】必须在任何 asyncio 相关导入前设置（项目历史坑：Proactor 下卡死）
 if sys.platform == "win32":
     import asyncio as _asyncio
     _asyncio.set_event_loop_policy(_asyncio.WindowsSelectorEventLoopPolicy())
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from sqlalchemy import text
+from fastapi import FastAPI, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
-from app.api.v1.articles import router as articles_router
-from app.api.v1.stats import router as stats_router
-from app.db.base import Base
-from app.db.session import engine
-from app.core.config import LOG_LEVEL
-from app.services.crawler_service import run_spider, process_unsummarized_articles
-import logging
-
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+from app.api.v1 import api_router  # noqa: E402
+from app.core.config import (  # noqa: E402
+    AUTO_CREATE_TABLES, CORS_ORIGINS, LOG_LEVEL, SCHEDULER_ENABLED, SERVER_HOST,
+    SERVER_PORT,
 )
+from app.core.errors import AppError  # noqa: E402
+from app.core.logging import bind_run, get_logger, setup_logging  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.db.session import dispose_engines, engine  # noqa: E402
 
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger("main")
 
 
-# ==================== 应用生命周期 (替代 on_event) ====================
+# ============================================================
+# 生命周期
+# ============================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    FastAPI 异步生命周期管理
-    - 启动时: 创建数据库表、启动定时任务
-    - 关闭时: 停止定时任务、关闭引擎
-    """
-    # ===== 启动 =====
-    logger.info("=" * 50)
-    logger.info("GFNA V2 应用正在启动...")
-    logger.info("=" * 50)
+    logger.info("=" * 56)
+    logger.info("GFNA V5 启动中 …")
+    logger.info("=" * 56)
 
-    # 创建数据库表
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("数据库表已就绪 (已检查/创建)")
-    except Exception as e:
-        logger.error(f"数据库表创建失败: {e}")
-        logger.warning("应用将继续启动，但数据库操作可能会失败")
+        async with engine.connect() as conn:
+            version = (await conn.execute(text("SELECT version()"))).scalar()
+            logger.info("数据库已连接：%s", str(version).split(",")[0])
+    except Exception as exc:                          # noqa: BLE001
+        logger.error("数据库连接失败（应用仍会启动，但接口将返回 DB_UNAVAILABLE）：%s", exc)
 
-    # 启动定时任务
-    _start_scheduler()
-    logger.info("GFNA V2 应用启动完成!")
+    if AUTO_CREATE_TABLES:
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("已确保 %d 张表存在（AUTO_CREATE_TABLES=1）", len(Base.metadata.tables))
+        except Exception as exc:                      # noqa: BLE001
+            logger.warning("建表检查失败：%s", exc)
 
-    yield  # ← 应用运行期间暂停在这里
+    scheduler = None
+    if SCHEDULER_ENABLED:
+        from app.worker import start_scheduler
+        scheduler = start_scheduler()
+    else:
+        logger.info("SCHEDULER_ENABLED=0，定时任务未启动")
 
-    # ===== 关闭 =====
-    logger.info("GFNA 应用正在关闭...")
-    _stop_scheduler()
-    await engine.dispose()
-    logger.info("数据库引擎已关闭")
+    logger.info("GFNA V5 启动完成 ✅")
+    try:
+        yield
+    finally:
+        logger.info("GFNA V5 关闭中 …")
+        if scheduler is not None:
+            from app.worker import stop_scheduler
+            stop_scheduler()
+        await dispose_engines()
+        logger.info("已释放数据库连接")
 
 
-# ==================== 创建 FastAPI 应用实例 ====================
 app = FastAPI(
-    title="GFNA V2 - 全球财经新闻聚合器",
+    title="GFNA V5 · A 股行情与量化选股",
     description=(
-        "一个基于 Python 的全栈 Web 应用，自动抓取全球主流财经新闻，"
-        "并利用 DeepSeek AI 生成中文摘要。\n\n"
-        "**V2 升级:**\n"
-        "- 前端: React 18 + Vite + TypeScript + Tailwind CSS + shadcn/ui\n"
-        "- 后端: FastAPI (异步) + PostgreSQL 16 + asyncpg\n"
-        "- 全文搜索: PostgreSQL tsvector + GIN 索引\n\n"
-        "**技术栈:** Python 3.11 + FastAPI + PostgreSQL + Scrapy + DeepSeek"
+        "行情采集（AKShare 主 + Baostock 兜底）→ 本地 PostgreSQL 单一事实源 → "
+        "指标/因子 → 条件树选股 → 回测。\n\n"
+        "所有分析只读本地库，请求路径不访问外部数据源。\n"
+        "接口契约见 `docs/V5-API-CONTRACT.md`。"
     ),
-    version="2.0.0",
+    version="5.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan,  # 使用新的 lifespan 方式
+    lifespan=lifespan,
 )
 
-# ==================== CORS 中间件 ====================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== 注册路由 ====================
-app.include_router(articles_router)
-app.include_router(stats_router)
 
-# ==================== 静态文件服务 ====================
-FRONTEND_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "frontend"
-)
+# ============================================================
+# 中间件：请求 ID + 访问日志
+# ============================================================
 
-if os.path.exists(os.path.join(FRONTEND_DIR, "css")):
-    app.mount("/static/css", StaticFiles(directory=os.path.join(FRONTEND_DIR, "css")), name="css")
-if os.path.exists(os.path.join(FRONTEND_DIR, "js")):
-    app.mount("/static/js", StaticFiles(directory=os.path.join(FRONTEND_DIR, "js")), name="js")
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    with bind_run(request_id=request_id):
+        response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
-# ==================== 根路由 ====================
-@app.get("/")
-def read_root():
-    """返回主页 HTML 文件"""
-    index_path = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"message": "GFNA V2 API 运行中", "docs": "/docs"}
+# ============================================================
+# 异常处理：统一错误体（方案 E1）
+# ============================================================
+
+@app.exception_handler(AppError)
+async def handle_app_error(request: Request, exc: AppError):
+    request_id = request.headers.get("X-Request-ID")
+    logger.warning("业务异常 [%s] %s: %s", exc.code, request.url.path, exc.message)
+    return JSONResponse(status_code=exc.status_code,
+                        content=exc.to_payload(request_id=request_id))
 
 
-# ==================== 健康检查 ====================
-@app.get("/health")
-async def health_check():
-    """健康检查端点"""
+@app.exception_handler(Exception)
+async def handle_unexpected(request: Request, exc: Exception):
+    request_id = request.headers.get("X-Request-ID")
+    logger.exception("未处理异常: %s", request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "ok": False,
+            "error": {"code": "INTERNAL", "message": f"{type(exc).__name__}: {exc}"},
+            "request_id": request_id,
+        },
+    )
+
+
+app.include_router(api_router)
+
+
+# ============================================================
+# 根路由与健康检查
+# ============================================================
+
+@app.get("/", include_in_schema=False)
+async def root() -> dict:
+    return {
+        "service": "GFNA",
+        "version": "5.0.0",
+        "docs": "/docs",
+        "frontend": "由 Nginx/Vite 提供，见 docker-compose.yml 的 frontend 服务",
+    }
+
+
+@app.get("/health", tags=["系统"])
+async def health() -> dict:
+    """健康检查：数据库 + 最新交易日 + 数据就绪度。"""
+    db_status = "disconnected"
+    latest_trade_date = None
+    data_ready = False
+    detail: dict = {}
+
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception:
-        db_status = "disconnected"
+            db_status = "connected"
+            latest_trade_date = (await conn.execute(
+                text("SELECT max(trade_date) FROM fact_stock_daily")
+            )).scalar()
+            critical = (await conn.execute(text(
+                "SELECT count(*) FROM meta_data_quality WHERE status = 'ok'"
+            ))).scalar()
+            data_ready = bool(latest_trade_date) and bool(critical)
+            detail = {"fresh_datasets": int(critical or 0)}
+    except Exception as exc:                          # noqa: BLE001
+        detail = {"error": f"{type(exc).__name__}: {exc}"}
 
     return {
         "status": "ok",
         "service": "GFNA",
-        "version": "2.0.0",
+        "version": "5.0.0",
         "database": db_status,
+        "latest_trade_date": str(latest_trade_date) if latest_trade_date else None,
+        "data_ready": data_ready,
+        "detail": detail,
     }
 
 
-# ==================== 定时任务调度 ====================
-_scheduler = None
+# ============================================================
+# 程序入口
+# ============================================================
 
-
-def _start_scheduler():
-    """启动 APScheduler 定时任务"""
-    global _scheduler
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from app.core.config import CRAWL_INTERVAL_MINUTES
-
-        _scheduler = BackgroundScheduler()
-
-        _scheduler.add_job(
-            run_spider,
-            trigger="interval",
-            minutes=CRAWL_INTERVAL_MINUTES,
-            id="crawl_job",
-            name="定时爬取新闻",
-            replace_existing=True,
-        )
-
-        _scheduler.add_job(
-            _scheduled_summary_processing,
-            trigger="interval",
-            minutes=CRAWL_INTERVAL_MINUTES,
-            id="summary_job",
-            name="批量生成AI摘要",
-            replace_existing=True,
-        )
-
-        _scheduler.start()
-        logger.info(f"定时任务已启动 (爬虫间隔: {CRAWL_INTERVAL_MINUTES} 分钟)")
-
-    except ImportError:
-        logger.warning("APScheduler 未安装，定时任务未启用")
-    except Exception as e:
-        logger.error(f"定时任务启动失败: {e}")
-
-
-def _stop_scheduler():
-    """停止调度器"""
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        logger.info("定时任务已停止")
-
-
-def _scheduled_summary_processing():
-    """定时任务: 批量处理未生成摘要的文章"""
-    import asyncio
-    from app.db.session import AsyncSessionLocal
-
-    async def _run():
-        async with AsyncSessionLocal() as db:
-            try:
-                count = await process_unsummarized_articles(db, limit=20)
-                logger.info(f"定时摘要任务完成: {count} 篇")
-            except Exception as e:
-                logger.error(f"定时摘要任务失败: {e}")
-
-    asyncio.run(_run())
-
-
-# ==================== 程序入口 ====================
 if __name__ == "__main__":
     import uvicorn
-    from app.core.config import SERVER_HOST, SERVER_PORT
 
-    logger.info(f"启动开发服务器: http://{SERVER_HOST}:{SERVER_PORT}")
-    uvicorn.run(
-        "app.main:app",
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-        reload=True,
-        log_level="info",
-    )
+    logging.getLogger("uvicorn").setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+    logger.info("开发服务器：http://%s:%s", SERVER_HOST, SERVER_PORT)
+    uvicorn.run("app.main:app", host=SERVER_HOST, port=SERVER_PORT,
+                reload=True, log_level=LOG_LEVEL.lower())

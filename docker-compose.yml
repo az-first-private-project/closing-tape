@@ -1,62 +1,85 @@
 # ============================================================
-# GFNA V2 Docker Compose 编排
-# 服务: PostgreSQL + FastAPI 后端 + React 前端 (Nginx)
-# 启动: docker compose up -d
-# 停止: docker compose down
+# GFNA V5 编排：PostgreSQL + FastAPI + React(Nginx)
+# 启动：docker compose up -d --build
+# 首次初始化：docker compose exec backend python scripts/bootstrap_db.py
+# 采集数据：  docker compose exec backend python scripts/pipeline_cli.py all
 # ============================================================
-version: "3.9"
-
 services:
-  # ==================== PostgreSQL 数据库 ====================
+  # ==================== PostgreSQL ====================
   postgres:
     image: postgres:16-alpine
     container_name: gfna-postgres
     restart: unless-stopped
     environment:
+      TZ: Asia/Shanghai
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gfna_secret}
       POSTGRES_DB: ${POSTGRES_DATABASE:-gfna_db}
+      # 分区表 + 大量时间序列查询，默认参数可适度放大
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      - "5432:5432"
+      # 本机若已装 PostgreSQL 并占用 5432，映射到 5433 可避免 "port is already allocated"
+      # 容器内的 backend 仍通过服务名 postgres:5432 连接，不受影响
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DATABASE:-gfna_db}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   # ==================== FastAPI 后端 ====================
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: gfna-backend
     restart: unless-stopped
     environment:
+      TZ: Asia/Shanghai
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gfna_secret}
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-gfna_db}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      LOG_LEVEL: INFO
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # 数据源：akshare 主、baostock 兜底（本机若东财被墙可设为 baostock）
+      DATA_PRIMARY_PROVIDER: ${DATA_PRIMARY_PROVIDER:-akshare}
+      DATA_FALLBACK_PROVIDER: ${DATA_FALLBACK_PROVIDER:-baostock}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: ${LOG_JSON:-0}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      # 空库首次启动自动灌演示数据（否则打开页面是空看板）。
+      # 想直接用真实数据请置 0，然后执行：
+      #   docker compose exec backend python scripts/pipeline_cli.py all
+      SEED_DEMO_ON_EMPTY: ${SEED_DEMO_ON_EMPTY:-1}
+      # 东财接口按时间窗间歇性重置连接（坏窗口可持续数分钟），
+      # 默认 3 次 × 1.5s 退避总共 ~14s 必然撞死；放宽到 6 次 × 4s 基数，
+      # 配合 max_delay=30s 总耐受 ~100s，可扛过绝大多数坏窗口。
+      FETCH_MAX_RETRIES: ${FETCH_MAX_RETRIES:-6}
+      FETCH_BACKOFF_BASE_SEC: ${FETCH_BACKOFF_BASE_SEC:-4}
+      # 单次采集尝试的超时（秒）。默认 30s：东财坏窗口下第 1 页重试就要 ~34s，
+      # 30s 会把尝试掐死在 EM 阶段，THS 兜底永远轮不到。放宽到 240s。
+      FETCH_TIMEOUT_SEC: ${FETCH_TIMEOUT_SEC:-240}
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
 
-  # ==================== React 前端 (Nginx) ====================
+  # ==================== React 前端 ====================
   frontend:
     build:
-      context: .
-      dockerfile: frontend-v2/Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: gfna-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "5173:80"
     depends_on:
       - backend
 

@@ -12,16 +12,26 @@ build/
 # ==================== 虚拟环境 ====================
 venv/
 env/
+.venv/
 .env
 *.venv
+
+# ==================== 测试 / 缓存 ====================
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # ==================== 环境变量 (包含敏感信息) ====================
 .env
 !.env.example
 
 # ==================== IDE ====================
-.vscode/
 .idea/
+.vscode/
+pyrightconfig.json
 *.swp
 *.swo
 *~
@@ -45,9 +55,10 @@ test-results/
 
 # ==================== Scrapy ====================
 .scrapy/
-*.json
-*.jsonl
-*.csv
+# 爬虫输出的数据文件（配置文件如 package.json 等不受影响）
+scrapy-output/*.json
+scrapy-output/*.jsonl
+scrapy-output/*.csv
 
 # ==================== Node / Vite (前端) ====================
 node_modules/
@@ -60,9 +71,10 @@ dist/
 postgres-data/
 pgdata/
 
+# ==================== 运行时数据 (抓取中间产物/进度/日志) ====================
+/backend/var/
+
 # ==================== 个人文件 (不提交) ====================
 /generate-paper.js
 /gfna-project.txt
 /*.txt
-/package.json
-/package-lock.json

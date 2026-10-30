@@ -1,0 +1,107 @@
+{
+  "a1": {
+    "http": 200,
+    "count": 2,
+    "run_id": "fe089600-631a-463d-9e60-de020695c426",
+    "universe": 42,
+    "data_version": "2026-10-21:b50",
+    "elapsed_ms": 51,
+    "sample": [
+      {
+        "code": "600111",
+        "name": "北方稀土",
+        "score": 33.5027,
+        "composite": 5.56
+      },
+      {
+        "code": "600276",
+        "name": "恒瑞医药",
+        "score": 38.4583,
+        "composite": 4.6
+      }
+    ],
+    "csv_bytes": 469
+  },
+  "a2": {
+    "http": 200,
+    "count": 10,
+    "run_id": "86556881-f6f3-4315-812a-e549d60495d3",
+    "universe": 42,
+    "data_version": "2026-10-21:b50",
+    "elapsed_ms": 51,
+    "sample": [
+      {
+        "code": "688981",
+        "name": "中芯国际",
+        "score": 13151.65,
+        "composite": 4.8
+      },
+      {
+        "code": "600050",
+        "name": "中国联通",
+        "score": 7570.1795,
+        "composite": 6.46
+      },
+      {
+        "code": "600690",
+        "name": "海尔智家",
+        "score": 5836.4646,
+        "composite": 5.32
+      }
+    ],
+    "csv_bytes": 2644
+  },
+  "a3": {
+    "http": 200,
+    "count": 6,
+    "run_id": "0a41af11-c89c-4a43-8d4b-54ed101f9905",
+    "universe": 42,
+    "data_version": "2026-10-21:b50",
+    "elapsed_ms": 40,
+    "sample": [
+      {
+        "code": "601088",
+        "name": "中国神华",
+        "score": 6.9,
+        "composite": 6.9
+      },
+      {
+        "code": "000831",
+        "name": "中国稀土",
+        "score": 6.69,
+        "composite": 6.69
+      },
+      {
+        "code": "601988",
+        "name": "中国银行",
+        "score": 6.49,
+        "composite": 6.49
+      }
+    ],
+    "csv_bytes": 1128
+  },
+  "a4": {
+    "http": 200,
+    "count": 1,
+    "run_id": "a96c67e2-4387-4594-9b83-46e6d35fb1c6",
+    "universe": 42,
+    "data_version": "2026-10-21:b50",
+    "elapsed_ms": 38,
+    "sample": [
+      {
+        "code": "600028",
+        "name": "中国石化",
+        "score": 4.3427,
+        "composite": 4.43
+      }
+    ],
+    "csv_bytes": 264
+  },
+  "backtest_a3": {
+    "http": 409,
+    "bt_id": null,
+    "metrics": null,
+    "curve_points": 0,
+    "trades": 0
+  }
+}

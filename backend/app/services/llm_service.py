@@ -1,210 +1,224 @@
 """
-DeepSeek AI 摘要服务 (llm_service.py)
-------------------------------------
-【核心模块】使用 DeepSeek API 将英文财经新闻总结为中文摘要。
+DeepSeek 服务（V5 重构）
+========================
+三件事：
+  1. `generate_summary`     英文新闻 → 中文摘要（保留 V2 行为）
+  2. `judge_sentiment`      新闻 → 情感分 -1..+1（V5 新增：新闻终于真正进入情绪因子）
+  3. `chat_json` / `chat_text`  通用调用，供 AI 日报使用
 
-技术说明:
-  - 使用 openai 库的兼容模式调用 DeepSeek (因为 DeepSeek API 与 OpenAI 接口兼容)
-  - 包含重试机制: API 调用失败时自动重试，最多 3 次
-  - 包含降级处理: 所有重试都失败时返回空字符串，不阻塞爬虫流程
-
-为什么用 DeepSeek？
-  - 中文效果好: DeepSeek 对中文的理解和生成能力非常优秀
-  - 性价比高: API 价格远低于 GPT-4/Claude
-  - 兼容性强: 完全兼容 OpenAI SDK，切换成本低
-
-环境变量依赖:
-  - DEEPSEEK_API_KEY: DeepSeek API 密钥 (必填)
-  - DEEPSEEK_BASE_URL: API Base URL，默认 https://api.deepseek.com
-  - DEEPSEEK_MODEL: 模型名，默认 deepseek-chat
+V5 修复的坑：
+  - **客户端懒加载**：V2 在模块导入时 `OpenAI(api_key="")` 会直接抛异常，导致没配 Key 时整个后端起不来
+  - **JSON 模式**：日报要求结构化输出，用 `response_format={"type":"json_object"}` 降低解析失败率
+  - **失败降级**：任何 LLM 故障都返回 None/空串，绝不让主链路 500（方案：AI 是增强不是依赖）
 """
+from __future__ import annotations
+
+import json
+import re
 import time
-import logging
-from openai import OpenAI
+from typing import Any
+
 from app.core.config import (
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_BASE_URL,
-    DEEPSEEK_MODEL,
-    LLM_MAX_TOKENS,
-    LLM_TEMPERATURE,
-    LLM_MAX_RETRIES,
+    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_ENABLED,
+    LLM_MAX_RETRIES, LLM_MAX_TOKENS, LLM_TEMPERATURE,
 )
+from app.core.errors import ErrorCode
+from app.core.logging import get_logger
 
-# 配置日志
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-
-# ==================== 初始化 DeepSeek 客户端 ====================
-# 使用 OpenAI SDK 兼容模式连接 DeepSeek
-# 注意：DeepSeek 的 API 和 OpenAI 接口完全兼容，只需要改 base_url
-client = OpenAI(
-    api_key=DEEPSEEK_API_KEY,
-    base_url=DEEPSEEK_BASE_URL,
-)
+_client = None
 
 
-# ==================== 系统提示词 ====================
-# 这个提示词定义了 AI 的角色和行为规范
-SYSTEM_PROMPT = (
-    "你是一位专业的财经新闻编辑，拥有20年金融分析经验。"
-    "你的任务是将英文财经新闻提炼为简洁、客观、专业的中文摘要。"
-    "请遵循以下原则："
-    "1. 提取最重要的3-5个核心观点"
-    "2. 保留关键数字和数据（涨跌幅、金额、指数等）"
-    "3. 用简练的专业语言，避免口语化表达"
-    "4. 保持客观中立，不添加主观评论"
-    "5. 字数限制在200字以内"
-)
+def get_client():
+    """懒加载 OpenAI 兼容客户端。未配置 Key 时返回 None（调用方必须处理）。"""
+    global _client
+    if _client is None:
+        if not DEEPSEEK_API_KEY:
+            return None
+        try:
+            from openai import OpenAI
+            _client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL,
+                             timeout=60.0, max_retries=0)
+        except Exception as exc:                       # noqa: BLE001
+            logger.error("初始化 DeepSeek 客户端失败: %s", exc)
+            return None
+    return _client
 
 
-def _build_user_prompt(text: str) -> str:
-    """
-    构建发送给 DeepSeek 的用户提示词
-
-    参数:
-        text: 需要总结的英文新闻正文
-
-    返回:
-        格式化的用户提示词字符串
-    """
-    return (
-        "请将以下财经新闻总结为中文，限制在200字以内，保持客观专业：\n\n"
-        f"{text}"
-    )
+def available() -> bool:
+    return bool(LLM_ENABLED and DEEPSEEK_API_KEY and get_client() is not None)
 
 
-def generate_summary(
-    text: str,
-    max_retries: int = None,
-) -> str:
-    """
-    调用 DeepSeek API 生成中文摘要 (带重试机制)
+# ============================================================
+# 通用调用
+# ============================================================
 
-    参数:
-        text: 需要总结的新闻正文（英文）
-        max_retries: 最大重试次数，默认使用配置文件中的 LLM_MAX_RETRIES
+def _call(messages: list[dict], *, max_tokens: int, temperature: float,
+          json_mode: bool = False) -> str | None:
+    client = get_client()
+    if client is None:
+        logger.warning("DeepSeek 未配置，跳过调用")
+        return None
 
-    返回:
-        中文摘要字符串 (200字以内)
-        如果所有尝试都失败，返回空字符串 ""
-
-    工作原理:
-        1. 向 DeepSeek 发送 system prompt + user prompt
-        2. 等待 AI 生成中文摘要
-        3. 如果失败，等待一段时间后重试 (指数退避策略)
-        4. 所有尝试都失败后，记录日志并返回空字符串
-
-    调用示例:
-        >>> summary = generate_summary("The S&P 500 rose 2.3% on Friday...")
-        >>> print(summary)
-        "标普500指数周五上涨2.3%，科技股领涨..."
-    """
-    # 使用配置的默认重试次数
-    if max_retries is None:
-        max_retries = LLM_MAX_RETRIES
-
-    # 如果 API Key 未配置，直接返回提示信息
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY.startswith("your-"):
-        logger.warning("DeepSeek API Key 未配置，跳过摘要生成")
-        return "【API Key 未配置，请在 .env 文件中设置 DEEPSEEK_API_KEY】"
-
-    # 如果输入文本为空或太短，不需要总结
-    if not text or len(text.strip()) < 50:
-        logger.info("文本太短，跳过摘要生成")
-        return "内容过短，无需总结"
+    kwargs: dict[str, Any] = {
+        "model": DEEPSEEK_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
 
     last_error = None
-
-    # 重试循环
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
-            logger.info(f"调用 DeepSeek API (第 {attempt}/{max_retries} 次)...")
+            response = client.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content
+            if content and content.strip():
+                return content.strip()
+            logger.warning("DeepSeek 返回空内容（第 %d 次）", attempt)
+        except Exception as exc:                       # noqa: BLE001
+            last_error = exc
+            logger.warning("DeepSeek 调用失败（第 %d/%d 次）: %s",
+                           attempt, LLM_MAX_RETRIES, exc)
+            if attempt < LLM_MAX_RETRIES:
+                time.sleep(2 ** attempt)
+    logger.error("DeepSeek 调用全部失败，最后错误: %s", last_error)
+    return None
 
-            # ========== 核心 API 调用 ==========
-            response = client.chat.completions.create(
-                model=DEEPSEEK_MODEL,          # 模型名称: deepseek-chat
-                messages=[
-                    {
-                        "role": "system",
-                        "content": SYSTEM_PROMPT
-                    },
-                    {
-                        "role": "user",
-                        "content": _build_user_prompt(text)
-                    },
-                ],
-                max_tokens=LLM_MAX_TOKENS,      # 最大输出 token 数
-                temperature=LLM_TEMPERATURE,    # 温度 (0.3 = 偏保守，适合新闻)
-            )
 
-            # 从响应中提取摘要文本
-            summary = response.choices[0].message.content
+def chat_text(prompt: str, *, system: str = "", max_tokens: int = 2000,
+              temperature: float = 0.3) -> str | None:
+    messages = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": prompt})
+    return _call(messages, max_tokens=max_tokens, temperature=temperature)
 
-            # 清理前后空白字符
-            summary = summary.strip() if summary else ""
 
-            if summary:
-                logger.info(f"摘要生成成功，长度: {len(summary)} 字")
-                return summary
-            else:
-                logger.warning("DeepSeek 返回了空摘要，将重试...")
+def chat_json(prompt: str, *, system: str = "", max_tokens: int = 2000,
+              temperature: float = 0.2) -> dict | None:
+    """要求模型输出 JSON 对象并解析。失败返回 None。"""
+    messages = [{"role": "system", "content": system or "你是专业分析师，只输出 JSON。"}]
+    messages.append({"role": "user", "content": prompt})
+    raw = _call(messages, max_tokens=max_tokens, temperature=temperature, json_mode=True)
+    if raw is None:
+        return None
+    return _parse_json(raw)
 
-        except Exception as e:
-            last_error = e
-            logger.error(f"DeepSeek API 调用失败 (第 {attempt} 次): {e}")
 
-            # 如果不是最后一次，等待后重试 (指数退避: 2秒, 4秒, 8秒...)
-            if attempt < max_retries:
-                wait_seconds = 2 ** attempt  # 指数退避
-                logger.info(f"等待 {wait_seconds} 秒后重试...")
-                time.sleep(wait_seconds)
+def _parse_json(raw: str) -> dict | None:
+    text = raw.strip()
+    # 兼容 ```json 包裹
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"```\s*$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            logger.warning("无法解析为 JSON: %s", raw[:200])
+            return None
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            logger.warning("JSON 二次解析失败: %s", raw[:200])
+            return None
+    return data if isinstance(data, dict) else None
 
-    # 所有重试都失败 — 记录错误日志，返回空字符串
-    logger.error(
-        f"DeepSeek API 调用全部 {max_retries} 次尝试均失败。"
-        f"最后错误: {last_error}"
+
+# ============================================================
+# 新闻摘要（保留 V2 能力）
+# ============================================================
+
+SUMMARY_SYSTEM_PROMPT = (
+    "你是一位专业财经新闻编辑，拥有 20 年金融分析经验。"
+    "把英文财经新闻提炼成简洁、客观、专业的中文摘要："
+    "1) 提取最重要的 3–5 个核心观点；2) 保留关键数字（涨跌幅、金额、指数点位）；"
+    "3) 语言简练、不用口语；4) 保持中立、不添加主观判断；5) 200 字以内。"
+)
+
+
+def generate_summary(text: str, max_retries: int | None = None) -> str:
+    """英文新闻 → 200 字中文摘要。失败返回空串（不抛异常）。"""
+    if not text or len(text.strip()) < 50:
+        return ""
+    result = chat_text(
+        f"请将以下财经新闻总结为中文，200 字以内：\n\n{text[:6000]}",
+        system=SUMMARY_SYSTEM_PROMPT,
+        max_tokens=LLM_MAX_TOKENS,
+        temperature=LLM_TEMPERATURE,
     )
-    return ""
+    return result or ""
 
 
-def generate_batch_summaries(
-    articles: list,
-    batch_size: int = 5,
-) -> dict:
-    """
-    批量生成摘要 (给多篇文章依次生成摘要)
-
-    参数:
-        articles: 文章对象列表 (需要有 id 和 content 属性)
-        batch_size: 每批处理的文章数 (控制并发压力)
-
-    返回:
-        dict: {article_id: summary_string} 的映射
-    """
-    results = {}
-    total = len(articles)
-
-    logger.info(f"开始批量生成摘要，共 {total} 篇文章")
-
-    for i, article in enumerate(articles):
-        logger.info(f"处理进度: {i+1}/{total} (文章ID: {article.id})")
-
-        # 只处理有内容的文章
-        if not article.content:
-            logger.info(f"文章 {article.id} 无内容，跳过")
-            results[article.id] = ""
-            continue
-
-        # 调用单篇摘要生成
-        summary = generate_summary(article.content)
-        results[article.id] = summary
-
-        # 批次间短暂休息，避免触发 API 限流
-        if (i + 1) % batch_size == 0 and i + 1 < total:
-            logger.info(f"已处理 {batch_size} 篇，休息 2 秒...")
-            time.sleep(2)
-
-    success_count = sum(1 for s in results.values() if s)
-    logger.info(f"批量摘要完成: {success_count}/{total} 篇生成成功")
-
+def generate_batch_summaries(articles: list, batch_size: int = 5) -> dict:
+    results: dict[int, str] = {}
+    for i, article in enumerate(articles, 1):
+        content = getattr(article, "content", None)
+        results[article.id] = generate_summary(content) if content else ""
+        if i % batch_size == 0:
+            time.sleep(1)
     return results
+
+
+# ============================================================
+# 新闻情感（V5 新增：情绪因子的真实输入）
+# ============================================================
+
+SENTIMENT_SYSTEM_PROMPT = (
+    "你是 A 股量化分析师。判断每条财经新闻对 A 股市场/相关板块的利好利空程度，"
+    "只输出 JSON 对象，字段为 items 数组，每项含 index(整数)、score(-1..1 小数)、label(利好/利空/中性)。"
+)
+
+
+def judge_sentiment_batch(articles: list[dict]) -> list[float | None]:
+    """批量判定新闻情感。
+
+    articles: [{"title": str, "summary": str|None}, ...]
+    返回与输入等长的 -1..1 列表（失败项为 None）。
+    """
+    if not articles:
+        return []
+    if not available():
+        return [None] * len(articles)
+
+    lines = []
+    for i, item in enumerate(articles, 1):
+        summary = (item.get("summary") or "")[:120]
+        lines.append(f"[{i}] {item.get('title', '')}\n    摘要: {summary}")
+
+    prompt = (
+        "请判断下列财经新闻对 A 股整体或相关板块的情感倾向。\n\n"
+        + "\n".join(lines)
+        + "\n\n输出 JSON：{\"items\":[{\"index\":1,\"score\":0.6,\"label\":\"利好\"}]}"
+        "\nscore: -1(严重利空) ~ +1(重大利好)，0 为中性。index 必须与输入编号一致。"
+    )
+    data = chat_json(prompt, system=SENTIMENT_SYSTEM_PROMPT, max_tokens=800,
+                     temperature=0.1)
+    if not data:
+        return [None] * len(articles)
+
+    scores: list[float | None] = [None] * len(articles)
+    for item in data.get("items", []):
+        try:
+            idx = int(item.get("index")) - 1
+            score = float(item.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < len(scores):
+            scores[idx] = max(-1.0, min(1.0, score))
+    return scores
+
+
+def judge_sentiment(title: str, summary: str | None = None) -> float | None:
+    """单条新闻情感。"""
+    result = judge_sentiment_batch([{"title": title, "summary": summary}])
+    return result[0] if result else None
+
+
+__all__ = [
+    "available", "get_client", "chat_text", "chat_json", "generate_summary",
+    "generate_batch_summaries", "judge_sentiment", "judge_sentiment_batch",
+    "ErrorCode",
+]

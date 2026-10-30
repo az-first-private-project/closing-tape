@@ -19,6 +19,7 @@ from app.schemas.article import (
     PaginatedResponse,
     StatsResponse,
 )
+from app.services import news_collector
 from app.services.crawler_service import run_spider, process_unsummarized_articles
 from app.core.security import verify_api_key
 
@@ -312,3 +313,71 @@ async def trigger_summary_processing(
         "message": "AI 摘要处理完成",
         "processed": count,
     }
+
+
+# ==================== 打开网站自动抓取（公开）====================
+
+@router.post("/crawl/auto")
+async def auto_crawl(background_tasks: BackgroundTasks):
+    """前端打开网站时调用：抓取国内四家财经快讯。
+
+    - 已有任务在跑 → ``running``（前端继续轮询状态）；
+    - 10 分钟内已跑过 → ``throttled``（直接展示库里的旧新闻）；
+    - 否则立即返回 ``started``，后台线程池抓取，不阻塞页面。
+    """
+    state = news_collector.snapshot()
+    if state["running"]:
+        return {"status": "running", **state}
+    remaining = news_collector.cooldown_remaining()
+    if remaining > 0:
+        return {"status": "throttled", "retry_after": remaining, **state}
+
+    news_collector.mark_started()
+    background_tasks.add_task(news_collector.run_auto_collect)
+    return {"status": "started", **news_collector.snapshot()}
+
+
+@router.get("/crawl/auto/status")
+async def auto_crawl_status():
+    """自动抓取状态：running / 最近一次结果（前端 4s 轮询直到结束）。"""
+    return news_collector.snapshot()
+
+
+# ==================== 来源列表（V5 新增）====================
+
+@router.get("/sources")
+async def list_sources(db: AsyncSession = Depends(get_db)):
+    """新闻来源列表。
+
+    V5 新增：前端来源筛选项以前是写死的 4 家（FilterTabs.tsx 硬编码），
+    一旦爬虫新增/停用来源就会与后端不一致，改为由本接口提供。
+    """
+    counts = (
+        select(NewsArticle.source_id, func.count().label("cnt"))
+        .group_by(NewsArticle.source_id)
+        .subquery()
+    )
+    rows = await db.execute(
+        select(
+            NewsSource.id,
+            NewsSource.name,
+            NewsSource.country,
+            NewsSource.language,
+            NewsSource.is_active,
+            func.coalesce(counts.c.cnt, 0).label("article_count"),
+        )
+        .outerjoin(counts, counts.c.source_id == NewsSource.id)
+        .order_by(NewsSource.id)
+    )
+    items = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "country": r[2],
+            "language": r[3],
+            "is_active": bool(r[4]),
+            "article_count": int(r[5] or 0),
+        }
+        for r in rows
+    ]
+    return {"items": items, "total": len(items)}

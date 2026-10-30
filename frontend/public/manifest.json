@@ -1,0 +1,21 @@
+{
+  "name": "GFNA - 全球财经新闻聚合器",
+  "short_name": "GFNA",
+  "description": "AI 驱动的财经新闻聚合平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#1a73e8",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

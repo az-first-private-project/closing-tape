@@ -1,0 +1,6 @@
+# 构建上下文排除（frontend 镜像）—— 关键：避免把宿主机的 node_modules/dist 拷进 Linux 构建层
+node_modules/
+dist/
+.vite/
+*.log
+.env.local

@@ -1,24 +1,25 @@
-# ==================== 前端 Dockerfile ====================
-# 多阶段构建: builder (npm build) + runner (nginx)
+# ==================== 前端镜像（V5）====================
+# 变更：
+#   - 构建上下文改为 ./frontend（原 context: . 会把 Windows 版 node_modules 覆盖进 Linux 构建层）
+#   - 用 package-lock.json + npm ci 保证可复现（lock 缺失时回退 npm install）
+# 构建上下文：./frontend
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# 安装依赖
-COPY frontend-v2/package.json ./
-RUN npm install
+# 先只拷依赖清单，最大化利用层缓存
+COPY package.json package-lock.json* ./
+# package.json 与 lock 可能不同步（例如删过依赖），npm ci 会硬失败 → 回退 npm install
+RUN if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
 
-# 构建
-COPY frontend-v2/ .
+COPY . .
 RUN npm run build
+
 
 # ========================= 运行阶段 =========================
 FROM nginx:alpine
 
-# 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# 复制 nginx 配置
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
