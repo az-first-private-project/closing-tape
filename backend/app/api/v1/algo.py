@@ -140,6 +140,31 @@ async def get_algo_ladder(
     return snapshot
 
 
+@router.get("/consensus")
+async def get_algo_consensus(
+    min_count: int = Query(2, ge=2, le=7, description="最少命中策略数（2–7）"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数"),
+    trade_date: Optional[date] = Query(None, description="交易日，默认最新行情日"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """多策略共识榜（V6 T6）。
+
+    只统计当日成功且非回测的 run；同一策略多次参数 run 命中同一票只算一次。
+    不提供跨策略平均分——各策略 score 量纲不同。
+    """
+    from app.engine.consensus import consensus_signals
+    from app.services.freshness import get_freshness_items
+
+    payload = await consensus_signals(
+        db, trade_date, min_count=min_count, limit=limit
+    )
+    freshness = await get_freshness_items(db, ["algo_run"])
+    payload["min_count"] = min_count
+    payload["freshness"] = freshness[0] if freshness else None
+    payload["note"] = "各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
+    return payload
+
+
 # ============================================================
 # 结果
 # ============================================================

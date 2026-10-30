@@ -320,6 +320,43 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
 - 顶层统计字段等于 `horizons[String(horizon)]`，一次请求即可渲染 5/10/20 三列。
 - `spark` 为最近 20 个出信号日的胜率（`win_rate` 0–1，`samples` 当日有效样本数）。
 
+### 5.5 GET `/api/v1/algo/consensus?trade_date=&min_count=2&limit=100`
+
+多策略共识榜（V6 T6）：同一只票被多个策略同时命中时，按命中策略数排序。
+
+- `min_count` 为**最少命中策略数**，只接受 `2–7`，非法返回 422（统一错误体不适用 FastAPI 参数校验）；
+- `limit` 1–500，默认 100；`trade_date` 省略时取 `fact_stock_daily.max(trade_date)`（最新行情日）；
+- 统计口径：当日 `stg_run.status='success'` 且 `is_backtest IS FALSE` 的**全部 run**；同一策略的多次参数 run
+  合并统计，`hit_count = count(DISTINCT algo_code)`。同一策略多次 run 命中同一票只算一次，取**名次最优**
+  那次 run 的 `rank/score/metrics`。只统计当前启用策略（历史 a1/a2 run 不参与）。
+- **不返回跨策略平均分**：各策略 `score` 量纲不同，混算会误导；`score` 是该策略排序指标原始值。
+- `metrics` 只保留每个命中策略的**前 3 个键值**（按键名排序），避免响应膨胀；
+- 所有缺失值保持 `null` / `{}`，不补 0。`pct_chg` 为百分数（`1.637` = +1.637%），`composite_score` 为 0–10；
+- `total_algos_evaluated` = 当日有成功非回测 run 的策略数（含 0 信号的策略），`hit_count` 不会超过它；
+- 失败 run（`status='failed'`）不参与任何计数；`freshness` 对应数据集 `algo_run`。
+
+```json
+{ "trade_date": "2026-10-26", "min_count": 2, "total_algos_evaluated": 7,
+  "items": [{
+    "code": "601838", "name": "成都银行",
+    "industry_l1": "银行", "board": "主板", "ownership": "央企",
+    "hit_count": 2, "best_rank": 3,
+    "pct_chg": 1.637, "composite_score": 7.1,
+    "algos": [
+      { "algo_code": "a4", "algo_name": "高股息 × 低估值", "rank": 3, "score": 7.5684,
+        "metrics": { "close": 18.63, "composite_score": 7.1, "dv_ttm": 7.5684 } },
+      { "algo_code": "a3", "algo_name": "央企 × 综合评分TOP", "rank": 45, "score": 7.1,
+        "metrics": { "close": 18.63, "composite_score": 7.1, "dv_ttm": 7.5684 } }
+    ]
+  }],
+  "freshness": { "dataset": "algo_run", "status": "ok", "...": "契约 0.4" },
+  "note": "各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。" }
+```
+
+- 排序：`hit_count DESC` → `best_rank ASC` → `composite_score DESC NULLS LAST` → `code ASC`。
+- `best_rank` 为各命中策略名次的最小值（`null` 名次不参与）。
+- 单条 SQL 完成；同一策略当日多次 run 的去重与跨策略计数均不产生 N×策略查询。
+
 ## 6. 回测（D4/D5）
 
 ### 6.1 POST `/api/v1/backtest/{algo_code}`

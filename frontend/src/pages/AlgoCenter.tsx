@@ -24,6 +24,7 @@ import AlgoBarChart from '../components/AlgoBarChart'
 import RunMetaPanel from '../components/RunMetaPanel'
 import BacktestPanel from '../components/BacktestPanel'
 import StrategyLadder from '../components/StrategyLadder'
+import ConsensusBoard from '../components/ConsensusBoard'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
 import { fmtInt } from '../lib/format'
 
@@ -308,6 +309,9 @@ export default function AlgoCenter() {
           />
         ))}
       </div>
+
+      {/* ========== 多策略共识榜（默认折叠） ========== */}
+      <ConsensusBoard onOpenAlgo={handleLadderSelect} />
 
       {/* ========== 参数面板 + 结果区 ========== */}
       {selectedAlgo && (

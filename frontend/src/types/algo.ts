@@ -169,3 +169,38 @@ export interface LadderResponse {
   freshness: Freshness | null
   note?: string
 }
+
+/** 单条策略命中（5.5 共识榜） */
+export interface ConsensusAlgoHit {
+  algo_code: string
+  algo_name: string
+  rank: number | null
+  /** 该策略的排序指标原始值，量纲因策略而异，禁止跨策略平均 */
+  score: number | null
+  /** 前 3 个指标键值（后端已裁剪） */
+  metrics: Record<string, AlgoMetricValue>
+}
+
+/** 共识榜单行（5.5） */
+export interface ConsensusItem {
+  code: string
+  name: string
+  industry_l1: string | null
+  board: string | null
+  ownership: string | null
+  hit_count: number
+  best_rank: number | null
+  pct_chg: number | null
+  composite_score: number | null
+  algos: ConsensusAlgoHit[]
+}
+
+/** GET /api/v1/algo/consensus（5.5） */
+export interface ConsensusResponse {
+  trade_date: string
+  min_count: number
+  total_algos_evaluated: number
+  items: ConsensusItem[]
+  freshness: Freshness | null
+  note?: string
+}

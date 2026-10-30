@@ -150,6 +150,31 @@ def test_algo_list(client):
         assert algo["params_schema"]
 
 
+def test_algo_consensus(client):
+    resp = client.get("/api/v1/algo/consensus", params={"min_count": 2, "limit": 100})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trade_date"]
+    assert body["total_algos_evaluated"] >= 0
+    assert body["min_count"] == 2
+    assert body["freshness"]["dataset"] == "algo_run"
+    for item in body["items"]:
+        assert item["hit_count"] >= 2
+        assert item["hit_count"] == len(item["algos"])
+        assert item["hit_count"] <= body["total_algos_evaluated"]
+        assert "avg_score" not in item
+        assert {"code", "name", "industry_l1", "pct_chg", "composite_score"} <= set(item)
+        for hit in item["algos"]:
+            assert {"algo_code", "algo_name", "rank", "score", "metrics"} <= set(hit)
+            assert len(hit["metrics"]) <= 3
+
+
+def test_algo_consensus_min_count_validation(client):
+    assert client.get("/api/v1/algo/consensus", params={"min_count": 1}).status_code == 422
+    assert client.get("/api/v1/algo/consensus", params={"min_count": 8}).status_code == 422
+    assert client.get("/api/v1/algo/consensus", params={"limit": 0}).status_code == 422
+
+
 def test_algo_unknown_returns_error_body(client):
     resp = client.get("/api/v1/algo/zzz")
     assert resp.status_code == 404

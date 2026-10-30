@@ -8,6 +8,7 @@ import type {
   AlgoResult,
   AlgoRunDetail,
   AlgoRunSummary,
+  ConsensusResponse,
   LadderResponse,
 } from '../types/algo'
 
@@ -93,5 +94,19 @@ export function fetchLadder(
 ): Promise<LadderResponse> {
   return request<LadderResponse>('/algo/ladder', {
     query: { window, horizon, trade_date: tradeDate || undefined },
+  })
+}
+
+/**
+ * 多策略共识榜（5.5）
+ * @param minCount 最少命中策略数（后端 2–7）
+ */
+export function fetchConsensus(
+  minCount: number,
+  tradeDate?: string,
+  limit = 100,
+): Promise<ConsensusResponse> {
+  return request<ConsensusResponse>('/algo/consensus', {
+    query: { min_count: minCount, limit, trade_date: tradeDate || undefined },
   })
 }

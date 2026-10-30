@@ -461,3 +461,35 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 
 - 真实库中非回测信号仅 **13 个不同交易日**（最新 2026-10-26），因此窗口内多数策略有效样本 < 30（`low_sample=true`），`b2`/`b3` 当前 20 日样本为 0、`b4` 窗口内无信号：这是真实数据积累不足，不是计算口径问题；随每日 16:30 选股与 17:10 统计会逐步增加。
 - 最新信号 T+1 尚未落地（本地行情截至 2026-10-26）时 `fillable=false` 且计入 `immature`，不会计入胜率；行情补齐后 25 日窗口会自动重算修正。
+
+### 7.7 T6 多策略共识榜（2026-10-30）
+
+**目标**：把同日被多个策略同时选中的个股聚合为一份共识榜，回答"哪些票是多个策略的共同选择"。
+
+**后端**
+
+- 新增 `app/engine/consensus.py`（纯读，无写库）：取最新行情日（或指定 `trade_date`）**当日全部成功且非回测的 run**（`status='success'`、`is_backtest=false`），限定 7 个启用策略；同一 `(algo_code, code)` 保留最佳 rank 的命中；`hit_count = count(distinct algo_code)`，**不做跨策略分数平均**（各策略分数量纲不同）。
+- 单条 SQL 完成 run→signal→dim_stock/fact_stock_daily/fact_stock_score_daily 左联，按 `GROUP BY` 之外的方式在内存中聚合，无 N×策略循环；`dim_stock` 附 `industry_l1/board/ownership`，行情附当日 `pct_chg`，另附 `composite_score` 与每个命中策略的 `metrics` 前 3 个键值。
+- `dim_sector_member` 以 SCD2 `EXISTS` 生成 `in_sector` 标记（`sector_type` 可选），不进入 `WHERE`，因此过滤只影响榜单条目、不影响 `total_algos_evaluated`。
+- 排序：`hit_count` 降序 → 最佳 rank 升序 → `composite_score` 降序（NULL 置后）→ `code`；`limit` 默认 100。无行情数据时抛 `DataUnavailableError`（接口 503）。
+- 新接口 `GET /api/v1/algo/consensus?trade_date=&min_count=&limit=`（契约 5.5）：`min_count` 2–7、`limit` 1–500，越界 422；返回 `items`、`total_algos_evaluated`、`freshness`（`algo_run`）与固定 `note` 提示语。
+
+**前端**
+
+- `AlgoCenter` 在策略卡片下方、`#algo-detail` 上方新增 `ConsensusBoard`，**默认折叠**（折叠时不发请求）；展开后请求 `min_count=2`。
+- 表格列：代码+名称（含板块/央企标注）、命中徽章（实心/空心圆 `●●○○○○○ 2/7`，按命中率给主色深浅，7/7 最深）、行业、当日涨跌、综合评分、命中策略 chips（点击展开各策略 rank/score/metrics 前 3 项，可"选中策略"跳转详情）、自选星标（复用 `frontend/src/lib/watchlist.ts`，localStorage `gfna-watchlist`，上限 100）。
+- `min_count` 滑杆 2–5；固定展示"各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
+
+**验证（2026-10-30，数据截至 2026-10-26）**
+
+- SQL 对账：全量分布 `hit_count=1 → 209 只`、`hit_count=2 → 12 只`，最大命中 2 ≤ 启用策略 7；`min_count=2` 返回 12 行，与手写 SQL 一致。
+- 失效 run 排除：临时将 `b1` 当日 run 置为 `failed`，`total_algos_evaluated` 7→6、`b1` 命中项消失；恢复后回到 7 / 20 条 b1 信号，库内状态已还原。
+- 性能：引擎进程内 10–13 ms；HTTP 冷启 43 ms、稳定 15–17 ms（< 100 ms 要求）。
+- 测试：新增 `test_consensus.py` 14 项纯逻辑单测、`test_api_v5.py` 2 项接口用例；全量 `pytest` **233 passed**（GFNA_TEST_DB=1）。
+- 前端：`npm run build` 通过（index 901.52 kB / gzip 265.91 kB）；浏览器实测默认折叠零请求、展开 12 行、徽章 `●●○○○○○ 2/7`、601838 详情 A4 rank 3 / A3 rank 45 各带 3 项 metrics、滑杆 3 空态、2 恢复、自选增删、选中策略跳转详情；Console 无新增错误，Jobs/Dashboard/个股页无回归。
+
+**已知**
+
+- 当日真实数据只有 `a3/a4/b1/b2/b3/b5` 产生非回测信号（`b4` 0 条），因此 `hit_count` 目前最大为 2；`min_count≥3` 为空是数据积累问题，不是口径错误。
+- 同一策略当日的多个参数 run 都参与命中判定（任务书要求"当日全部成功 run"），若后续同一策略频繁多 run，`hit_count` 只按 `distinct algo_code` 计，不会因多 run 重复计数。
+- 共识榜未接入自选页（T8 才建完整自选面板），当前星标仅落 localStorage。

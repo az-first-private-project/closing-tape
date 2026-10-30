@@ -12,6 +12,7 @@ import {
   fetchAlgoResult,
   fetchAlgoRuns,
   fetchAlgoRunDetail,
+  fetchConsensus,
   fetchLadder,
 } from '../api/algo'
 import type { AlgoParams } from '../types/algo'
@@ -76,6 +77,19 @@ export function useLadder(window: number, horizon: number, tradeDate?: string) {
   return useQuery({
     queryKey: ['algo-ladder', window, horizon, tradeDate ?? ''],
     queryFn: () => fetchLadder(window, horizon, tradeDate),
+    staleTime: 60 * 1000,
+  })
+}
+
+/** 多策略共识榜（默认折叠时不请求；min_count 切换即换 queryKey） */
+export function useConsensus(
+  minCount: number,
+  options: { tradeDate?: string; enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ['algo-consensus', minCount, options.tradeDate ?? ''],
+    queryFn: () => fetchConsensus(minCount, options.tradeDate),
+    enabled: options.enabled ?? true,
     staleTime: 60 * 1000,
   })
 }
