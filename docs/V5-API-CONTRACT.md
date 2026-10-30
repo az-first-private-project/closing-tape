@@ -280,6 +280,46 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 
 `RunSummary`：`{run_id, algo_code, trade_date, created_at, elapsed_ms, universe_count, signal_count, data_version, status, is_backtest}`。
 
+### 5.4 GET `/api/v1/algo/ladder?window=60&horizon=20&trade_date=`
+
+策略天梯：信号级 5/10/20 日前瞻收益（V6 T5）。`window ∈ {20,60,120}`，`horizon ∈ {5,10,20}`，
+超出返回 `INVALID_PARAM`；`trade_date` 省略时取库内最新统计日。
+
+口径：**T 日收盘出信号 → T+1 交易日开盘买入**，买入价 `open × adj_factor`；H 日收益 =
+自 T+1 起第 H 个交易日 `close × adj_factor / 买入价 − 1`；超额对 `sh000300` 同窗口
+（指数不复权，起点 T+1 收盘、终点第 H 日收盘）。**未成熟窗口不计入统计**；
+T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
+
+```json
+{ "trade_date": "2026-10-26", "window": 60, "horizon": 20,
+  "benchmark": "sh000300", "window_start": "2026-07-27",
+  "items": [{
+    "algo_code": "b5", "algo_name": "布林下轨 × KDJ 双确认", "rank": 1,
+    "sample_signals": 5, "sample_stocks": 5,
+    "avg_ret": -0.49, "median_ret": -0.83, "win_rate": 0.2, "avg_excess": 5.35,
+    "best": 6.08, "worst": -4.06,
+    "immature": 9, "unfillable": 0, "no_data": 0, "total_signals": 14,
+    "low_sample": true,
+    "spark": [{ "trade_date": "2026-08-17", "win_rate": 0.2, "samples": 5 }],
+    "horizons": {
+      "5":  { "...": "同顶层统计字段，5 日口径" },
+      "10": { "...": "同顶层统计字段，10 日口径" },
+      "20": { "...": "同顶层统计字段，20 日口径" }
+    }
+  }],
+  "immature_total": 100, "unfillable_total": 0,
+  "freshness": { "dataset": "signal_perf", "status": "ok", "...": "契约 0.4" },
+  "note": "信号级收益……与回测 FIFO 回合胜率不是同一口径" }
+```
+
+- `avg_ret` / `avg_excess` / `best` / `worst` 单位是**百分数**（`3.41` = +3.41%）。
+- `win_rate` 为 0–1 小数，口径是 `ret_H > 0` 的信号占比，**不是回测 FIFO 回合胜率**，UI 必须标注。
+- `sample_signals` = 已成熟且可成交且收益非空的样本数；`immature / unfillable / no_data`
+  与有效样本互斥，`total_signals` 为区间内全部信号。
+- 有效样本 < 30 时 `low_sample=true`，排序仅作参考。
+- 顶层统计字段等于 `horizons[String(horizon)]`，一次请求即可渲染 5/10/20 三列。
+- `spark` 为最近 20 个出信号日的胜率（`win_rate` 0–1，`samples` 当日有效样本数）。
+
 ## 6. 回测（D4/D5）
 
 ### 6.1 POST `/api/v1/backtest/{algo_code}`

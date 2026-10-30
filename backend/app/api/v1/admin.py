@@ -24,7 +24,7 @@ INGEST_TASKS = {
     "calendar", "universe", "snapshot", "backfill", "history_fast",
     "moneyflow_history", "valuation_fast", "rebuild", "sector", "sector_members",
     "sector_fallback", "moneyflow", "valuation", "index", "margin", "features",
-    "scores", "sector_scores", "report", "algos", "all",
+    "scores", "sector_scores", "report", "algos", "signal_perf", "all",
 }
 # 这些任务耗时较长，默认建议后台跑
 HEAVY_TASKS = {

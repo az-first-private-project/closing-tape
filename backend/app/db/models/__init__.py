@@ -14,7 +14,7 @@ from app.db.models.fact import (
 )
 from app.db.models.meta import AlgoMeta, IngestJob, MetaDataQuality, TradeCalendar
 from app.db.models.news import CrawlLog, NewsArticle, NewsSource
-from app.db.models.strategy import BacktestRun, StgRun, StgSignal
+from app.db.models.strategy import BacktestRun, StgRun, StgSignal, StgSignalPerf
 
 __all__ = [
     # 新闻
@@ -28,5 +28,5 @@ __all__ = [
     # 元数据
     "TradeCalendar", "MetaDataQuality", "IngestJob", "AlgoMeta",
     # 策略
-    "StgRun", "StgSignal", "BacktestRun",
+    "StgRun", "StgSignal", "StgSignalPerf", "BacktestRun",
 ]

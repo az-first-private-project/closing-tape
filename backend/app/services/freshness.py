@@ -30,6 +30,7 @@ DATASET_META: dict[str, tuple[str, int, bool]] = {
     "trade_calendar": ("交易日历", 24 * 30, True),
     "news": ("财经新闻", 6, False),
     "algo_run": ("选股任务", 30, False),
+    "signal_perf": ("信号前瞻统计", 30, False),
     "daily_report": ("AI 日报", 30, False),
 }
 

@@ -12,6 +12,7 @@ import {
   fetchAlgoResult,
   fetchAlgoRuns,
   fetchAlgoRunDetail,
+  fetchLadder,
 } from '../api/algo'
 import type { AlgoParams } from '../types/algo'
 
@@ -67,5 +68,14 @@ export function useAlgoRunDetail(runId: string | null) {
     queryFn: () => fetchAlgoRunDetail(runId as string),
     enabled: !!runId,
     staleTime: 5 * 60 * 1000,
+  })
+}
+
+/** 策略天梯（1 分钟缓存；窗口/horizon 切换即换 queryKey） */
+export function useLadder(window: number, horizon: number, tradeDate?: string) {
+  return useQuery({
+    queryKey: ['algo-ladder', window, horizon, tradeDate ?? ''],
+    queryFn: () => fetchLadder(window, horizon, tradeDate),
+    staleTime: 60 * 1000,
   })
 }

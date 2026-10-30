@@ -429,3 +429,35 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 概念板块仍有 88 个无 SCD2 名单（`member_count=0`）、35 个仅有 THS 前后各 5 页的 100 只样本（`member_count=null`）：市值/资金流为 `null`；市值模式剔除并计数，等权模式仍展示，涨跌家数显示「不适用」。
 - 剩余名单受数据源限制未能补齐：THS 在补入 82 个板块后触发 IP 级 403（冷却 600s 仍拦截）；新浪 `gn_/chgn_` 节点返回空；东财连接被重置。WAF 解除后重跑 harness → `import_ths_members.py` → 聚合/指标回填即可继续，断点已记录 377 个已完成板块。
 - 不完整名单的抽屉成分股只展示已抓取的 100 只，未额外标注「名单不完整」；tooltip 的「成分 —」与 3.5 的 `member_count=null` 已可区分。
+
+### 7.6 T5 策略天梯（2026-10-30）
+
+**目标**：每天统计各策略信号 T+1 买入后 5/10/20 日的前瞻收益与胜率，回答"最近哪个策略能用"。
+
+**后端**
+
+- 迁移 `0005_signal_perf`（新 head，`down_revision=0004_sector_member_partial`）新建 `stg_signal_perf`：联合主键 `(algo_code, signal_date, code)`，索引 `(algo_code, signal_date)` 与 `(algo_code, mature_20, signal_date)`；ORM 同步 `StgSignalPerf`。
+- 新增 `app/engine/signal_perf.py`（**不放 strategy 层**，全文件无 `.shift(-`，docstring 标注仅供事后统计）：T 日信号 → T+1 开盘买入，价格 `open × adj_factor`；H 日收益 `close × adj_factor / 买入价 − 1`；超额对 `sh000300` 同窗口（指数不复权）。成熟度以本地行情最后一天 `fact_stock_daily.max(trade_date)` 截断，避免交易日历中的未来日期把在路上信号算成熟；T+1 停牌/一字板或缺 K 线记 `fillable=false`，统计整体排除。
+- 同一 `(algo, signal_date)` 可能有多条参数 run：按 `created_at DESC NULLS LAST, run_id DESC` 取**最近一次成功且 `is_backtest=false`** 的 run 作为唯一来源（无 `run_id` 列时保证幂等的口径）。
+- `recompute_signal_perf(start, end)` 先算后删再插，区间幂等；外部 session 只 flush，事务由管线/API 负责。管线新增 `signal_perf` 步骤（`algos` 之后），每次重算**最近 25 个交易日**；worker 新增 17:10 `signal_perf` cron（advisory lock）；admin 任务白名单与 `TASK_DATASET`/新鲜度 `signal_perf` 数据集同步。
+- 新增 `scripts/backfill_signal_perf.py`：按交易日分段（默认 60 日）、每段提交后写断点并与库内行数对账，支持 `--force/--dry-run/--algos`。
+- 新接口 `GET /api/v1/algo/ladder?window=20|60|120&horizon=5|10|20&trade_date=`（契约 5.4）：返回 5/10/20 三组统计、互斥分桶（`immature/unfillable/no_data`）、`low_sample`、近 20 期胜率 sparkline 与 `signal_perf` 新鲜度；顶层字段等于所选 horizon。
+
+**前端**
+
+- `StrategyLadder` 放在选股中心顶部：排名 / 策略 / 5d·10d·20d（平均超额 + 胜率 + 样本）/ 近 20 期胜率 sparkline（手写内联 SVG）；窗口 20/60/120 与 horizon 同屏切换；低样本行弱化并标注；点击行选中策略并滚动到参数/结果区。
+- 明确显示"数据截至 T 日、未成熟 N 条、不可成交 M 条已剔除"，并注明胜率是信号级 `ret_H > 0` 占比，**与回测 FIFO 回合胜率不同**。
+
+**回填与验证（2026-10-30）**
+
+- 全量回填 `2021-01-01 ~ 2026-10-30`：本地日历 925 个交易日、16 段、**316 行**、0 失败，用时 < 1 秒；`207` 行可成交、`182` 行 `mature_20`。
+- 抽样 SQL 复算：`b1 / 688143 / 信号 2026-08-17` → T+1 `2026-08-18` 开盘 154.0，20 日后 `2026-09-15` 收盘 190.0，`ret_20=23.3766%`；库内/接口一致（差异 0.000023 pp 为 4 位小数存储舍入）。超额手算 29.2121%，差异 -0.000015 pp。
+- 幂等：`backfill_signal_perf.py --force` 重跑后整表校验码（除 `computed_at`）不变（`e072558ed7c2cafd6740b2384ad802ef`）。
+- 未成熟：最新 25 日窗口 134 条信号、`mature_20=0`；`b5` 共 14 条、9 条未成熟，有效样本 5 条，`win_rate=0.2` 未被未成熟样本稀释。
+- 回测隔离：`stg_signal_perf` 中**找不到非回测成功 run 来源**的行 = 0；7 个启用策略的最新非回测信号缺失行 = 0。注意任务书里的 `(algo_code,signal_date,code) in (select … where is_backtest)` 会返回 51：回测 run 与真实信号共享同一批键，该 SQL 只能证明键重叠、不能证明来源；来源校验以上述"无来源行=0"为准（本次回填按构造只读非回测 run）。
+- `pytest` 202 passed / 15 skipped（新增 `test_signal_perf.py` 23 项）；`npm run build` 通过；浏览器实测 7 行、20/60/120 与 5/10/20 切换、行点击选中 B1 并滚动到参数面板，Console 无新增错误。
+
+**已知**
+
+- 真实库中非回测信号仅 **13 个不同交易日**（最新 2026-10-26），因此窗口内多数策略有效样本 < 30（`low_sample=true`），`b2`/`b3` 当前 20 日样本为 0、`b4` 窗口内无信号：这是真实数据积累不足，不是计算口径问题；随每日 16:30 选股与 17:10 统计会逐步增加。
+- 最新信号 T+1 尚未落地（本地行情截至 2026-10-26）时 `fillable=false` 且计入 `immature`，不会计入胜率；行情补齐后 25 日窗口会自动重算修正。

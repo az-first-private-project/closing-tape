@@ -8,6 +8,7 @@ import type {
   AlgoResult,
   AlgoRunDetail,
   AlgoRunSummary,
+  LadderResponse,
 } from '../types/algo'
 
 /** 算法清单（5.1） */
@@ -78,4 +79,19 @@ export function downloadAlgoCsv(
     { ...params, trade_date: tradeDate || undefined },
     `${algoCode}_export.csv`,
   )
+}
+
+/**
+ * 策略天梯（5.4）
+ * @param window 回看交易日数：20/60/120
+ * @param horizon 收益口径：5/10/20
+ */
+export function fetchLadder(
+  window: number,
+  horizon: number,
+  tradeDate?: string,
+): Promise<LadderResponse> {
+  return request<LadderResponse>('/algo/ladder', {
+    query: { window, horizon, trade_date: tradeDate || undefined },
+  })
 }

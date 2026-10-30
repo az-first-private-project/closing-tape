@@ -23,6 +23,7 @@ import AlgoDataTable from '../components/AlgoDataTable'
 import AlgoBarChart from '../components/AlgoBarChart'
 import RunMetaPanel from '../components/RunMetaPanel'
 import BacktestPanel from '../components/BacktestPanel'
+import StrategyLadder from '../components/StrategyLadder'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
 import { fmtInt } from '../lib/format'
 
@@ -104,6 +105,17 @@ export default function AlgoCenter() {
   const handleParamChange = useCallback((key: string, value: number | string) => {
     setParams((previous) => ({ ...previous, [key]: value }))
   }, [])
+
+  /** 天梯行点击：选中策略并滚到下方参数/结果区 */
+  const handleLadderSelect = useCallback(
+    (code: string) => {
+      handleSelect(code)
+      requestAnimationFrame(() => {
+        document.getElementById('algo-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    },
+    [handleSelect],
+  )
 
   const handleReset = useCallback(() => {
     setParams(buildDefaultParams(selectedAlgo))
@@ -279,6 +291,9 @@ export default function AlgoCenter() {
 
       {exportError && <p className="text-xs text-alert">CSV 导出失败：{exportError}</p>}
 
+      {/* ========== 策略天梯（信号级前瞻收益） ========== */}
+      <StrategyLadder onSelectAlgo={handleLadderSelect} selectedCode={selectedCode} />
+
       {/* ========== 算法卡片 ========== */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {algoList.map((algo) => (
@@ -296,7 +311,7 @@ export default function AlgoCenter() {
 
       {/* ========== 参数面板 + 结果区 ========== */}
       {selectedAlgo && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div id="algo-detail" className="grid grid-cols-1 lg:grid-cols-3 gap-6 scroll-mt-20">
           {/* 左：参数面板 */}
           <div className="lg:col-span-1">
             <AlgoParamPanel

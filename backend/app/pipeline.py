@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 DEFAULT_DAILY_STEPS = (
     "calendar", "universe", "index", "sector", "sector_members", "snapshot",
     "moneyflow", "sector_agg", "margin", "features", "scores", "sector_scores",
-    "temperature", "report", "algos",
+    "temperature", "report", "algos", "signal_perf",
 )
 
 # task -> dataset（写新鲜度用）
@@ -55,6 +55,7 @@ TASK_DATASET = {
     "temperature": "market_temperature",
     "report": "daily_report",
     "algos": "algo_run",
+    "signal_perf": "signal_perf",
     "news": "news",
 }
 
@@ -411,6 +412,19 @@ async def _dispatch(
                 results[algo_code] = f"failed: {exc}"
         return {"rows": sum(v for v in results.values() if isinstance(v, int)),
                 "detail": results}
+
+    if task == "signal_perf":
+        # 事后统计：只读 stg_run/stg_signal 与行情，不参与出信号。
+        # 每次重算最近 25 个交易日：覆盖新成熟样本，以及除权后 adj_factor 变化。
+        from app.engine.signal_perf import recent_window_start, recompute_signal_perf
+        from app.strategy.strategies import SPECS
+
+        window_start = await recent_window_start(db, resolved, days=25)
+        if window_start is None:
+            return {"rows": 0, "skipped": True, "reason": "交易日历为空"}
+        return await recompute_signal_perf(
+            window_start, resolved, algos=list(SPECS), db=db
+        )
 
     if task == "all":
         return await run_daily_pipeline(resolved, db)

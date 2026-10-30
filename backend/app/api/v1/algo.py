@@ -2,6 +2,7 @@
 选股 API（方案 E3：选股中心改造）
 ================================
 GET  /api/v1/algo/list                    策略清单（4 张卡片）
+GET  /api/v1/algo/ladder                  策略天梯（信号级 5/10/20 日前瞻收益）
 GET  /api/v1/algo/{code}                  执行/读取策略结果（参数真生效）
 GET  /api/v1/algo/{code}/runs             历史 run
 GET  /api/v1/algo/runs/{run_id}           单次 run 明细
@@ -102,6 +103,41 @@ async def algo_health() -> dict:
         "note": "V5 起选股完全在本地库计算，不再调用 westock-tool CLI",
         "algos": {code: spec.name for code, spec in SPECS.items()},
     }
+
+
+@router.get("/ladder")
+async def get_algo_ladder(
+    window: int = Query(60, description="回看交易日数：20/60/120"),
+    horizon: int = Query(20, description="收益口径：5/10/20"),
+    trade_date: Optional[date] = Query(None, description="截止交易日，默认最新统计日"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """策略天梯：信号级 5/10/20 日前瞻收益与胜率（事后统计）。"""
+    from app.engine.signal_perf import HORIZONS, LADDER_WINDOWS, LadderAlgo, ladder_snapshot
+    from app.services.freshness import get_freshness_items
+
+    if window not in LADDER_WINDOWS:
+        raise InvalidParamError(
+            f"window 只支持 {sorted(LADDER_WINDOWS)}，收到 {window}",
+            detail={"field": "window", "value": window},
+        )
+    if horizon not in HORIZONS:
+        raise InvalidParamError(
+            f"horizon 只支持 {sorted(HORIZONS)}，收到 {horizon}",
+            detail={"field": "horizon", "value": horizon},
+        )
+
+    algos = [LadderAlgo(code, spec.name) for code, spec in SPECS.items()]
+    snapshot = await ladder_snapshot(
+        db, algos, window=window, horizon=horizon, trade_date=trade_date
+    )
+    freshness = await get_freshness_items(db, ["signal_perf"])
+    snapshot["freshness"] = freshness[0] if freshness else None
+    snapshot["note"] = (
+        "信号级收益：T 日收盘出信号、T+1 开盘买入；"
+        "胜率为 ret_H > 0 的占比，与回测 FIFO 回合胜率不是同一口径"
+    )
+    return snapshot
 
 
 # ============================================================

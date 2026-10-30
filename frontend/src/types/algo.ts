@@ -1,6 +1,7 @@
 /**
  * 选股相关类型 —— 严格对齐 docs/V5-API-CONTRACT.md 第 5 节
  */
+import type { Freshness } from './common'
 
 /** 参数值快照（run.params 中可能出现数字/字符串/布尔/null） */
 export type AlgoParamValue = number | string | boolean | null
@@ -116,4 +117,55 @@ export type AlgoRunDetail = AlgoResult
 export interface AlgoExecuteOptions {
   tradeDate?: string
   forceRefresh?: boolean
+}
+
+/** 天梯 sparkline 单点（5.4；win_rate 为 0–1 小数） */
+export interface LadderSparkPoint {
+  trade_date: string
+  win_rate: number | null
+  samples: number
+}
+
+/** 单策略单 horizon 的信号级统计（5.4） */
+export interface LadderHorizonStats {
+  /** 已成熟且可成交的有效信号数 */
+  sample_signals: number
+  sample_stocks: number
+  /** 收益/超额单位为百分数（3.41 表示 +3.41%） */
+  avg_ret: number | null
+  median_ret: number | null
+  /** 0–1 小数；信号级口径，非回测 FIFO 回合胜率 */
+  win_rate: number | null
+  avg_excess: number | null
+  best: number | null
+  worst: number | null
+  immature: number
+  unfillable: number
+  no_data: number
+  total_signals: number
+  low_sample: boolean
+  spark: LadderSparkPoint[]
+}
+
+/** 天梯单行（顶层字段对应所选 horizon） */
+export interface LadderItem extends LadderHorizonStats {
+  algo_code: string
+  algo_name: string
+  rank: number
+  /** key 为 "5"/"10"/"20" */
+  horizons: Record<string, LadderHorizonStats>
+}
+
+/** GET /api/v1/algo/ladder（5.4） */
+export interface LadderResponse {
+  trade_date: string
+  window: number
+  horizon: number
+  benchmark: string
+  window_start: string
+  items: LadderItem[]
+  immature_total: number
+  unfillable_total: number
+  freshness: Freshness | null
+  note?: string
 }
