@@ -274,7 +274,6 @@ export default function DashboardPage() {
   const indices = data.indices ?? []
   const usIndices = data.us_indices ?? []
   const sectors = data.sectors ?? []
-  const heatmapData = data.heatmap_data ?? []
   const topSectors = data.top_sectors ?? []
   const bottomSectors = data.bottom_sectors ?? []
   const freshness = data.freshness ?? []
@@ -420,7 +419,7 @@ export default function DashboardPage() {
 
           {/* ========== 热力图 + 评分榜 ========== */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <SectorHeatmap data={heatmapData} />
+            <SectorHeatmap tradeDate={data.trade_date} />
             <ScoreRanking sectors={sectors} stats={data.stats} />
           </div>
 

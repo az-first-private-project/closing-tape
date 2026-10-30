@@ -24,7 +24,7 @@ from app.core.constants import BENCHMARK_INDEX, INDEX_MAP
 from app.core.errors import DataUnavailableError
 from app.core.logging import get_logger
 from app.db.models import (
-    DailyReport, DimSectorMember, FactSectorDaily, FactStockDaily, MarginTrading,
+    DailyReport, DimSectorMember, DimStock, FactSectorDaily, FactStockDaily, MarginTrading,
     MarketIndex, MarketTemperatureDaily, SectorScore,
 )
 from app.db.session import get_db
@@ -260,7 +260,8 @@ async def get_sector_detail(
     )).scalars().all()
 
     members = (await db.execute(
-        select(DimSectorMember.stock_code, DimSectorMember.sector_name)
+        select(DimSectorMember.stock_code, DimStock.name)
+        .outerjoin(DimStock, DimStock.code == DimSectorMember.stock_code)
         .where(DimSectorMember.sector_code == sector_code)
         .where(DimSectorMember.effective_from <= resolved)
         .where((DimSectorMember.effective_to.is_(None)) |
@@ -271,13 +272,18 @@ async def get_sector_detail(
     member_quotes: list[dict] = []
     if members:
         codes = [m[0] for m in members]
+        name_map = {code: name for code, name in members}
         quotes = (await db.execute(
             select(FactStockDaily.code, FactStockDaily.close, FactStockDaily.pct_chg)
             .where(FactStockDaily.trade_date == resolved, FactStockDaily.code.in_(codes))
         )).all()
         qmap = {q[0]: q for q in quotes}
         member_quotes = [
-            {"code": code, "pct_chg": _f(qmap[code][2]) if code in qmap else None}
+            {
+                "code": code,
+                "name": name_map.get(code),
+                "pct_chg": _f(qmap[code][2]) if code in qmap else None,
+            }
             for code in codes
         ]
 
@@ -472,6 +478,11 @@ async def _query_sectors(db: AsyncSession, trade_date: date,
             "down_count": d.down_count,
             "leading_stock": d.leading_stock,
             "leading_stock_pct": _f(d.leading_stock_pct),
+            "market_cap": _f(d.market_cap),
+            "float_cap": _f(d.float_cap),
+            "main_net_inflow": _f(d.main_net_inflow),
+            "rs_20d": _f(d.rs_20d),
+            "member_count": d.member_count,
             "technical_score": _f(s.technical_score) if s else None,
             "sentiment_score": _f(s.sentiment_score) if s else None,
             "news_score": _f(s.news_score) if s else None,

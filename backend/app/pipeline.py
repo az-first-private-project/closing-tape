@@ -27,8 +27,8 @@ logger = get_logger(__name__)
 
 DEFAULT_DAILY_STEPS = (
     "calendar", "universe", "index", "sector", "sector_members", "snapshot",
-    "moneyflow", "margin", "features", "scores", "sector_scores", "temperature",
-    "report", "algos",
+    "moneyflow", "sector_agg", "margin", "features", "scores", "sector_scores",
+    "temperature", "report", "algos",
 )
 
 # task -> dataset（写新鲜度用）
@@ -47,6 +47,7 @@ TASK_DATASET = {
     "sector_fallback": "sector_daily",
     "moneyflow": "moneyflow",
     "valuation": "valuation",
+    "sector_agg": "sector_metrics",
     "margin": "margin",
     "features": "stock_features",
     "scores": "stock_scores",
@@ -359,6 +360,11 @@ async def _dispatch(
             return await backfill_moneyflow(start=start, end=end, codes=code_list, db=db)
         from app.ingest.service import collect_moneyflow
         return await collect_moneyflow(resolved, db)
+
+    if task == "sector_agg":
+        # 依赖已落地的板块行情、个股市值与资金流；只更新当日已有板块行
+        from app.engine.sector_agg import compute_and_save_sector_metrics
+        return await compute_and_save_sector_metrics(resolved, db=db)
 
     if task == "margin":
         from app.ingest.service import collect_margin

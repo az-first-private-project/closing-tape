@@ -7,8 +7,8 @@
  *  - 色块文字统一用 foreground，保证深/浅主题对比度 ≥ 4.5:1。
  */
 
-/** 色阶饱和点：|涨跌幅| ≥ 8% 视为最热/最冷 */
-export const HEAT_MAX_ABS = 8
+/** 色阶饱和点：|涨跌幅| ≥ 5% 视为最热/最冷（T4 起固定 ±5%） */
+export const HEAT_MAX_ABS = 5
 
 /** 色阶最小/最大混色比例（百分比） */
 const HEAT_MIN_WEIGHT = 8

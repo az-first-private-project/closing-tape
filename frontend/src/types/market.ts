@@ -70,6 +70,16 @@ export interface SectorQuote {
   down_count: number | null
   leading_stock: string | null
   leading_stock_pct: number | null
+  /** 成分股总市值合计（元，T4；缺失为 null） */
+  market_cap: number | null
+  /** 成分股流通市值合计（元，T4） */
+  float_cap: number | null
+  /** 成分股主力净流入合计（元，T4） */
+  main_net_inflow: number | null
+  /** 20 日相对沪深300 超额收益（百分点，T4） */
+  rs_20d: number | null
+  /** 当日 SCD2 名单成分数（T4；0 表示无名单） */
+  member_count: number | null
   /** 0–10 分制；未评分时为 null（不得用 5 兜底） */
   technical_score: number | null
   sentiment_score: number | null
@@ -78,6 +88,15 @@ export interface SectorQuote {
   /** 后端在无评分/无龙头时可能返回 null，前端统一按空数组处理 */
   strength_leaders: LeaderStock[] | null
   sentiment_leaders: LeaderStock[] | null
+}
+
+export type SectorType = 'industry' | 'concept'
+
+/** GET /api/v1/market/sectors 响应（T4） */
+export interface SectorList {
+  trade_date: string | null
+  count: number
+  items: SectorQuote[]
 }
 
 /** 热力图数据项（3.1 heatmap_data） */
@@ -169,7 +188,8 @@ export interface SectorTrendPoint {
 /** 板块成分股（3.2 members） */
 export interface SectorMember {
   code: string
-  name: string
+  /** 3.2 接口部分板块成员只返回 code，前端回退显示代码 */
+  name?: string | null
   pct_chg: number | null
 }
 

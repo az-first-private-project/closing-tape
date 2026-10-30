@@ -386,3 +386,46 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 日报口径：`build_daily_report_input` 的 breadth 与温度计在 10-26 / 09-30 完全一致；06-30 日报 flat=84、温度计 flat=83，差异来自一条 `close IS NULL` 且未标记停牌的行——日报保持旧口径（不剔除），温度计按任务书剔除停牌，属预期差异。
 - `insufficient` 实测：事务内删除 2026-09-30 特征后回滚，`temp_score=null`、`confidence=insufficient`、`above_ma20` 标记不可用并提示覆盖率 0%；前端显示「温度数据不足，暂不给出总分。缺少：站上 MA20」，仪表为「—」，页面无 `NaN`。
 - 60 日曲线连续（`?days=60` 共 60 点，24.3–79.8，无 0 分断点）；`pytest` 179 passed / 15 skipped（新增 `tests/test_temperature.py` 13 项）；`npm run build` 通过（主包 868.95 kB / gzip 255.74 kB，CSS 37.19 kB）。
+
+### 7.5 T4 板块热力图升级为 treemap（2026-10-29）
+
+**目标**：面积 = 市值、颜色 = 涨跌幅的 treemap，叠加资金流与 20 日相对强度，一眼看出主线板块。
+
+**后端**
+
+- 迁移 `0003_sector_metrics` 给 `fact_sector_daily` 增列：`market_cap / float_cap / main_net_inflow NUMERIC(24,2)`、`rs_20d NUMERIC(8,3)`、`member_count INTEGER`；只 `ADD COLUMN`，不动既有列与索引。
+- 新增 `app/engine/sector_agg.py`：一条 CTE SQL 按当日 SCD2 名单（`effective_from <= d AND (effective_to IS NULL OR effective_to > d)`）聚合 `fact_stock_daily.market_cap/float_cap` 与 `fact_moneyflow.main_net_t0`，`member_count < 3` 时三项置 `NULL`；`rs_20d` 取板块与 `sh000300`（表 `market_indices`）各 21 个收盘价，任一侧不足 → `NULL`。
+- 写库用 `UPDATE ... FROM jsonb_to_recordset(...)` 一次提交；空值保持 `NULL`，不写 0。管线新增 `sector_agg` 步骤（`moneyflow` 后、`sector_scores` 前），`TASK_DATASET` 映射 `sector_metrics`；历史回填脚本 `scripts/backfill_sector_metrics.py`（按日分批 + checkpoint，幂等）。
+- `GET /api/v1/market/sectors` items 增列上述 5 个字段，原字段不变（契约 3.5）。
+
+**前端**
+
+- 新增 `lib/treemap.ts`：手写 squarified treemap 纯函数（不引 d3/echarts），过滤 0/负值/非有限值，面积守恒、不重叠；`treemap.test.mjs` 6 项 Node 原生单测（`npm run test:treemap`）。
+- `color.ts` 色阶饱和点由 ±8% 改为 ±5%；`SectorHeatmap.tsx` 重写为 treemap：面积 = `market_cap`（缺失/非正剔除并在角落显示「已剔除 N 个（数据不足）」），等权模式每板块同面积；市值全缺时自动回退等权并提示。
+- 顶部切换 `industry / concept`（走 `sector_type`）与 `市值 / 等权`；默认前 80 大，其余折叠为「其他」（点击或「显示全部」展开）；标题栏展示板块数、市值覆盖、成分合计。
+- 格子标签按面积阈值显示板块名 + 涨跌幅（0 附近归一为 `0.0%`，不出现 `-0.0%`）；hover tooltip 展示 `pct_chg / 主力净流入 / rs_20d / 涨跌家数 / 龙头 / 三面评分`；`up_count/down_count` 同为 `null` 时显示「不适用」，不渲染 0。
+- 点击板块打开内嵌抽屉（`useSectorDetail` → 3.2 接口），不新增路由；抽屉含行情、三面评分、龙头与成分股，Esc/遮罩关闭。
+- 仅容器层 framer-motion 淡入（无逐格 stagger），`useReducedMotion` 下跳过动画。
+
+**回填与验证（2026-10-29）**
+
+- `scripts/backfill_sector_metrics.py --start 2025-10-01 --end 2026-10-26`：254/254 天、115,119 行、0 失败，用时 1.0 分钟；断点 `backend/var/sector_metrics_backfill_progress.json`。
+- SQL 手算 2026-10-26 `THS_融资融券`：`member_count=391`、`market_cap=39,456,931,625,631.39`、`main_net_inflow=18,690,765,741.97`，与库内/接口完全一致；`THS_银行` 的 `rs_20d=10.391`（板块 1369.643→1389.251，基准 4507.393→4103.543）与手算一致。
+- 接口实测 2026-10-26：industry 90 个全部有市值/资金流/rs；concept 375 个中 252 个有市值与资金流、374 个有 rs、88 个无名单、35 个为不完整名单。
+- 浏览器实测：行业 ↔ 概念切换后旧格子不残留（概念模式 sample 均为概念名）；等权 90 个格子面积完全相等（1314.1 px²），面积和/容器面积 = 0.99958（市值模式 0.99978，差异为像素取整）；概念全量 375 格一帧渲染 **9.4 ms**（含 React 提交与首帧），低于 ~100 ms 阈值，N 保持 80。
+- tooltip 对 `参股银行`（同花顺源）显示「涨跌家数 不适用」；抽屉实测打开/关闭正常；亮/暗主题均通过，Console 仅既有 react-router v7 warning。
+- `pytest` 179 passed / 15 skipped；`npm run test:treemap` 6 passed；`npm run build` 通过（主包 884.01 kB / gzip 260.36 kB，CSS 38.70 kB）。
+
+**成分名单补全与详情名称（2026-10-30）**
+
+- 迁移 `0004_sector_member_partial` 给 `dim_sector_member` 增列 `is_partial`；THS `pages > 10` 的名单只含前后各 5 页（概念 100 只 / 行业 200 只），标记后不参与市值、资金流与涨跌家数聚合，只提供龙头与评分。
+- 浏览器 harness 补抓概念板块：新增 82 个板块（52 个完整、30 个不完整），其中 81 个来自本轮抓取、1 个为此前被不完整文件覆盖的完整名单；SCD2 已入库并推进断点，累计 377/465 个板块有名单（342 完整、35 不完整）。
+- 全区间重跑 `backfill_sector_ths.py --phase aggregate --start 2022-09-01 --end 2026-10-26`：板块日线更新 289,832 行，35 个不完整名单板块仅回填龙头（30,074 行）；`backfill_sector_metrics.py --start 2025-10-01 --end 2026-10-26 --force` 254/254 天、115,119 行、0 失败。
+- SQL/接口核对：`THS_煤炭概念` 89 家、市值 3,465,356,066,240.66、主力净流入 1,063,167,591.25、涨跌家数 50/33、龙头林州重机；`THS_锂电池概念`（不完整）市值/资金流/家数均为 `null`，龙头德尔股份 +12.543%、`rs_20d=-3.077`。
+- 3.2 板块详情的 `members` 联表 `dim_stock` 返回 `name`（缺失为 `null`），每板块最多 200 条；抽屉实测 `THS_银行` 42 只、`THS_锂电池概念` 100 只均带名称。
+
+**已知**
+
+- 概念板块仍有 88 个无 SCD2 名单（`member_count=0`）、35 个仅有 THS 前后各 5 页的 100 只样本（`member_count=null`）：市值/资金流为 `null`；市值模式剔除并计数，等权模式仍展示，涨跌家数显示「不适用」。
+- 剩余名单受数据源限制未能补齐：THS 在补入 82 个板块后触发 IP 级 403（冷却 600s 仍拦截）；新浪 `gn_/chgn_` 节点返回空；东财连接被重置。WAF 解除后重跑 harness → `import_ths_members.py` → 聚合/指标回填即可继续，断点已记录 377 个已完成板块。
+- 不完整名单的抽屉成分股只展示已抓取的 100 只，未额外标注「名单不完整」；tooltip 的「成分 —」与 3.5 的 `member_count=null` 已可区分。

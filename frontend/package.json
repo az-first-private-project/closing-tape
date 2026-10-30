@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:treemap": "node --test src/lib/treemap.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.0",

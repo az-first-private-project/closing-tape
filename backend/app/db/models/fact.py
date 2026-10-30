@@ -115,6 +115,23 @@ class FactSectorDaily(Base):
     leading_stock: Mapped[str | None] = mapped_column(String(64))
     leading_stock_pct: Mapped[float | None] = mapped_column(Numeric(8, 3))
 
+    # V6 T4：按当日 SCD2 名单聚合的成分股指标（成分数<3 时市值/资金流置 NULL）
+    market_cap: Mapped[float | None] = mapped_column(
+        Numeric(24, 2), comment="板块成分股总市值合计(元)"
+    )
+    float_cap: Mapped[float | None] = mapped_column(
+        Numeric(24, 2), comment="板块成分股流通市值合计(元)"
+    )
+    main_net_inflow: Mapped[float | None] = mapped_column(
+        Numeric(24, 2), comment="成分股主力净流入合计(元)"
+    )
+    rs_20d: Mapped[float | None] = mapped_column(
+        Numeric(8, 3), comment="20 交易日相对沪深300超额收益(百分点)"
+    )
+    member_count: Mapped[int | None] = mapped_column(
+        Integer, comment="当日 SCD2 名单成分数"
+    )
+
     src: Mapped[str] = mapped_column(String(16), default="akshare")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

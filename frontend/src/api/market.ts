@@ -6,6 +6,8 @@ import type {
   DashboardData,
   MarketTemperature,
   SectorDetail,
+  SectorList,
+  SectorType,
   TemperatureSeries,
 } from '../types/market'
 
@@ -23,6 +25,16 @@ export function fetchDashboard(tradeDate?: string): Promise<DashboardData> {
 export function fetchSectorDetail(sectorCode: string, tradeDate?: string): Promise<SectorDetail> {
   return request<SectorDetail>(`/market/sector/${encodeURIComponent(sectorCode)}`, {
     query: { trade_date: tradeDate ?? undefined },
+  })
+}
+
+/** 板块列表（3.1/T4；含市值、资金流、相对强度，供 treemap 使用） */
+export function fetchSectors(
+  tradeDate?: string,
+  sectorType?: SectorType,
+): Promise<SectorList> {
+  return request<SectorList>('/market/sectors', {
+    query: { trade_date: tradeDate ?? undefined, sector_type: sectorType },
   })
 }
 
