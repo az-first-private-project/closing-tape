@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 from datetime import date
 from decimal import Decimal
@@ -54,6 +55,7 @@ from app.strategy.metrics import compute_metrics  # noqa: E402
 from app.strategy.runner import params_fingerprint  # noqa: E402
 from app.strategy.strategies import (  # noqa: E402
     _assert_data_ready,
+    _score_breakdown,
     _validate_params,
     apply_common_filters,
     rank_signals,
@@ -437,6 +439,67 @@ def test_rank_signals_a3_central_enterprise_and_score() -> None:
     assert result["metrics"].iloc[0]["ownership"] == "央企"
     # score = 综合评分原始值（0–10），不是百分位分
     assert list(result["score"]) == list(result["composite_score"])
+
+
+def test_a3_score_breakdown_uses_persisted_detail() -> None:
+    """A3 拆解直接复用 fact_stock_score_daily.detail，权重/分位不自造。"""
+    record = {
+        "composite_score": 8.15,
+        "value_score": 5.0,
+        "quality_score": 9.29,
+        "momentum_score": 9.36,
+        "volatility_score": 9.75,
+        "liquidity_score": 9.71,
+        "sentiment_score": 5.0,
+        "detail": {
+            "percentile": {
+                "value": 0.5, "quality": 0.9293, "momentum": 0.9362,
+                "volatility": 0.9753, "liquidity": 0.9712, "sentiment": 0.5,
+            },
+            "weights": {
+                "value": 0.20, "quality": 0.15, "momentum": 0.25,
+                "volatility": 0.15, "liquidity": 0.15, "sentiment": 0.10,
+            },
+            "raw": {"pe_ttm": None, "pb": None, "ps_ttm": None, "dv_ttm": 3.9358},
+            "sentiment_source": "neutral",
+        },
+    }
+    breakdown = _score_breakdown(record)
+    assert breakdown is not None
+    assert breakdown["composite"] == pytest.approx(8.15)
+    assert [part["key"] for part in breakdown["parts"]] == [
+        "value", "quality", "momentum", "volatility", "liquidity", "sentiment",
+    ]
+    assert [part["weight"] for part in breakdown["parts"]] == pytest.approx(
+        [0.20, 0.15, 0.25, 0.15, 0.15, 0.10]
+    )
+    weighted = sum(part["score"] * part["weight"] for part in breakdown["parts"])
+    assert weighted == pytest.approx(breakdown["composite"], abs=0.01)
+    assert breakdown["weight_sum"] == pytest.approx(1.0)
+    contributions = [part["contribution"] for part in breakdown["parts"]]
+    assert all(value is not None for value in contributions)
+    assert sum(contributions) == pytest.approx(breakdown["composite"], abs=0.01)
+    assert breakdown["parts"][1]["raw"] == {"pb": None, "dv_ttm": 3.9358}
+    json.dumps(breakdown, ensure_ascii=False, allow_nan=False)
+    assert _score_breakdown({}) is None
+
+    # 分位缺失：中性 5.0 分展示，但不计入权重与贡献；贡献之和仍等于综合分
+    missing = dict(record)
+    missing["detail"] = {
+        **record["detail"],
+        "percentile": {**record["detail"]["percentile"], "sentiment": None},
+    }
+    missing["composite_score"] = 8.5
+    partial = _score_breakdown(missing)
+    assert partial is not None
+    assert partial["weight_sum"] == pytest.approx(0.9)
+    sentiment = partial["parts"][-1]
+    assert sentiment["score"] == pytest.approx(5.0)
+    assert sentiment["contribution"] is None
+    assert sum(
+        part["contribution"] for part in partial["parts"] if part["contribution"] is not None
+    ) == pytest.approx(partial["composite"], abs=0.01)
+    json.dumps(partial, ensure_ascii=False, allow_nan=False)
 
 
 # =====================================================================

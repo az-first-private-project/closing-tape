@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -41,6 +42,7 @@ OP = frozenset(
         "between",
         "in", "not_in",
         "top_pct", "bottom_pct",
+        "notna", "isna",
     }
 )
 
@@ -69,18 +71,32 @@ _EXCLUDE_INDUSTRY = "exclude_industry"
 
 
 @dataclass(frozen=True)
+class FieldRef:
+    """列引用：``field × multiplier``（用于跨列比较，如 close > ema20）。"""
+
+    field: str
+    multiplier: float = 1.0
+
+
+@dataclass(frozen=True)
 class Condition:
     """单条件叶子节点： ``field op value``。
 
     - ``between`` 的 value 形如 ``[low, high]``（闭区间）；
     - ``in`` / ``not_in`` 的 value 为列表；
     - ``top_pct`` / ``bottom_pct`` 的 value 为百分数 (0, 100]；
-    - 其余比较操作符 value 为标量。
+    - 其余比较操作符 value 为标量，或 ``FieldRef``（跨列比较）；
+    - ``notna`` / ``isna`` 不需要 value；
+    - key/label/scope/detail_fields 仅用于逐条解释，不参与求值。
     """
 
     field: str
     op: str
     value: Any = None
+    key: str | None = None
+    label: str | None = None
+    scope: str = "stock"
+    detail_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -89,6 +105,10 @@ class ConditionGroup:
 
     logic: str = "AND"
     children: list["Condition | ConditionGroup"] = field(default_factory=list)
+    key: str | None = None
+    label: str | None = None
+    scope: str = "stock"
+    detail_fields: tuple[str, ...] = ()
 
 
 # =====================================================================
@@ -192,16 +212,31 @@ def _to_bool_quiet(value: Any) -> bool:
     return text in {"1", "true", "t", "yes", "y", "是"}
 
 
-def _get_series(df: pd.DataFrame, condition: Condition) -> pd.Series:
-    """取出条件对应的列；未知字段抛 InvalidParamError。"""
-    field_name = _FIELD_ALIASES.get(str(condition.field).strip(), str(condition.field).strip())
-    if field_name not in df.columns:
+def _series_for_field(df: pd.DataFrame, field_name: str) -> pd.Series:
+    """按列名取 Series；未知字段抛 InvalidParamError。"""
+    name = _FIELD_ALIASES.get(str(field_name).strip(), str(field_name).strip())
+    if name not in df.columns:
         _fail(
-            f"未知字段: {field_name}",
-            field=field_name,
+            f"未知字段: {name}",
+            field=name,
             available=[str(c) for c in list(df.columns)[:80]],
         )
-    return df[field_name]
+    return df[name]
+
+
+def _get_series(df: pd.DataFrame, condition: Condition) -> pd.Series:
+    """取出条件对应的列；未知字段抛 InvalidParamError。"""
+    return _series_for_field(df, condition.field)
+
+
+def _resolve_rhs(df: pd.DataFrame, value: Any, *, op: str) -> float | pd.Series:
+    """把条件右侧解析成标量或数值 Series（FieldRef 时返回 Series）。"""
+    if isinstance(value, FieldRef):
+        series = _to_numeric(
+            _series_for_field(df, value.field), field_name=value.field
+        )
+        return series * float(value.multiplier)
+    return _as_float(_as_scalar(value, op=op), op=op)
 
 
 # =====================================================================
@@ -251,6 +286,10 @@ def _eval_condition(df: pd.DataFrame, cond: Condition) -> pd.Series:
 
     series = _get_series(df, cond)
 
+    if op in {"notna", "isna"}:
+        mask = series.notna() if op == "notna" else series.isna()
+        return mask.fillna(False).astype(bool)
+
     if op == "between":
         bounds = _as_list(cond.value, op=op)
         if len(bounds) != 2:
@@ -261,7 +300,7 @@ def _eval_condition(df: pd.DataFrame, cond: Condition) -> pd.Series:
         return mask.fillna(False).astype(bool)
 
     if op in {"gt", "ge", "lt", "le"}:
-        target = _as_float(_as_scalar(cond.value, op=op), op=op)
+        target = _resolve_rhs(df, cond.value, op=op)
         numeric = _to_numeric(series, field_name=field_name)
         if op == "gt":
             mask = numeric > target
@@ -271,6 +310,12 @@ def _eval_condition(df: pd.DataFrame, cond: Condition) -> pd.Series:
             mask = numeric < target
         else:
             mask = numeric <= target
+        return mask.fillna(False).astype(bool)
+
+    if op in {"eq", "ne"} and isinstance(cond.value, FieldRef):
+        target = _resolve_rhs(df, cond.value, op=op)
+        numeric = _to_numeric(series, field_name=field_name)
+        mask = numeric.eq(target) if op == "eq" else numeric.ne(target)
         return mask.fillna(False).astype(bool)
 
     if op in {"in", "not_in"}:
@@ -310,6 +355,170 @@ def _eval_condition(df: pd.DataFrame, cond: Condition) -> pd.Series:
     return mask.fillna(False).astype(bool)
 
 
+@dataclass
+class ConditionDetail:
+    """单个条件条目的逐行求值结果（供 stg_signal.metrics.triggered 使用）。"""
+
+    key: str
+    label: str
+    scope: str
+    required: bool
+    op: str | None
+    passed: pd.Series
+    actual: pd.Series
+    threshold: Any = None
+    detail_fields: tuple[str, ...] = ()
+    detail_text: str | None = None
+
+
+def _plain(value: Any) -> Any:
+    """转成可 JSON 序列化的原生值。"""
+    if value is None or value is pd.NA:
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating, Decimal)):
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _format_detail_value(value: Any) -> str:
+    plain = _plain(value)
+    if plain is None:
+        return "—"
+    if isinstance(plain, bool):
+        return "是" if plain else "否"
+    if isinstance(plain, float):
+        return f"{plain:.4g}"
+    return str(plain)
+
+
+def _actual_series(df: pd.DataFrame, cond: Condition) -> pd.Series:
+    """条件的实际值列（数值/布尔/原始值），用于逐条解释。"""
+    op = _normalize_op(cond.op)
+    series = _get_series(df, cond)
+    if op in {"gt", "ge", "lt", "le", "between", "top_pct", "bottom_pct"}:
+        return _to_numeric(series, field_name=cond.field)
+    if op in {"eq", "ne"}:
+        if isinstance(cond.value, (bool, np.bool_)):
+            return _to_bool(series)
+        if isinstance(cond.value, FieldRef):
+            return _to_numeric(series, field_name=cond.field)
+        if cond.value is None:
+            return series.isna()
+        return _to_numeric(series, field_name=cond.field)
+    return series
+
+
+def _default_detail_fields(cond: Condition) -> tuple[str, ...]:
+    fields = [str(cond.field)]
+    if isinstance(cond.value, FieldRef):
+        fields.append(str(cond.value.field))
+    return tuple(dict.fromkeys(fields))
+
+
+def explain(df: pd.DataFrame, node: "Condition | ConditionGroup") -> list[ConditionDetail]:
+    """逐条求值并返回解释明细（与 evaluate 使用同一条件树）。"""
+    if not isinstance(df, pd.DataFrame):
+        _fail(f"explain 需要 pandas.DataFrame，收到: {type(df).__name__}")
+
+    if isinstance(node, Condition):
+        children: list[Condition | ConditionGroup] = [node]
+    elif isinstance(node, ConditionGroup):
+        children = list(node.children or [])
+        if not children:
+            _fail("条件组 children 不能为空", logic=node.logic)
+    else:
+        _fail(f"未支持的条件节点类型: {type(node).__name__}")
+
+    details: list[ConditionDetail] = []
+    for position, child in enumerate(children):
+        passed = evaluate(df, child).fillna(False).astype(bool)
+        if isinstance(child, Condition):
+            op = _normalize_op(child.op)
+            actual = _actual_series(df, child)
+            threshold = child.value
+            detail_fields = child.detail_fields or _default_detail_fields(child)
+            auto_key = f"{child.field}:{op}"
+        elif isinstance(child, ConditionGroup):
+            op = None
+            actual = passed
+            threshold = None
+            detail_fields = child.detail_fields or tuple(flatten_fields(child))
+            auto_key = f"group_{position}"
+        else:  # pragma: no cover - evaluate 已保证类型
+            raise TypeError(f"未支持的条件节点类型: {type(child).__name__}")
+
+        details.append(
+            ConditionDetail(
+                key=child.key or auto_key,
+                label=child.label or describe(child),
+                scope=child.scope or "stock",
+                required=True,
+                op=op,
+                passed=passed,
+                actual=actual,
+                threshold=threshold,
+                detail_fields=tuple(detail_fields),
+            )
+        )
+    return details
+
+
+def triggered_row(
+    details: Sequence[ConditionDetail],
+    df: pd.DataFrame,
+    index: Any,
+) -> list[dict[str, Any]]:
+    """把某行的条件明细转成 metrics.triggered 条目（原生类型）。"""
+    items: list[dict[str, Any]] = []
+    for detail in details:
+        passed = bool(detail.passed.loc[index])
+        actual = _plain(detail.actual.loc[index])
+        item: dict[str, Any] = {
+            "key": detail.key,
+            "label": detail.label,
+            "scope": detail.scope,
+            "required": bool(detail.required),
+            "passed": passed,
+            "actual": actual,
+        }
+        if detail.op:
+            item["op"] = detail.op
+        threshold = detail.threshold
+        if isinstance(threshold, FieldRef):
+            series = _to_numeric(
+                _series_for_field(df, threshold.field), field_name=threshold.field
+            )
+            item["threshold"] = _plain(series.loc[index] * float(threshold.multiplier))
+        elif threshold is not None:
+            item["threshold"] = _plain(threshold)
+        detail_fields = [name for name in detail.detail_fields if name in df.columns]
+        detail_parts = [
+            f"{name}={_format_detail_value(df.at[index, name])}" for name in detail_fields
+        ]
+        if detail.detail_text:
+            detail_parts.append(detail.detail_text)
+        if detail_parts:
+            item["detail"] = " ".join(detail_parts)
+        items.append(item)
+    return items
+
+
 def apply(df: pd.DataFrame, node: "Condition | ConditionGroup") -> pd.DataFrame:
     """按条件树过滤 DataFrame（保留原列与 attrs）。"""
     mask = evaluate(df, node)
@@ -335,6 +544,15 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
+def _format_operand(value: Any) -> str:
+    """格式化条件右侧：FieldRef 显示为 ``列 × 倍数``。"""
+    if isinstance(value, FieldRef):
+        if float(value.multiplier) == 1.0:
+            return str(value.field)
+        return f"{value.field} × {value.multiplier:g}"
+    return _format_value(value)
+
+
 def describe(node: "Condition | ConditionGroup") -> str:
     """生成人类可读的条件描述（写入 run 快照 / 前端展示）。"""
     if isinstance(node, ConditionGroup):
@@ -352,6 +570,10 @@ def describe(node: "Condition | ConditionGroup") -> str:
         op = str(node.op or "").strip().lower()
         if field_name == _EXCLUDE_INDUSTRY:
             return f"行业排除 {_format_value(node.value)}"
+        if op == "notna":
+            return f"{field_name} 非空"
+        if op == "isna":
+            return f"{field_name} 为空"
         if op == "between":
             return f"{field_name} ∈ {_format_value(node.value)}"
         if op == "top_pct":
@@ -361,7 +583,7 @@ def describe(node: "Condition | ConditionGroup") -> str:
         if op in {"in", "not_in"}:
             word = "属于" if op == "in" else "不属于"
             return f"{field_name} {word} {_format_value(node.value)}"
-        return f"{field_name} {_OP_SYMBOL.get(op, op)} {_format_value(node.value)}"
+        return f"{field_name} {_OP_SYMBOL.get(op, op)} {_format_operand(node.value)}"
 
     _fail(f"未支持的条件节点类型: {type(node).__name__}")
 
@@ -399,11 +621,24 @@ def from_dict(payload: Any) -> "Condition | ConditionGroup":
             _fail("条件 field 不能为空", payload=payload)
         op = _normalize_op(payload.get("op"))
         value = payload.get("value")
+        if isinstance(value, dict) and "$field" in value:
+            value = FieldRef(
+                field=str(value["$field"]),
+                multiplier=float(value.get("multiplier", 1.0)),
+            )
         if field_name == _EXCLUDE_INDUSTRY:
             if op not in {"in", "not_in"}:
                 _fail(f"{_EXCLUDE_INDUSTRY} 仅支持 in/not_in，收到: {op}", op=op)
             _as_list(value, op=op)
-        return Condition(field=field_name, op=op, value=value)
+        return Condition(
+            field=field_name,
+            op=op,
+            value=value,
+            key=payload.get("key"),
+            label=payload.get("label"),
+            scope=str(payload.get("scope") or "stock"),
+            detail_fields=tuple(payload.get("detail_fields") or ()),
+        )
 
     # 条件组
     logic = payload.get("logic", payload.get("operator", "AND"))
@@ -442,12 +677,33 @@ def from_dict(payload: Any) -> "Condition | ConditionGroup":
 def to_dict(node: "Condition | ConditionGroup") -> dict[str, Any]:
     """条件树 → 可 JSON 序列化的 dict（与 from_dict 互逆，便于存快照）。"""
     if isinstance(node, Condition):
-        return {"field": node.field, "op": node.op, "value": node.value}
+        value = node.value
+        if isinstance(value, FieldRef):
+            value = {"$field": value.field, "multiplier": value.multiplier}
+        payload: dict[str, Any] = {"field": node.field, "op": node.op, "value": value}
+        if node.key:
+            payload["key"] = node.key
+        if node.label:
+            payload["label"] = node.label
+        if node.scope and node.scope != "stock":
+            payload["scope"] = node.scope
+        if node.detail_fields:
+            payload["detail_fields"] = list(node.detail_fields)
+        return payload
     if isinstance(node, ConditionGroup):
-        return {
+        payload = {
             "logic": _normalize_logic(node.logic),
             "children": [to_dict(child) for child in (node.children or [])],
         }
+        if node.key:
+            payload["key"] = node.key
+        if node.label:
+            payload["label"] = node.label
+        if node.scope and node.scope != "stock":
+            payload["scope"] = node.scope
+        if node.detail_fields:
+            payload["detail_fields"] = list(node.detail_fields)
+        return payload
     _fail(f"未支持的条件节点类型: {type(node).__name__}")
 
 
@@ -455,13 +711,18 @@ def flatten_fields(node: "Condition | ConditionGroup") -> list[str]:
     """列出条件树引用到的字段（去重、保序；用于预取列自检）。"""
     seen: list[str] = []
 
+    def _add(name: str) -> None:
+        alias = _FIELD_ALIASES.get(str(name).strip(), str(name).strip())
+        if alias == _EXCLUDE_INDUSTRY:
+            alias = _FIELD_ALIASES["industry_l1"]
+        if alias not in seen:
+            seen.append(alias)
+
     def _walk(item: "Condition | ConditionGroup") -> None:
         if isinstance(item, Condition):
-            name = _FIELD_ALIASES.get(str(item.field).strip(), str(item.field).strip())
-            if name == _EXCLUDE_INDUSTRY:
-                name = _FIELD_ALIASES["industry_l1"]
-            if name not in seen:
-                seen.append(name)
+            _add(item.field)
+            if isinstance(item.value, FieldRef):
+                _add(item.value.field)
             return
         if isinstance(item, ConditionGroup):
             for child in item.children or []:
@@ -476,8 +737,12 @@ def flatten_fields(node: "Condition | ConditionGroup") -> list[str]:
 __all__ = [
     "OP",
     "Condition",
+    "ConditionDetail",
     "ConditionGroup",
+    "FieldRef",
     "evaluate",
+    "explain",
+    "triggered_row",
     "apply",
     "describe",
     "from_dict",

@@ -5,15 +5,25 @@
  * 复用泛型 DataTable：支持排序、行点击跳个股详情、前端 CSV 导出。
  */
 import { useMemo } from 'react'
-import { rowScore, type AlgoStockRow } from '../types/algo'
+import {
+  rowScore,
+  type AlgoMetricScalar,
+  type AlgoParamsSnapshot,
+  type AlgoStockRow,
+} from '../types/algo'
 import { fmtMetricValue } from '../lib/format'
 import DataTable, { type DataTableColumn } from './DataTable'
+import SignalExplanation from './SignalExplanation'
 
 interface Props {
   data: AlgoStockRow[]
   algo?: string
   onRowClick?: (row: AlgoStockRow) => void
   csvFilename?: string
+  /** 策略说明（底部固定行） */
+  fullDesc?: string | null
+  /** run 参数快照（底部固定行） */
+  params?: AlgoParamsSnapshot | null
 }
 
 /** 无综合评分时，「得分」列展示各策略的排序指标 */
@@ -117,10 +127,23 @@ function prettifyMetricKey(key: string): string {
     .join(' ')
 }
 
-/** 固定列 */
-const FIXED_KEYS = new Set(['rank', 'code', 'name', 'composite_score'])
+/** 固定列 + 结构化说明字段（后者不铺成平表列） */
+const FIXED_KEYS = new Set(['rank', 'code', 'name', 'composite_score', 'triggered', 'score_breakdown'])
 
-export default function AlgoDataTable({ data, algo, onRowClick, csvFilename }: Props) {
+/** 有逐条依据 / 评分拆解的策略 */
+function isExplainable(algo?: string): boolean {
+  return algo === 'a3' || /^b[1-5]$/.test(algo ?? '')
+}
+
+export default function AlgoDataTable({
+  data,
+  algo,
+  onRowClick,
+  csvFilename,
+  fullDesc,
+  params,
+}: Props) {
+  const explainable = isExplainable(algo)
   /**
    * 动态指标列：按首次出现顺序取并集。
    * 只有「得分」列本身展示该策略排序指标时才跳过，避免排序依据被隐藏
@@ -181,8 +204,8 @@ export default function AlgoDataTable({ data, algo, onRowClick, csvFilename }: P
       header: METRIC_LABELS[key] ?? prettifyMetricKey(key),
       align: 'right',
       sortable: true,
-      value: (row) => row.metrics?.[key],
-      render: (row) => fmtMetricValue(key, row.metrics?.[key]),
+      value: (row) => row.metrics?.[key] as AlgoMetricScalar | undefined,
+      render: (row) => fmtMetricValue(key, row.metrics?.[key] as AlgoMetricScalar | undefined),
     }))
 
     return [...fixed, ...dynamic]
@@ -198,9 +221,22 @@ export default function AlgoDataTable({ data, algo, onRowClick, csvFilename }: P
       csvFilename={csvFilename}
       emptyText="本次运行没有选股信号"
       maxHeight="520px"
+      renderExpanded={
+        explainable
+          ? (row) => (
+              <SignalExplanation
+                algo={algo}
+                row={row}
+                fullDesc={fullDesc}
+                params={params}
+              />
+            )
+          : undefined
+      }
       footer={
         <span>
           共 {data.length} 条 · 动态指标 {metricKeys.length} 列 · 点击行可查看个股详情
+          {explainable && ' · 点击左侧箭头查看信号依据'}
         </span>
       }
     />

@@ -85,7 +85,9 @@ function HitDetails({
                     <dt className="text-muted-foreground truncate" title={key}>
                       {key}
                     </dt>
-                    <dd className="num text-right shrink-0">{fmtMetricValue(key, value)}</dd>
+                    <dd className="num text-right shrink-0">
+                      {typeof value === 'object' ? '—' : fmtMetricValue(key, value)}
+                    </dd>
                   </div>
                 ))}
               </dl>

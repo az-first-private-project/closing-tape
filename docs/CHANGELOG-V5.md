@@ -493,3 +493,43 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 当日真实数据只有 `a3/a4/b1/b2/b3/b5` 产生非回测信号（`b4` 0 条），因此 `hit_count` 目前最大为 2；`min_count≥3` 为空是数据积累问题，不是口径错误。
 - 同一策略当日的多个参数 run 都参与命中判定（任务书要求"当日全部成功 run"），若后续同一策略频繁多 run，`hit_count` 只按 `distinct algo_code` 计，不会因多 run 重复计数。
 - 共识榜未接入自选页（T8 才建完整自选面板），当前星标仅落 localStorage。
+
+### 7.8 T7 信号逐条解释（2026-10-30）
+
+**目标**：回答"为什么是它"——B1–B5 逐条列出触发条件，A3 展示分项评分贡献，且解释与选股共用同一份条件声明，绝不并行维护。
+
+**后端（单一事实源）**
+
+- `condition.py` 扩展：`FieldRef` 支持跨列比较（`close > ma120 × 1.02` 之类），新增 `notna` / `isna` 算子；`Condition` / `ConditionGroup` 增加 `key/label/scope/detail_fields` 元数据。新增 `explain()` 逐条求值与 `triggered_row()` 逐行输出，值经 `_plain()` 转换（numpy / Decimal / NaN / 日期全部 JSON 安全）。
+- `strategies.py` 新增 `CONDITION_SPECS: dict[str, ConditionGroup]`（B1–B5），条件从重构前的 `strategy_mask()` 逐字搬运；`strategy_mask()` 改为 `_evaluate_strategy()`：由 `CONDITION_SPECS` 生成掩码与逐条明细，再叠加 `b4_ok` / `b5_ok` 市场门槛（`scope="market"`）。A3/A4 保持原有专用口径，不受影响；B5 的 `boll_lower_dev_pct` 仅在求值副本上物化，不改库表。
+- 每个信号在 `stg_signal.metrics` 内写 `triggered`（无新表/新列）：`key/label/scope/required/passed/actual/op?/threshold?/detail?`，条件组（阳线或收涨、趋势支撑）折叠为一条整体布尔值，市场门控单独成项。
+- A3 新增 `metrics.score_breakdown`：直接读 `fact_stock_score_daily.detail` 的 `percentile/weights/raw`，按 `FACTOR_WEIGHTS` 顺序输出 6 个分项，不新增评分计算；同时按 `composite_factor` 的逐行归一口径给出 `weight_sum` 与每项 `contribution = score × weight / weight_sum`，逐项贡献之和与 `composite` 一致（±0.01）；无 detail 的旧 run 返回 `null`。
+- CSV 导出跳过 `triggered` / `score_breakdown` 等结构化字段，避免把 dict/list 的 repr 写进单元格。
+
+**行为等价性（硬门槛）**
+
+- 新增临时脚本 `backend/scripts/compare_mask_refactor.py`，内嵌重构前掩码逐字副本，对最近 20 个交易日（2026-09-21 ~ 2026-10-26）× 7 个策略比较逐行掩码与 Top20 顺序：**140 次对比全部零差异**。逐日信号数示例：b1 122→…→57、b5 112（09-29）/199（10-13）/9（10-26）、b4 全 0（市场门槛未通过），`old/new` 计数与顺序完全一致。
+
+**部署刷新（已执行）**
+
+- 对 2026-10-26 全部 7 个策略执行 `POST /api/v1/algo/{code}/refresh`（默认参数、limit=20）：a3 20 / a4 20 / b1 20 / b2 9 / b3 2 / b4 0 / b5 9。B1 20 行全部带 9 条 `triggered`；再走缓存命中（`from_cache=true`）仍带 9 条，证明 JSONB 已落库。b4 当日沪深300 收盘低于 MA20，按设计 0 信号。
+
+**前端**
+
+- 新增 `components/SignalExplanation.tsx`：B 系列按 `scope` 分组（个股条件 / 市场环境要求），每条 `✓/✗ + label + 实际值 vs 要求`，通过项正常色、未通过项弱化为灰色；`detail` 以等宽小字展示原始字段。旧 run 显示"该 run 为旧版本快照，无逐条依据"，不渲染空列表。
+- A3 面板展示 6 条 0–10 分贡献条（`scorePercent()`），附权重、分位、归一化贡献与原始因子值；标题显示可用权重合计。底部写明"综合分 = 10 × Σ(分位 × 权重) / Σ(当日可用权重)，四舍五入到 2 位；贡献 = 分项得分 × 权重 / Σ(当日可用权重)，逐项贡献之和与综合分一致（±0.01）"。
+- `DataTable` 增加可选行展开（chevron 列、`renderExpanded`、展开行不触发行点击）；`AlgoDataTable` 将 `triggered/score_breakdown` 从动态指标列中排除，并接入展开面板；面板底部固定展示策略 `full_desc` 与"参数快照来自 run.params"（实际列出 run 快照键值）。
+- A3 实测：综合分 8.15，可用权重 100%，六项贡献 1.00 / 1.39 / 2.34 / 1.46 / 1.46 / 0.50，加总 8.15；条形宽度 50% / 92.9% / 93.6% / 97.5% / 97.1% / 50%。
+
+**验证**
+
+- 全量 `pytest`（`GFNA_TEST_DB=1`）**241 passed**；新增 `test_condition_dsl.py` 7 项与 A3 拆解 1 项。
+- `npm run build` 通过：index 907.90 kB / gzip 268.04 kB，CSS 42.65 kB。
+- 浏览器（数据截至 2026-10-26）：B1 展开 9 条 = `CONDITION_SPECS["b1"].children`；B5 展开 10 条（9 个股 + 1 市场环境），分组标题正确；选择旧 run `32dabfe8…` 展开显示降级提示；亮/暗主题切换正常；Dashboard/Jobs 无 NaN/undefined，Console 仅既有 react-router v7 warning。
+- API 契约 5.2 已补充 `triggered`、`score_breakdown`、旧 run 兼容与部署刷新说明。
+
+**已知**
+
+- 缓存键不含代码版本，重构前的历史 run 不会自动补 `triggered`；需按上述部署步骤手动 refresh 最新交易日。更早历史 run 只能显示降级提示。
+- b4 当前因市场门槛无真实信号，市场条件分组用 b5 验证；门槛由单元测试覆盖（`test_b4_market_scope_and_gate`）。
+- A3 某因子全市场无分位时不计入 `weight_sum`、`contribution` 为 `null`，但分项条仍显示中性 5.0 分；面板已写明该口径，逐项贡献之和仍与综合分一致。`raw` 为空的因子显示"因子输入缺失"。

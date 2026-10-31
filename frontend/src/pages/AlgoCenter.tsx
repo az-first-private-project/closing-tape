@@ -360,6 +360,10 @@ export default function AlgoCenter() {
                 <AlgoDataTable
                   data={result.data ?? []}
                   algo={result.algo}
+                  fullDesc={
+                    selectedAlgo?.algo_code === result.algo ? selectedAlgo.full_desc : undefined
+                  }
+                  params={result.run?.params}
                   onRowClick={(row) => navigate(`/stocks/${row.code}`)}
                   csvFilename={`${result.algo}_${result.trade_date}_signals.csv`}
                 />

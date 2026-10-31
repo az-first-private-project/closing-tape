@@ -72,6 +72,8 @@ from app.db.models.fact import (
     MarketIndex,
 )
 from app.db.models.meta import TradeCalendar
+from app.engine.stock_score import FACTOR_WEIGHTS
+from app.strategy import condition as cond_dsl
 
 logger = logging.getLogger(__name__)
 
@@ -493,6 +495,7 @@ _FEATURE_COLUMNS = (
 _SCORE_COLUMNS = (
     "value_score", "quality_score", "momentum_score",
     "volatility_score", "liquidity_score", "sentiment_score", "composite_score",
+    "detail",
 )
 _FLOW_COLUMNS = (
     "main_net_t0", "main_net_t1", "main_net_t2", "main_net_t3", "main_net_t4",
@@ -870,141 +873,300 @@ def _numeric_column(df: pd.DataFrame, column: str) -> pd.Series:
     return _to_float_series(df[column])
 
 
-def _bool_column(df: pd.DataFrame, column: str) -> pd.Series:
-    """取布尔列；缺列时返回全 False。"""
-    if column not in df.columns:
-        return pd.Series(False, index=df.index, dtype=bool)
-    return _to_bool_series(df[column])
-
-
 def _market_flag(df: pd.DataFrame, key: str) -> bool:
     """读取市场状态门槛；无 attrs（单测/回测）或指数缺失时放行。"""
     market = df.attrs.get("market") or {}
     return bool(market.get(key, True))
 
 
-def strategy_mask(algo_code: str, df: pd.DataFrame, params: dict) -> pd.Series:
-    """返回策略条件命中的布尔 Series（口径见模块 docstring）。"""
+# =====================================================================
+# B1–B5 条件声明（掩码与逐条解释的唯一事实源）
+# =====================================================================
+
+def _cond(
+    field_name: str,
+    op: str,
+    value: Any = None,
+    *,
+    key: str,
+    label: str,
+    detail_fields: Sequence[str] = (),
+) -> cond_dsl.Condition:
+    """构造带解释元数据的叶子条件。"""
+    return cond_dsl.Condition(
+        field=field_name,
+        op=op,
+        value=value,
+        key=key,
+        label=label,
+        detail_fields=tuple(detail_fields),
+    )
+
+
+def _build_condition_specs(algo_code: str, params: dict) -> cond_dsl.ConditionGroup:
+    """按参数构造 B 系列条件树（语义逐字对照旧 strategy_mask）。"""
+    p = dict(params)
+    if algo_code == "b1":
+        ratio = float(p["min_vol_ratio"])
+        min_amount = float(p["min_amount"])
+        children = [
+            _cond("ema_cross_3d", "eq", True, key="ema_cross_3d",
+                  label="EMA5 近 3 日上穿 EMA20", detail_fields=("ema5", "ema20")),
+            _cond("close", "gt", cond_dsl.FieldRef("ema20"), key="close_above_ema20",
+                  label="收盘站上 EMA20", detail_fields=("close", "ema20")),
+            _cond("ema20_up", "eq", True, key="ema20_up",
+                  label="EMA20 向上", detail_fields=("ema20",)),
+            _cond("roc10", "gt", 0, key="roc10_positive",
+                  label="10 日动量 ROC10 > 0", detail_fields=("roc10",)),
+            _cond("vol_ma5", "notna", key="vol_ma5_ready",
+                  label="5 日均量可用", detail_fields=("vol_ma5",)),
+            _cond("volume", "ge", cond_dsl.FieldRef("vol_ma5", ratio), key="volume_expansion",
+                  label=f"成交量 ≥ 5 日均量 × {ratio:g}（放量）",
+                  detail_fields=("volume", "vol_ma5")),
+            _cond("close", "gt", cond_dsl.FieldRef("ma60"), key="close_above_ma60",
+                  label="收盘站上 MA60", detail_fields=("close", "ma60")),
+            _cond("amount_ma20", "notna", key="amount_ma20_ready",
+                  label="20 日均成交额可用", detail_fields=("amount_ma20",)),
+            _cond("amount_ma20", "ge", min_amount, key="min_amount",
+                  label=f"20 日均成交额 ≥ {min_amount / 1e8:g} 亿元",
+                  detail_fields=("amount_ma20",)),
+        ]
+    elif algo_code == "b2":
+        rsi_max = float(p["rsi_max"])
+        trend_dev = float(p["trend_dev"])
+        amp_min = float(p["amp_min"])
+        min_amount = float(p["min_amount"])
+        children = [
+            _cond("rsi6", "lt", rsi_max, key="rsi6_oversold",
+                  label=f"RSI6 < {rsi_max:g}", detail_fields=("rsi6",)),
+            cond_dsl.ConditionGroup(
+                logic="OR", key="bullish_bar", label="当日收阳或收盘不低于昨收",
+                detail_fields=("open", "close", "pre_close"),
+                children=[
+                    _cond("close", "gt", cond_dsl.FieldRef("open"), key="close_above_open",
+                          label="收盘 > 开盘（收阳）", detail_fields=("open", "close")),
+                    _cond("close", "ge", cond_dsl.FieldRef("pre_close"), key="close_above_pre_close",
+                          label="收盘 ≥ 昨收", detail_fields=("close", "pre_close")),
+                ],
+            ),
+            _cond("ma120", "notna", key="ma120_ready",
+                  label="MA120 可用", detail_fields=("ma120",)),
+            _cond("close", "gt", cond_dsl.FieldRef("ma120", trend_dev), key="above_trend",
+                  label=f"收盘 > MA120 × {trend_dev:g}", detail_fields=("close", "ma120")),
+            _cond("amp60", "notna", key="amp60_ready",
+                  label="60 日振幅可用", detail_fields=("amp60",)),
+            _cond("amp60", "gt", amp_min, key="amp60_enough",
+                  label=f"60 日振幅 > {amp_min:g}%", detail_fields=("amp60",)),
+            _cond("amount_ma20", "notna", key="amount_ma20_ready",
+                  label="20 日均成交额可用", detail_fields=("amount_ma20",)),
+            _cond("amount_ma20", "ge", min_amount, key="min_amount",
+                  label=f"20 日均成交额 ≥ {min_amount / 1e8:g} 亿元",
+                  detail_fields=("amount_ma20",)),
+        ]
+    elif algo_code == "b3":
+        j_max = float(p["j_max"])
+        k_max = float(p["k_max"])
+        min_amount = float(p["min_amount"])
+        children = [
+            _cond("kdj_j_min2", "lt", j_max, key="kdj_j_low",
+                  label=f"今日或昨日 J < {j_max:g}", detail_fields=("kdj_j", "kdj_j_min2")),
+            _cond("kdj_golden_cross", "eq", True, key="kdj_golden_cross",
+                  label="K 上穿 D（KDJ 金叉）", detail_fields=("kdj_k", "kdj_d")),
+            _cond("kdj_k", "lt", k_max, key="kdj_k_low",
+                  label=f"K < {k_max:g}", detail_fields=("kdj_k",)),
+            _cond("ema60", "notna", key="ema60_ready",
+                  label="EMA60 可用", detail_fields=("ema60",)),
+            _cond("close", "gt", cond_dsl.FieldRef("ema60"), key="close_above_ema60",
+                  label="收盘 > EMA60", detail_fields=("close", "ema60")),
+            _cond("close", "ge", cond_dsl.FieldRef("pre_close"), key="close_above_pre_close",
+                  label="收盘 ≥ 昨收", detail_fields=("close", "pre_close")),
+            _cond("amount_ma20", "notna", key="amount_ma20_ready",
+                  label="20 日均成交额可用", detail_fields=("amount_ma20",)),
+            _cond("amount_ma20", "ge", min_amount, key="min_amount",
+                  label=f"20 日均成交额 ≥ {min_amount / 1e8:g} 亿元",
+                  detail_fields=("amount_ma20",)),
+        ]
+    elif algo_code == "b4":
+        squeeze_pct = float(p["squeeze_pct"])
+        vol_mult = float(p["vol_mult"])
+        range_max = float(p["range_max"])
+        min_amount = float(p["min_amount"])
+        children = [
+            _cond("boll_width_pct60", "notna", key="band_pct_ready",
+                  label="布林带宽 60 日分位可用", detail_fields=("boll_width_pct60",)),
+            _cond("boll_width_pct60", "le", squeeze_pct, key="band_squeezed",
+                  label=f"带宽分位 ≤ {squeeze_pct:g}%", detail_fields=("boll_width_pct60",)),
+            _cond("close", "gt", cond_dsl.FieldRef("boll_upper"), key="close_above_upper",
+                  label="收盘突破布林上轨", detail_fields=("close", "boll_upper")),
+            _cond("close", "gt", cond_dsl.FieldRef("high20_close"), key="new_high20",
+                  label="收盘创 20 日新高", detail_fields=("close", "high20_close")),
+            _cond("vol_ma5", "notna", key="vol_ma5_ready",
+                  label="5 日均量可用", detail_fields=("vol_ma5",)),
+            _cond("volume", "ge", cond_dsl.FieldRef("vol_ma5", vol_mult), key="volume_expansion",
+                  label=f"成交量 ≥ 5 日均量 × {vol_mult:g}",
+                  detail_fields=("volume", "vol_ma5")),
+            _cond("range20_pct", "notna", key="range20_ready",
+                  label="20 日区间宽度可用", detail_fields=("range20_pct",)),
+            _cond("range20_pct", "lt", range_max, key="range20_narrow",
+                  label=f"20 日区间宽度 < {range_max:g}%", detail_fields=("range20_pct",)),
+            _cond("amount_ma20", "notna", key="amount_ma20_ready",
+                  label="20 日均成交额可用", detail_fields=("amount_ma20",)),
+            _cond("amount_ma20", "ge", min_amount, key="min_amount",
+                  label=f"20 日均成交额 ≥ {min_amount / 1e8:g} 亿元",
+                  detail_fields=("amount_ma20",)),
+        ]
+    elif algo_code == "b5":
+        j_max = float(p["j_max"])
+        dev_max = float(p["dev_max"])
+        min_amount = float(p["min_amount"])
+        children = [
+            _cond("boll_lower", "notna", key="boll_lower_ready",
+                  label="布林下轨可用", detail_fields=("boll_lower",)),
+            _cond("low", "le", cond_dsl.FieldRef("boll_lower"), key="low_touch_lower",
+                  label="最低价触及布林下轨", detail_fields=("low", "boll_lower")),
+            _cond("kdj_j_min2", "lt", j_max, key="kdj_j_low",
+                  label=f"今日或昨日 J < {j_max:g}", detail_fields=("kdj_j", "kdj_j_min2")),
+            _cond("vol_ma5", "notna", key="vol_ma5_ready",
+                  label="5 日均量可用", detail_fields=("vol_ma5",)),
+            _cond("volume", "lt", cond_dsl.FieldRef("vol_ma5"), key="volume_shrink",
+                  label="缩量（成交量 < 5 日均量）", detail_fields=("volume", "vol_ma5")),
+            cond_dsl.ConditionGroup(
+                logic="OR", key="bullish_bar", label="当日收阳或收盘不低于昨收",
+                detail_fields=("open", "close", "pre_close"),
+                children=[
+                    _cond("close", "gt", cond_dsl.FieldRef("open"), key="close_above_open",
+                          label="收盘 > 开盘（收阳）", detail_fields=("open", "close")),
+                    _cond("close", "ge", cond_dsl.FieldRef("pre_close"), key="close_above_pre_close",
+                          label="收盘 ≥ 昨收", detail_fields=("close", "pre_close")),
+                ],
+            ),
+            cond_dsl.ConditionGroup(
+                logic="OR", key="trend_support",
+                label=f"收盘 > MA120，或低于布林下轨 ≤ {dev_max:g}%",
+                detail_fields=("close", "ma120", "boll_lower", "boll_lower_dev_pct"),
+                children=[
+                    _cond("close", "gt", cond_dsl.FieldRef("ma120"), key="close_above_ma120",
+                          label="收盘 > MA120", detail_fields=("close", "ma120")),
+                    _cond("boll_lower_dev_pct", "le", dev_max, key="lower_deviation",
+                          label=f"低于布林下轨 ≤ {dev_max:g}%",
+                          detail_fields=("boll_lower", "close", "boll_lower_dev_pct")),
+                ],
+            ),
+            _cond("amount_ma20", "notna", key="amount_ma20_ready",
+                  label="20 日均成交额可用", detail_fields=("amount_ma20",)),
+            _cond("amount_ma20", "ge", min_amount, key="min_amount",
+                  label=f"20 日均成交额 ≥ {min_amount / 1e8:g} 亿元",
+                  detail_fields=("amount_ma20",)),
+        ]
+    else:  # pragma: no cover - 调用方只传 B 系列
+        raise UnknownAlgoError(f"未知策略: {algo_code}")
+    return cond_dsl.ConditionGroup(logic="AND", children=children)
+
+
+#: 默认参数下的条件树（前端/验收可据此核对条目数；运行时按实际参数重建）
+CONDITION_SPECS: dict[str, cond_dsl.ConditionGroup] = {
+    code: _build_condition_specs(code, dict(SPECS[code].defaults))
+    for code in ("b1", "b2", "b3", "b4", "b5")
+}
+
+
+def _market_condition_detail(df: pd.DataFrame, algo_code: str) -> cond_dsl.ConditionDetail:
+    """B4/B5 的市场环境要求（scope=market，单独展示）。"""
+    market = df.attrs.get("market") or {}
+    if algo_code == "b4":
+        flag = _market_flag(df, "b4_ok")
+        key, label = "b4_market", "沪深300 收盘 ≥ MA20 × 0.995"
+        detail_text = (
+            "指数数据缺失，按放行处理"
+            if market.get("available") is False
+            else f"沪深300 close={market.get('close')} ma20={market.get('ma20')}"
+        )
+    else:
+        flag = _market_flag(df, "b5_ok")
+        key, label = "b5_market", "沪深300 当日跌幅 > -2%"
+        detail_text = (
+            "指数数据缺失，按放行处理"
+            if market.get("available") is False
+            else f"沪深300 pct_chg={market.get('pct_chg')}"
+        )
+    passed = pd.Series(bool(flag), index=df.index, dtype=bool)
+    return cond_dsl.ConditionDetail(
+        key=key,
+        label=label,
+        scope="market",
+        required=True,
+        op=None,
+        passed=passed,
+        actual=passed,
+        detail_text=detail_text,
+    )
+
+
+@dataclass
+class StrategyEvaluation:
+    """一次策略求值：整体掩码 + 逐条明细 + 实际求值用的 frame。"""
+
+    mask: pd.Series
+    details: list[cond_dsl.ConditionDetail]
+    frame: pd.DataFrame
+
+
+def _evaluate_strategy(
+    algo_code: str, df: pd.DataFrame, params: dict
+) -> StrategyEvaluation:
+    """策略求值（DI 条件树 + 市场门槛 + A3/A4 专用口径）。"""
     spec = get_spec(algo_code)
     code = spec.code
-    params = _validate_params(code, params)
+    normalized = _validate_params(code, params)
+    frame = df
+
+    if code in CONDITION_SPECS:
+        if code == "b5" and "boll_lower_dev_pct" not in frame.columns:
+            frame = df.copy()
+            lower = _numeric_column(frame, "boll_lower")
+            close = _numeric_column(frame, "close")
+            frame["boll_lower_dev_pct"] = (lower - close) / lower.where(lower > 0) * 100.0
+        group = _build_condition_specs(code, normalized)
+        mask = cond_dsl.evaluate(frame, group)
+        details = cond_dsl.explain(frame, group)
+        if code in {"b4", "b5"}:
+            details.append(_market_condition_detail(frame, code))
+            if not _market_flag(frame, f"{code}_ok"):
+                logger.info(
+                    "%s 市场状态门槛未通过，本次不产生信号", code.upper()
+                )
+                mask &= False
+        return StrategyEvaluation(
+            mask=mask.fillna(False).astype(bool), details=details, frame=frame
+        )
 
     if code == "a3":
-        composite = _numeric_column(df, "composite_score")
-        if "ownership" in df.columns:
-            ownership = df["ownership"].astype("object")
+        composite = _numeric_column(frame, "composite_score")
+        if "ownership" in frame.columns:
+            ownership = frame["ownership"].astype("object")
             central = ownership.eq("央企").fillna(False)
         else:
-            central = pd.Series(False, index=df.index, dtype=bool)
-        mask = central & composite.notna() & (composite >= float(params["min_score"]))
+            central = pd.Series(False, index=frame.index, dtype=bool)
+        mask = central & composite.notna() & (composite >= float(normalized["min_score"]))
     elif code == "a4":
-        pe = _numeric_column(df, "pe_ttm")
-        dividend = _numeric_column(df, "dv_ttm")
+        pe = _numeric_column(frame, "pe_ttm")
+        dividend = _numeric_column(frame, "dv_ttm")
         mask = (
             (pe > 0)
-            & (pe < float(params["pe_max"]))
+            & (pe < float(normalized["pe_max"]))
             & dividend.notna()
-            & (dividend >= float(params["div_min"]))
+            & (dividend >= float(normalized["div_min"]))
         )
-    elif code == "b1":
-        close = _numeric_column(df, "close")
-        volume = _numeric_column(df, "volume")
-        vol_ma5 = _numeric_column(df, "vol_ma5")
-        ma60 = _numeric_column(df, "ma60")
-        amount_ma20 = _numeric_column(df, "amount_ma20")
-        mask = (
-            _bool_column(df, "ema_cross_3d")
-            & (close > _numeric_column(df, "ema20"))
-            & _bool_column(df, "ema20_up")
-            & (_numeric_column(df, "roc10") > 0)
-            & vol_ma5.notna()
-            & (volume >= vol_ma5 * float(params["min_vol_ratio"]))
-            & (close > ma60)
-            & amount_ma20.notna()
-            & (amount_ma20 >= float(params["min_amount"]))
-        )
-    elif code == "b2":
-        close = _numeric_column(df, "close")
-        open_price = _numeric_column(df, "open")
-        pre_close = _numeric_column(df, "pre_close")
-        ma120 = _numeric_column(df, "ma120")
-        amplitude = _numeric_column(df, "amp60")
-        amount_ma20 = _numeric_column(df, "amount_ma20")
-        mask = (
-            (_numeric_column(df, "rsi6") < float(params["rsi_max"]))
-            & ((close > open_price) | (close >= pre_close))
-            & ma120.notna()
-            & (close > ma120 * float(params["trend_dev"]))
-            & amplitude.notna()
-            & (amplitude > float(params["amp_min"]))
-            & amount_ma20.notna()
-            & (amount_ma20 >= float(params["min_amount"]))
-        )
-    elif code == "b3":
-        close = _numeric_column(df, "close")
-        pre_close = _numeric_column(df, "pre_close")
-        ema60 = _numeric_column(df, "ema60")
-        amount_ma20 = _numeric_column(df, "amount_ma20")
-        mask = (
-            (_numeric_column(df, "kdj_j_min2") < float(params["j_max"]))
-            & _bool_column(df, "kdj_golden_cross")
-            & (_numeric_column(df, "kdj_k") < float(params["k_max"]))
-            & ema60.notna()
-            & (close > ema60)
-            & (close >= pre_close)
-            & amount_ma20.notna()
-            & (amount_ma20 >= float(params["min_amount"]))
-        )
-    elif code == "b4":
-        close = _numeric_column(df, "close")
-        volume = _numeric_column(df, "volume")
-        vol_ma5 = _numeric_column(df, "vol_ma5")
-        amount_ma20 = _numeric_column(df, "amount_ma20")
-        band_pct = _numeric_column(df, "boll_width_pct60")
-        mask = (
-            band_pct.notna()
-            & (band_pct <= float(params["squeeze_pct"]))
-            & (close > _numeric_column(df, "boll_upper"))
-            & (close > _numeric_column(df, "high20_close"))
-            & vol_ma5.notna()
-            & (volume >= vol_ma5 * float(params["vol_mult"]))
-            & _numeric_column(df, "range20_pct").notna()
-            & (_numeric_column(df, "range20_pct") < float(params["range_max"]))
-            & amount_ma20.notna()
-            & (amount_ma20 >= float(params["min_amount"]))
-        )
-        if not _market_flag(df, "b4_ok"):
-            logger.info("B4 市场状态门槛未通过（沪深300 收盘低于 MA20 附近），本次不产生信号")
-            mask &= False
-    elif code == "b5":
-        close = _numeric_column(df, "close")
-        low = _numeric_column(df, "low")
-        open_price = _numeric_column(df, "open")
-        pre_close = _numeric_column(df, "pre_close")
-        volume = _numeric_column(df, "volume")
-        vol_ma5 = _numeric_column(df, "vol_ma5")
-        lower = _numeric_column(df, "boll_lower")
-        ma120 = _numeric_column(df, "ma120")
-        amount_ma20 = _numeric_column(df, "amount_ma20")
-        deviation = (lower - close) / lower.where(lower > 0) * 100.0
-        mask = (
-            lower.notna()
-            & (low <= lower)
-            & (_numeric_column(df, "kdj_j_min2") < float(params["j_max"]))
-            & vol_ma5.notna()
-            & (volume < vol_ma5)
-            & ((close > open_price) | (close >= pre_close))
-            & ((ma120.notna() & (close > ma120)) | (deviation <= float(params["dev_max"])))
-            & amount_ma20.notna()
-            & (amount_ma20 >= float(params["min_amount"]))
-        )
-        if not _market_flag(df, "b5_ok"):
-            logger.info("B5 市场状态门槛未通过（沪深300 当日跌幅超过 2%），本次不产生信号")
-            mask &= False
     else:  # pragma: no cover - get_spec 已保证策略存在
         raise UnknownAlgoError(f"未知策略: {algo_code}")
+    return StrategyEvaluation(
+        mask=mask.fillna(False).astype(bool), details=[], frame=frame
+    )
 
-    return mask.fillna(False).astype(bool)
+
+def strategy_mask(algo_code: str, df: pd.DataFrame, params: dict) -> pd.Series:
+    """返回策略条件命中的布尔 Series（B1–B5 由 CONDITION_SPECS 生成）。"""
+    return _evaluate_strategy(algo_code, df, params).mask
 
 
 def filter_by_strategy(algo_code: str, df: pd.DataFrame, params: dict) -> pd.DataFrame:
@@ -1130,7 +1292,78 @@ def _score_series(algo_code: str, df: pd.DataFrame) -> pd.Series:
     return _numeric_column(df, field_name).astype("float64").round(4)
 
 
-def _metrics_for_row(algo_code: str, record: dict) -> dict:
+#: 综合评分分项的中文名与原始因子列（权重/分位以 fact_stock_score_daily.detail 为准）
+_FACTOR_META: dict[str, tuple[str, tuple[str, ...]]] = {
+    "value": ("价值", ("pe_ttm", "pb", "ps_ttm")),
+    "quality": ("质量", ("pb", "dv_ttm")),
+    "momentum": ("动量", ("momentum_20", "momentum_60")),
+    "volatility": ("波动", ("volatility_20",)),
+    "liquidity": ("流动性", ("amount_ma20", "amount")),
+    "sentiment": ("情绪", ()),
+}
+
+
+def _score_breakdown(record: dict) -> dict | None:
+    """A3 分项贡献：直接读 fact_stock_score_daily.detail，不臆造权重。"""
+    detail = record.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    percentiles = detail.get("percentile") or {}
+    weights = detail.get("weights") or {}
+    raw = detail.get("raw") or {}
+
+    parts: list[dict[str, Any]] = []
+    weight_sum = 0.0
+    for key in FACTOR_WEIGHTS:
+        name, raw_keys = _FACTOR_META.get(key, (key, ()))
+        score = record.get(f"{key}_score")
+        weight = weights.get(key)
+        if score is None or weight is None:
+            continue
+        z = percentiles.get(key)
+        if z is not None:
+            weight_sum += float(weight)
+        parts.append(
+            {
+                "key": key,
+                "name": name,
+                "score": jsonable(score),
+                "z": jsonable(z),
+                "weight": jsonable(weight),
+                "raw": {name_key: jsonable(raw.get(name_key)) for name_key in raw_keys},
+            }
+        )
+    if not parts:
+        return None
+
+    # 与 composite_factor 同口径：仅对当日有分位的因子按可用权重归一
+    for part in parts:
+        if part["z"] is None or weight_sum <= 0:
+            part["contribution"] = None
+            continue
+        part["contribution"] = round(
+            float(part["score"]) * float(part["weight"]) / weight_sum, 4
+        )
+
+    return {
+        "composite": jsonable(record.get("composite_score")),
+        "weight_sum": round(weight_sum, 4),
+        "parts": parts,
+        "formula": (
+            "综合分 = 10 × Σ(分位 × 权重) / Σ(当日可用权重)；"
+            "贡献 = 分项得分 × 权重 / Σ(当日可用权重)，逐项贡献之和 ≈ 综合分（±0.01）"
+        ),
+        "sentiment_source": detail.get("sentiment_source"),
+    }
+
+
+def _metrics_for_row(
+    algo_code: str,
+    record: dict,
+    *,
+    triggered: list[dict] | None = None,
+    breakdown: dict | None = None,
+) -> dict:
     """构造单条信号的 metrics（该策略依据的全部指标 + 前端展示字段）。"""
     spec = get_spec(algo_code)
     metrics: dict[str, Any] = {}
@@ -1142,6 +1375,10 @@ def _metrics_for_row(algo_code: str, record: dict) -> dict:
             continue
         if field_name in record:
             metrics[field_name] = jsonable(record.get(field_name))
+    if triggered is not None:
+        metrics["triggered"] = jsonable(triggered)
+    if breakdown is not None:
+        metrics["score_breakdown"] = jsonable(breakdown)
     return metrics
 
 
@@ -1166,9 +1403,11 @@ def rank_signals(algo_code: str, df: pd.DataFrame, params: dict | None = None) -
 
     # Decimal（asyncpg Numeric）→ float64，禁止 Decimal 与 float 直接比较
     working = coerce_numeric_frame(df)
-    filtered = filter_by_strategy(spec.code, working, normalized)
-    if len(filtered) == 0:
+    evaluation = _evaluate_strategy(spec.code, working, normalized)
+    if not evaluation.mask.any():
         return _empty_signal_frame()
+    filtered = evaluation.frame.loc[evaluation.mask].copy()
+    filtered.attrs.update(dict(evaluation.frame.attrs))
 
     ordered = _sort_candidates(spec.code, filtered)
     ordered = ordered.copy()
@@ -1177,7 +1416,20 @@ def rank_signals(algo_code: str, df: pd.DataFrame, params: dict | None = None) -
     limit = int(normalized["limit"])
     top = ordered.head(limit).copy()
     top["rank"] = list(range(1, len(top) + 1))
-    top["metrics"] = [_metrics_for_row(spec.code, row) for row in top.to_dict("records")]
+    metrics_rows: list[dict] = []
+    for index, record in zip(top.index, top.to_dict("records")):
+        triggered = (
+            cond_dsl.triggered_row(evaluation.details, evaluation.frame, index)
+            if evaluation.details
+            else None
+        )
+        breakdown = _score_breakdown(record) if spec.code == "a3" else None
+        metrics_rows.append(
+            _metrics_for_row(
+                spec.code, record, triggered=triggered, breakdown=breakdown
+            )
+        )
+    top["metrics"] = metrics_rows
     top["code"] = top["code"].astype(str).str.zfill(6)
     if "name" not in top.columns:
         top["name"] = None
@@ -1253,6 +1505,7 @@ async def build_candidates(
 
 __all__ = [
     "SPECS",
+    "CONDITION_SPECS",
     "StrategySpec",
     "DISPLAY_FIELDS",
     "BENCHMARK_INDEX_CODE",

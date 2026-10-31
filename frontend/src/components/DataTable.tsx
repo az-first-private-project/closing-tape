@@ -5,8 +5,8 @@
  * - 传入 csvFilename 时显示「导出 CSV」按钮（纯前端导出当前数据）；
  * - 服务端 CSV 导出（如 /algo/{code}/export.csv）由页面单独调用 api/client 的 downloadCsv。
  */
-import { useMemo, useState, type ReactNode } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown, Download } from 'lucide-react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Download } from 'lucide-react'
 import { downloadText, toCsv } from '../lib/csv'
 
 /** 单元格原始值（排序与 CSV 导出用） */
@@ -35,6 +35,8 @@ interface DataTableProps<T> {
   footer?: ReactNode
   /** 表格最大高度（固定表头滚动） */
   maxHeight?: string
+  /** 行展开内容；不传则不显示展开列 */
+  renderExpanded?: (row: T, index: number) => ReactNode
 }
 
 /** 读取排序值 */
@@ -79,10 +81,12 @@ export default function DataTable<T>({
   emptyText = '暂无数据',
   footer,
   maxHeight,
+  renderExpanded,
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(
     initialSort ?? null,
   )
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   /** 排序后的行（rows 顺序不变时计算结果稳定） */
   const sortedRows = useMemo(() => {
@@ -133,6 +137,7 @@ export default function DataTable<T>({
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-border bg-muted/60">
+              {renderExpanded && <th className="w-8 px-2" aria-label="展开依据" />}
               {columns.map((column) => {
                 const active = sort?.key === column.key
                 const align = ALIGN_CLASS[column.align ?? 'left']
@@ -165,30 +170,64 @@ export default function DataTable<T>({
           <tbody>
             {sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                <td
+                  colSpan={columns.length + (renderExpanded ? 1 : 0)}
+                  className="px-4 py-10 text-center text-sm text-muted-foreground"
+                >
                   {emptyText}
                 </td>
               </tr>
             ) : (
-              sortedRows.map((row, index) => (
-                <tr
-                  key={rowKey(row, index)}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={`border-b border-border last:border-0 transition-colors ${
-                    onRowClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/20'
-                  }`}
-                >
-                  {columns.map((column) => {
-                    const align = ALIGN_CLASS[column.align ?? 'left']
-                    const value = resolveValue(row, column)
-                    return (
-                      <td key={column.key} className={`px-4 py-2 text-xs ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
-                        {column.render ? column.render(row, index) : value === null || value === undefined ? '—' : String(value)}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))
+              sortedRows.map((row, index) => {
+                const key = rowKey(row, index)
+                const expanded = expandedKey === key
+                return (
+                  <Fragment key={key}>
+                    <tr
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      className={`border-b border-border transition-colors ${
+                        onRowClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/20'
+                      } ${expanded ? 'bg-muted/30' : ''}`}
+                    >
+                      {renderExpanded && (
+                        <td className="px-2 py-2 text-center">
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setExpandedKey(expanded ? null : key)
+                            }}
+                            aria-expanded={expanded}
+                            aria-label={expanded ? '收起信号依据' : '展开信号依据'}
+                            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                          >
+                            {expanded ? (
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </td>
+                      )}
+                      {columns.map((column) => {
+                        const align = ALIGN_CLASS[column.align ?? 'left']
+                        const value = resolveValue(row, column)
+                        return (
+                          <td key={column.key} className={`px-4 py-2 text-xs ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
+                            {column.render ? column.render(row, index) : value === null || value === undefined ? '—' : String(value)}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                    {renderExpanded && expanded && (
+                      <tr className="border-b border-border last:border-0 bg-muted/20">
+                        <td colSpan={columns.length + 1} className="px-4 py-3">
+                          {renderExpanded(row, index)}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })
             )}
           </tbody>
         </table>

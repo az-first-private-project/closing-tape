@@ -270,6 +270,45 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `data[].metrics` 为策略依据的完整指标，前端表格列由 `metrics` 动态生成。
 - `run` 额外字段：`status`（running/success/failed）、失败时 `error`、回测 run 带 `is_backtest`。
 
+**逐条依据 `metrics.triggered`（B1–B5，V6 T7）**
+
+每个信号附带条件树逐条求值结果，与选股共用同一份 `CONDITION_SPECS`，不另建解释表：
+```json
+[ { "key": "ema_cross_3d", "label": "EMA5 近 3 日上穿 EMA20", "scope": "stock",
+    "required": true, "passed": true, "actual": true, "op": "eq", "threshold": true,
+    "detail": "ema5=8.262 ema20=7.371" },
+  { "key": "b4_market", "label": "沪深300 收盘 ≥ MA20 × 0.995", "scope": "market",
+    "required": true, "passed": false, "actual": false,
+    "detail": "沪深300 close=4103.54 ma20=4275.67" } ]
+```
+- `scope`：`stock`（个股条件）或 `market`（市场环境门槛，前端单独分组）。
+- `op` / `threshold` 仅比较类条件返回；`notna` 与市场门槛没有 `threshold`，`actual` 为原始值或整体布尔。
+- `detail` 为人类可读字段快照；所有值均为 JSON 原生类型（numpy / Decimal 已在后端转换）。
+- 条件组（如「阳线或收涨」「趋势支撑」）折叠为一条，`actual/passed` 为组整体布尔值。
+- **旧 run 兼容**：重构前的缓存 run 没有 `triggered`，前端显示「该 run 为旧版本快照，无逐条依据」，
+  不得渲染成空列表或伪造全通过。升级后对最新交易日执行
+  `POST /api/v1/algo/{algo_code}/refresh`（a3/a4/b1–b5 共 7 个）刷新缓存，详见 CHANGELOG 7.8。
+
+**A3 评分拆解 `metrics.score_breakdown`（仅 A3，V6 T7）**
+
+直接读取 `fact_stock_score_daily.detail`，不新增计算：
+```json
+{ "composite": 8.5,
+  "weight_sum": 0.9,
+  "parts": [ { "key": "value", "name": "价值", "score": 5.0, "z": 0.5,
+               "weight": 0.2, "contribution": 1.1111,
+               "raw": { "pe_ttm": null, "pb": null, "ps_ttm": null } } ],
+  "formula": "综合分 = 10 × Σ(分位 × 权重) / Σ(当日可用权重)；贡献 = 分项得分 × 权重 / Σ(当日可用权重)",
+  "sentiment_source": "neutral" }
+```
+- `z` 为全市场分位（0–1），`score = z × 10`；`weight` 来自评分明细 `weights`，与
+  `backend/app/engine/stock_score.py` 的 `FACTOR_WEIGHTS` 顺序一致，前端不得自造权重。
+- `weight_sum` 为当日有分位的因子权重之和；`contribution = score × weight / weight_sum`
+  （0–10 分制），逐项贡献之和与 `composite` 一致（±0.01 四舍五入）。
+- 分位缺失的因子 `z = null`、`contribution = null`，`score` 仍按中性 0.5 显示 5.0 分，
+  但不计入 `weight_sum`（与 `composite_factor` 的逐行归一口径一致）。
+- CSV 导出（5.3）不包含 `triggered` / `score_breakdown` 这类结构化字段。
+
 ### 5.3 其他
 | 方法 | 路径 | 说明 |
 |---|---|---|

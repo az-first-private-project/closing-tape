@@ -243,12 +243,14 @@ async def export_algo_csv(
     result = await run_strategy(algo_code=algo_code, trade_date=trade_date,
                                 params=params, force=False, db=db)
 
-    # 动态列：固定列 + metrics 里出现的全部 key（并集，保证不丢字段）
+    # 动态列：固定列 + metrics 里出现的全部标量 key（并集，保证不丢字段）
+    # triggered / score_breakdown 是结构化说明，不参与 CSV 平铺
+    reserved = {"composite_score", "triggered", "score_breakdown"}
     metric_keys: list[str] = []
     for row in result.get("data", []):
         for key in (row.get("metrics") or {}):
-            if key == "composite_score":
-                continue  # 已作为固定列「综合得分(0-10)」导出
+            if key in reserved:
+                continue  # composite_score 已作为固定列「综合得分(0-10)」导出
             if key not in metric_keys:
                 metric_keys.append(key)
 

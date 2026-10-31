@@ -53,8 +53,68 @@ export interface AlgoRun {
   is_backtest?: boolean
 }
 
-/** 动态指标值（data[].metrics，值可能是数字/字符串/布尔） */
-export type AlgoMetricValue = number | string | boolean | null
+/** 标量指标值 */
+export type AlgoMetricScalar = number | string | boolean | null
+
+/** 单条条件求值依据（metrics.triggered[]，B1–B5 新 run） */
+export interface TriggeredCondition {
+  key: string
+  label: string
+  /** stock=个股条件；market=市场环境门槛 */
+  scope: 'stock' | 'market' | string
+  required: boolean
+  passed: boolean
+  actual: AlgoMetricScalar
+  op?: string | null
+  threshold?: AlgoMetricScalar
+  detail?: string | null
+}
+
+/** A3 评分拆解单项 */
+export interface ScoreBreakdownPart {
+  key: string
+  name: string
+  /** 0–10 分项得分（= 全市场分位 × 10） */
+  score: number | null
+  /** 全市场分位 0–1 */
+  z: number | null
+  weight: number | null
+  /** 对综合分的归一化贡献（0–10 分制）；分位缺失时为 null */
+  contribution?: number | null
+  raw: Record<string, AlgoMetricScalar>
+}
+
+/** A3 评分拆解（来源 fact_stock_score_daily.detail） */
+export interface ScoreBreakdown {
+  composite: number | null
+  /** 当日有分位的因子权重之和（0–1） */
+  weight_sum?: number | null
+  parts: ScoreBreakdownPart[]
+  formula?: string | null
+  sentiment_source?: string | null
+}
+
+/** 动态指标值（data[].metrics，含标量、触发条件数组、A3 评分拆解） */
+export type AlgoMetricValue =
+  | AlgoMetricScalar
+  | TriggeredCondition[]
+  | ScoreBreakdown
+  | Record<string, AlgoMetricScalar>
+
+/** 读取逐条依据；旧 run 没有该字段时返回 null */
+export function rowTriggered(row: AlgoStockRow): TriggeredCondition[] | null {
+  const value = row.metrics?.triggered
+  return Array.isArray(value) ? (value as TriggeredCondition[]) : null
+}
+
+/** 读取 A3 评分拆解；旧 run 没有该字段时返回 null */
+export function rowBreakdown(row: AlgoStockRow): ScoreBreakdown | null {
+  const value = row.metrics?.score_breakdown
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'parts' in value) {
+    return value as ScoreBreakdown
+  }
+  return null
+}
 
 /** 选股结果行（5.2 data[]） */
 export interface AlgoStockRow {
