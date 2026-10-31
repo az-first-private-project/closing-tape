@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InvalidParamError, NotFoundError, UnknownAlgoError
@@ -30,6 +31,13 @@ from app.strategy.runner import get_run, list_runs, run_strategy
 from app.strategy.strategies import SPECS, list_specs
 
 router = APIRouter(prefix="/api/v1/algo", tags=["选股"])
+
+
+class WatchHitsRequest(BaseModel):
+    """自选股命中查询体（只读）。"""
+
+    codes: list[str] = Field(default_factory=list, description="1–6 位数字代码，去重后 ≤100")
+    days: int = Field(10, ge=1, le=60, description="回看交易日数")
 
 
 # ============================================================
@@ -162,6 +170,26 @@ async def get_algo_consensus(
     payload["min_count"] = min_count
     payload["freshness"] = freshness[0] if freshness else None
     payload["note"] = "各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
+    return payload
+
+
+@router.post("/hits")
+async def get_watchlist_hits(
+    body: WatchHitsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """自选股近 N 个交易日的策略命中（只读查询，语义上等价 GET）。
+
+    用 POST 是因为自选代码列表可能很长；SQL 内全部使用参数绑定。
+    """
+    from app.engine.watch_hits import normalize_hits_codes, watchlist_hits
+    from app.services.freshness import get_freshness_items
+
+    codes = normalize_hits_codes(body.codes)
+    payload = await watchlist_hits(db, codes, days=body.days)
+    freshness = await get_freshness_items(db, ["algo_run"])
+    payload["freshness"] = freshness[0] if freshness else None
+    payload["days"] = body.days
     return payload
 
 

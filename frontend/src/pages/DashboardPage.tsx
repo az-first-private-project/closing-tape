@@ -14,6 +14,9 @@ import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Activity, RefreshCw } from 'lucide-react'
 import { useDashboard, useTradeCalendar } from '../hooks/useDashboard'
+import { useWatchSignals, useWatchlist } from '../hooks/useWatchSignals'
+import WatchButton from '../components/WatchButton'
+import WatchlistPanel from '../components/WatchlistPanel'
 import IndexCard, {
   IndexCompareHeader,
   computeIndexRanks,
@@ -201,20 +204,22 @@ function SectorRankList({ title, sectors }: { title: string; sectors: SectorQuot
                 <div className="flex flex-wrap gap-1.5 mt-1.5 ml-6">
                   {strengthLeader && (
                     <span
-                      className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/60"
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/60"
                       title={strengthLeader.rank_text ?? undefined}
                     >
                       实力龙头 {strengthLeader.name}
-                      <span className={`ml-1 num ${pctColor(strengthLeader.change_pct)}`}>{fmtPct(strengthLeader.change_pct)}</span>
+                      <span className={`num ${pctColor(strengthLeader.change_pct)}`}>{fmtPct(strengthLeader.change_pct)}</span>
+                      <WatchButton code={strengthLeader.code} name={strengthLeader.name} />
                     </span>
                   )}
                   {sentimentLeader && (
                     <span
-                      className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/60"
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/60"
                       title={sentimentLeader.rank_text ?? undefined}
                     >
                       情绪龙头 {sentimentLeader.name}
-                      <span className={`ml-1 num ${pctColor(sentimentLeader.change_pct)}`}>{fmtPct(sentimentLeader.change_pct)}</span>
+                      <span className={`num ${pctColor(sentimentLeader.change_pct)}`}>{fmtPct(sentimentLeader.change_pct)}</span>
+                      <WatchButton code={sentimentLeader.code} name={sentimentLeader.name} />
                     </span>
                   )}
                 </div>
@@ -232,6 +237,8 @@ export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState('')
   const dashboard = useDashboard(selectedDate || undefined)
   const calendar = useTradeCalendar(720)
+  const watchlist = useWatchlist()
+  const watchHits = useWatchSignals(watchlist)
 
   const data = dashboard.data
 
@@ -365,6 +372,19 @@ export default function DashboardPage() {
         <>
           {/* ========== 市场温度计（V6 T3） ========== */}
           <MarketTemperature tradeDate={selectedDate || undefined} />
+
+          {/* ========== 自选股快捷区（V6 T8） ========== */}
+          {watchlist.length > 0 && (
+            <WatchlistPanel
+              watchlist={watchlist}
+              hits={watchHits.data?.items ?? []}
+              latestSignalDate={watchHits.data?.latest_signal_date ?? null}
+              loading={watchHits.isLoading}
+              error={watchHits.isError ? watchHits.error : undefined}
+              onRetry={() => watchHits.refetch()}
+              compact
+            />
+          )}
 
           {/* ========== 指数多周期对比条 ========== */}
           {indexCards.length > 0 && (

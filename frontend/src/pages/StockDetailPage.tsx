@@ -19,6 +19,7 @@ import type { StockFeatures, StockLatest } from '../types/stock'
 import type { Freshness } from '../types/common'
 import AlgoRadarChart from '../components/AlgoRadarChart'
 import FreshnessBadge from '../components/FreshnessBadge'
+import WatchButton from '../components/WatchButton'
 import { ErrorState, LoadingState, EmptyState } from '../components/StateViews'
 import {
   fmtAmount,
@@ -296,6 +297,7 @@ export default function StockDetailPage() {
                 跌停
               </span>
             )}
+            <WatchButton code={code} name={stock.name} showLabel size="md" />
           </div>
           <p className="text-xs text-muted-foreground mt-1">
             {[stock.exchange, stock.board, stock.industry_l1, stock.industry_l2, stock.ownership]

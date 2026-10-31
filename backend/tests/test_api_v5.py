@@ -23,6 +23,7 @@ V5 API 集成测试（需要真实 PostgreSQL + 演示数据）
 from __future__ import annotations
 
 import os
+from datetime import date, timedelta
 
 import pytest
 
@@ -35,14 +36,35 @@ os.environ.setdefault("SCHEDULER_ENABLED", "0")
 os.environ.setdefault("AUTO_CREATE_TABLES", "0")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
+from app.db.models.strategy import StgRun, StgSignal  # noqa: E402
+from app.db.session import sync_engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.strategy.strategies import SPECS  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def watch_state_client(client):
+    """快照并在测试后恢复单租户状态，避免污染真实自选。"""
+    original = client.get("/api/v1/watchlist")
+    assert original.status_code == 200, original.text
+    snapshot = original.json()
+    try:
+        yield client
+    finally:
+        restored = client.put(
+            "/api/v1/watchlist",
+            json={"codes": snapshot["codes"], "seen_hits": snapshot["seen_hits"]},
+        )
+        assert restored.status_code == 200, restored.text
 
 
 # ============================================================
@@ -175,6 +197,107 @@ def test_algo_consensus_min_count_validation(client):
     assert client.get("/api/v1/algo/consensus", params={"limit": 0}).status_code == 422
 
 
+# ============================================================
+# 自选股命中（V6 T8）
+# ============================================================
+
+def _live_hit_sample():
+    """从库里取一条「当前启用策略 + 非回测」的最新命中。"""
+    with Session(sync_engine) as session:
+        latest = session.execute(
+            select(func.max(StgRun.trade_date)).where(
+                StgRun.is_backtest.is_(False), StgRun.status == "success"
+            )
+        ).scalar_one_or_none()
+        if latest is None:
+            return None
+        row = session.execute(
+            select(StgSignal.code, StgRun.algo_code)
+            .join(StgRun, StgRun.run_id == StgSignal.run_id)
+            .where(
+                StgRun.trade_date == latest,
+                StgRun.is_backtest.is_(False),
+                StgRun.status == "success",
+                StgRun.algo_code.in_(list(SPECS)),
+            )
+            .order_by(StgSignal.code, StgRun.algo_code)
+            .limit(1)
+        ).first()
+        return (row[0], row[1], latest) if row else None
+
+
+def test_algo_hits_returns_current_hits_and_dedupes(client):
+    sample = _live_hit_sample()
+    if sample is None:
+        pytest.skip("库内没有可用的非回测命中样本")
+    code, algo, latest = sample
+
+    resp = client.post("/api/v1/algo/hits", json={"codes": [code, "600000"], "days": 10})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["days"] == 10
+    assert body["freshness"]["dataset"] == "algo_run"
+
+    items = body["items"]
+    assert any(
+        item["code"] == code
+        and item["algo_code"] == algo
+        and item["signal_date"] == latest.isoformat()
+        for item in items
+    )
+    keys = {(item["code"], item["algo_code"], item["signal_date"]) for item in items}
+    assert len(keys) == len(items), "同一策略同一天同一票只能返回一条"
+    for item in items:
+        assert item["code"] in {code, "600000"}
+        assert item["algo_code"] in SPECS
+        assert item["hit_id"] == f"{item['algo_code']}:{item['signal_date']}"
+        assert {"code", "name", "algo_code", "algo_name", "signal_date", "rank", "hit_id"} <= set(item)
+
+    if items:
+        assert body["latest_signal_date"] == max(item["signal_date"] for item in items)
+
+
+def test_algo_hits_excludes_backtest_only_codes(client):
+    """只在回测 run 出现过的代码，接口必须返回空。"""
+    with Session(sync_engine) as session:
+        backtest_codes = (
+            select(StgSignal.code)
+            .join(StgRun, StgRun.run_id == StgSignal.run_id)
+            .where(StgRun.is_backtest.is_(True))
+        )
+        live_codes = (
+            select(StgSignal.code)
+            .join(StgRun, StgRun.run_id == StgSignal.run_id)
+            .where(StgRun.is_backtest.is_(False))
+        )
+        only_backtest = backtest_codes.except_(live_codes).subquery("only_backtest")
+        codes = session.execute(
+            select(only_backtest.c.code).order_by(only_backtest.c.code).limit(5)
+        ).scalars().all()
+    if not codes:
+        pytest.skip("库内没有仅回测出现的代码")
+
+    resp = client.post("/api/v1/algo/hits", json={"codes": list(codes), "days": 60})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"] == []
+
+
+def test_algo_hits_validation(client):
+    def post(payload):
+        return client.post("/api/v1/algo/hits", json=payload)
+
+    assert post({"codes": [], "days": 10}).json()["items"] == []
+    assert post({"codes": ["'; drop"], "days": 10}).status_code == 422
+    assert post({"codes": ["1234567"], "days": 10}).status_code == 422
+    assert post({"codes": [f"{index:06d}" for index in range(200)], "days": 10}).status_code == 422
+    assert post({"codes": ["600000"], "days": 0}).status_code == 422
+    assert post({"codes": ["600000"], "days": 61}).status_code == 422
+
+    injection = post({"codes": ["'; drop"], "days": 10}).json()
+    assert injection["ok"] is False
+    assert injection["error"]["code"] == "INVALID_PARAM"
+
+
 def test_algo_unknown_returns_error_body(client):
     resp = client.get("/api/v1/algo/zzz")
     assert resp.status_code == 404
@@ -251,3 +374,55 @@ def test_backtest_runs_and_persists(client):
     missing = client.get("/api/v1/backtest/BT-NOT-EXIST/trades")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ============================================================
+# 自选状态（T8 服务端单租户）
+# ============================================================
+
+def test_watch_state_roundtrip_and_partial_update(watch_state_client):
+    client = watch_state_client
+    codes = ["000739", "000560"]
+    seen = ["b2:2026-10-26", "b3:2026-10-26"]
+
+    resp = client.put("/api/v1/watchlist", json={"codes": codes, "seen_hits": seen})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["codes"] == codes
+    assert body["seen_hits"] == seen
+    assert body["updated_at"]
+
+    got = client.get("/api/v1/watchlist")
+    assert got.status_code == 200, got.text
+    assert got.json()["codes"] == codes
+    assert got.json()["seen_hits"] == seen
+
+    partial = client.put("/api/v1/watchlist", json={"codes": ["600000"]}).json()
+    assert partial["codes"] == ["600000"]
+    assert partial["seen_hits"] == seen, "只传 codes 时不应清空已读水位"
+
+    partial = client.put("/api/v1/watchlist", json={"seen_hits": ["b2:2026-10-27"]}).json()
+    assert partial["codes"] == ["600000"], "只传 seen_hits 时不应清空名单"
+    assert partial["seen_hits"] == ["b2:2026-10-27"]
+
+    cleared = client.put("/api/v1/watchlist", json={"codes": []}).json()
+    assert cleared["codes"] == []
+
+
+def test_watch_state_validation(watch_state_client):
+    client = watch_state_client
+    base = date(2026, 1, 1)
+    too_many_seen = [
+        f"b2:{(base + timedelta(days=i)).isoformat()}" for i in range(501)
+    ]
+    cases = [
+        {"codes": ["'; drop"]},
+        {"codes": [f"{i:06d}" for i in range(101)]},
+        {"seen_hits": ["b2:not-a-date"]},
+        {"seen_hits": ["../b2:2026-10-26"]},
+        {"seen_hits": too_many_seen},
+    ]
+    for payload in cases:
+        resp = client.put("/api/v1/watchlist", json=payload)
+        assert resp.status_code == 422, (payload, resp.text)
+        assert resp.json()["error"]["code"] == "INVALID_PARAM"

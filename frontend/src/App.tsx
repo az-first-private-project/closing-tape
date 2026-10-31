@@ -5,6 +5,7 @@
  * /dashboard   盘后分析（原 /dashboard-v3）
  * /algo-center 选股中心
  * /stocks/:code 个股详情
+ * /watchlist   自选股与信号提醒
  * /jobs        任务监控
  * /about       关于
  * *            404
@@ -16,6 +17,7 @@ import DetailPage from './pages/DetailPage'
 import DashboardPage from './pages/DashboardPage'
 import AlgoCenter from './pages/AlgoCenter'
 import StockDetailPage from './pages/StockDetailPage'
+import WatchlistPage from './pages/WatchlistPage'
 import JobsPage from './pages/JobsPage'
 import AboutPage from './pages/AboutPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -29,6 +31,7 @@ export default function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/algo-center" element={<AlgoCenter />} />
         <Route path="/stocks/:code" element={<StockDetailPage />} />
+        <Route path="/watchlist" element={<WatchlistPage />} />
         <Route path="/jobs" element={<JobsPage />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="*" element={<NotFoundPage />} />

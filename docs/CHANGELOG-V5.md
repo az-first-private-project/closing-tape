@@ -540,3 +540,36 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 不新增表/列：新 run 直接取 `build_candidates` 的 `attrs["market"]`；缓存 run 与 run 详情按 `trade_date` 调用 `load_market_context` 现算，旧 run 同样可显示。
 - 前端在门槛未通过或指数缺失时，于结果表上方显示原因（b4：收盘 < MA20 × 0.995；b5：当日跌幅 ≤ -2%），空态文案同步为“市场环境未满足”。
 - 验证：b4 2026-10-26 显示“沪深300 收盘 4103.54 < MA20 × 0.995 = 4254.29，本次不产生信号”；缓存回读一致；pytest / build / 浏览器通过。
+
+### 7.10 T8 自选股 + 站内信号提醒（2026-10-31）
+
+**目标**：自选股命中策略时导航栏出红点；轮询实现，不引入 WebSocket；无账号体系，名单与已读水位存**服务端单租户行**，localStorage 仅作本机缓存。
+
+**后端**
+
+- 新增 `engine/watch_hits.py`：单条 SQL（`stg_signal ⋈ stg_run` + `code = ANY(:codes)`）查询近 N 个交易日命中，参数全部绑定；过滤当前 `SPECS`、`status='success'`、`is_backtest IS FALSE`；同一 `(algo_code, date, code)` 只保留名次最优 run。窗口以最近一个非回测成功 run 的交易日为锚点，不依赖 `CURRENT_DATE`。
+- 新增 `POST /api/v1/algo/hits`（契约 5.6）：`codes` 去重后 ≤100、每项 1–6 位数字（统一错误体 `INVALID_PARAM`），`days` 1–60；返回 `items[{code,name,algo_code,algo_name,signal_date,rank,hit_id}]`、`latest_signal_date`、`freshness`、`days`。POST 仅为容纳长代码列表，语义是只读查询。
+- 新增单行状态表 `app_watchlist_state`（Alembic `0006_watchlist_state`）：`id=1` 检查约束、`codes`/`seen_hits` JSONB、`updated_at`；`engine/watch_state.py` 提供读取与单行 upsert（部分更新、last-write-wins）。
+- 新增 `GET/PUT /api/v1/watchlist`（契约 5.7）：`codes` 复用 5.6 校验（≤100），`seen_hits` 校验 `algo_code:YYYY-MM-DD` 与真实日期（≤500），非法统一 422 `INVALID_PARAM`；响应始终返回完整状态。
+- 测试：`tests/test_watch_hits.py` 13 项、`tests/test_watch_state.py` 17 项纯校验；`test_api_v5.py` 增加 5 项接口用例（命中、排除回测、越界/注入 422、状态 roundtrip 与部分更新、状态校验）。
+
+**前端**
+
+- `lib/watchlist.ts`：服务端单行为事实源，localStorage `gfna-watchlist` / `gfna-watchlist-seen` 仅缓存，`gfna-watchlist-pending` 标记未同步改动；启动 hydrate（本地 pending 优先推送；服务器为空时迁移本地名单；已读取并集），写入 400ms 防抖、失败 15 秒重试、`online` 立即重试；版本号防止在途 PUT 覆盖并发改动；隐私模式降级内存态，但刷新后可从服务器恢复。
+- `hooks/useWatchSignals.ts`：60 秒轮询，仅 `document.visibilityState === 'visible'` 时启用（`refetchIntervalInBackground: false`）；`retry: false`（`client.ts` 已含一次 5xx/网络重试）；已读按 `hit_id = algo_code:signal_date` 去重，同一策略同一天多只股票只算一条提醒；新增 `useWatchSyncStatus` 供面板显示同步状态。
+- 导航栏新增“自选”入口与 `bg-alert` 红点（>9 显示 `9+`，`aria-label="自选股有 N 条新信号"`，键盘可达）；新增 `/watchlist` 页（进入即写已读水位），列出自选、最近命中与明细表。
+- 个股详情头部“☆ 加入自选 / ★ 已自选”；盘后分析龙头股旁快捷星标与自选区；新增 `WatchButton`、`WatchlistPanel` 组件。共识榜沿用 T6 星标，现与导航栏同步。面板与星标提示改为“名单保存在本机缓存并同步到服务器”，底部显示 `syncing / synced / offline`。
+
+**验证（数据截至 2026-10-26）**
+
+- 实测命中：`000739` → b2（rank 2）、`000560` → b3（rank 1），红点 = 2；进入 `/watchlist` 后已读水位写入两条，红点消失。
+- 服务端同步：清理全部 `gfna-watchlist*` 后刷新，从服务器恢复 2/100 与已读水位、红点不误报；移除/新增一只后 GET 分别返回 `["000560"]` 与 `["000560","000739"]`。
+- 隐私模式：仅让 `gfna-watchlist*` 的 storage 抛错，页面仍从服务器恢复 2/100；增删照常落库，刷新后恢复，`pending` 为空。
+- 后台轮询（真实双标签页）：headless Chrome 156 + CDP，标签 A `/watchlist` 为 `visible`，切到真实标签 B 后 A 为 `hidden`；65 秒内 `/algo/hits` 新增 **0** 次；切回 A 恢复 `visible` 后 65 秒内恢复 **1** 次。
+- 接口校验：200 个 codes、`"'; drop"`、`days=0/61` 均 422；参数绑定无注入面。
+- `pytest` 全量 **277 passed**；`npm run build` 通过（index 923.76 kB / gzip 272.60 kB）；浏览器 Console 无新增错误，Dashboard/个股页无回归。
+
+**已知**
+
+- 单租户共享：所有浏览器访问同一后端即共享同一份名单，无用户隔离与鉴权；公网/多用户前需加用户维度（接口加 `user_id` 或独立表）。写入为 last-write-wins，两个浏览器同时编辑以最后提交为准，单机自用可接受。
+- `days` 越界由 FastAPI 参数校验返回默认 422 结构（非统一错误体），与现有接口一致；`codes` 业务校验走统一错误体。

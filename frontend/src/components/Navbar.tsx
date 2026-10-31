@@ -11,10 +11,12 @@ import {
   Info,
   Moon,
   Search,
+  Star,
   Sun,
   TrendingUp,
 } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
+import { useWatchBadge } from '../hooks/useWatchSignals'
 import { cn } from '../lib/utils'
 
 /** 导航配置 */
@@ -22,12 +24,14 @@ const NAV_ITEMS = [
   { to: '/', label: '首页', icon: BarChart3, end: true },
   { to: '/dashboard', label: '盘后分析', icon: TrendingUp, end: false },
   { to: '/algo-center', label: '选股中心', icon: Brain, end: false },
+  { to: '/watchlist', label: '自选', icon: Star, end: false },
   { to: '/jobs', label: '任务监控', icon: Activity, end: false },
   { to: '/about', label: '关于', icon: Info, end: false },
 ] as const
 
 export default function Navbar() {
   const { theme, toggle } = useTheme()
+  const { newCount } = useWatchBadge()
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
 
@@ -71,6 +75,7 @@ export default function Navbar() {
           <div className="flex items-center gap-0.5">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon
+              const isWatchlist = item.to === '/watchlist'
               return (
                 <NavLink
                   key={item.to}
@@ -79,14 +84,36 @@ export default function Navbar() {
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-1 px-2.5 py-2 text-sm rounded-lg transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       isActive
                         ? 'text-primary bg-primary/10'
                         : 'text-muted-foreground hover:text-foreground hover:bg-secondary',
                     )
                   }
-                  title={item.label}
+                  title={
+                    isWatchlist && newCount > 0
+                      ? `自选股有 ${newCount} 条新信号`
+                      : item.label
+                  }
+                  aria-label={
+                    isWatchlist
+                      ? newCount > 0
+                        ? `自选股有 ${newCount} 条新信号`
+                        : '自选股'
+                      : undefined
+                  }
                 >
-                  <Icon className="w-4 h-4" />
+                  <span className="relative inline-flex">
+                    <Icon className="w-4 h-4" />
+                    {isWatchlist && newCount > 0 && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -right-2 -top-2 min-w-[15px] h-[15px] px-1 rounded-full bg-alert text-background text-[9px] font-bold leading-[15px] text-center border border-background num"
+                      >
+                        {newCount > 9 ? '9+' : newCount}
+                      </span>
+                    )}
+                  </span>
                   <span className="hidden lg:inline">{item.label}</span>
                 </NavLink>
               )

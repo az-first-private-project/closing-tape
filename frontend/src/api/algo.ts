@@ -10,6 +10,7 @@ import type {
   AlgoRunSummary,
   ConsensusResponse,
   LadderResponse,
+  WatchHitsResponse,
 } from '../types/algo'
 
 /** 算法清单（5.1） */
@@ -108,5 +109,18 @@ export function fetchConsensus(
 ): Promise<ConsensusResponse> {
   return request<ConsensusResponse>('/algo/consensus', {
     query: { min_count: minCount, limit, trade_date: tradeDate || undefined },
+  })
+}
+
+/**
+ * 自选股命中（5.6）
+ * 只读查询，POST 仅因为 codes 列表可能很长；重试沿用 client.ts 的 GET 语义
+ * （5xx / 网络错误最多 1 次，4xx 不重试）。
+ */
+export function fetchWatchHits(codes: string[], days = 10): Promise<WatchHitsResponse> {
+  return request<WatchHitsResponse>('/algo/hits', {
+    method: 'POST',
+    body: { codes, days },
+    retry: 1,
   })
 }
