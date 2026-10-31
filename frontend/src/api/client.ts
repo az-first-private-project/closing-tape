@@ -3,7 +3,7 @@
  * =========================
  * 职责：
  *  1. 统一 base URL（开发环境走 Vite 代理，禁止在这里写死后端地址）；
- *  2. 20s 超时（AbortController）；
+ *  2. 30s 超时（AbortController）；
  *  3. 解析后端统一错误体 `{ ok:false, error:{ code, message, detail } }`，抛 ApiError；
  *  4. 只对 5xx / 网络错误重试 1 次（4xx 不重试，避免无意义放大）；
  *  5. 文件下载（CSV）封装。
@@ -13,8 +13,8 @@ import type { ApiErrorBody } from '../types/common'
 /** API 前缀：由 Vite dev proxy / nginx 转发到后端，组件与页面不得自行拼域名 */
 export const BASE_URL = '/api/v1'
 
-/** 默认超时时间：20 秒 */
-export const DEFAULT_TIMEOUT_MS = 20_000
+/** 默认超时时间：30 秒（回测等长任务需要） */
+export const DEFAULT_TIMEOUT_MS = 30_000
 
 /** query 参数值类型 */
 export type QueryValue = string | number | boolean | null | undefined
@@ -28,7 +28,7 @@ export interface RequestOptions {
   query?: Record<string, QueryValue>
   /** 请求体：对象按 JSON 发送 */
   body?: unknown
-  /** 超时时间（毫秒），默认 20s */
+  /** 超时时间（毫秒），默认 30s */
   timeoutMs?: number
   /** 重试次数上限，GET 默认 1，其余默认 0；仅对 5xx / 网络错误生效 */
   retry?: number

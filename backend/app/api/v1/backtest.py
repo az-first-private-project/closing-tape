@@ -20,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import BACKTEST
 from app.core.errors import InvalidParamError, NotFoundError, UnknownAlgoError
 from app.db.models import (
-    BacktestRun, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
+    BacktestRun, DimStock, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
 )
 from app.db.session import get_db
+from app.engine.backtest_view import build_backtest_extras
 from app.strategy.backtest import run_backtest
 from app.strategy.strategies import SPECS
 
@@ -96,6 +97,50 @@ def _serialize(row: BacktestRun) -> dict:
     }
 
 
+async def _load_extras(
+    curve: list[dict] | None,
+    trades: list[dict] | None,
+    start: date,
+    end: date,
+    params: dict | None,
+    db: AsyncSession,
+) -> dict:
+    """为已落库的回测补充 T9 派生视图（只读，不重算回测）。"""
+    initial_cash = float((params or {}).get("initial_cash") or 1_000_000.0)
+    if not curve or not trades:
+        return build_backtest_extras(curve, trades, {}, initial_cash=initial_cash)
+
+    codes = sorted({
+        str(item.get("code") or "").zfill(6)
+        for item in trades
+        if item.get("code")
+    })
+    daily_rows_by_code: dict[str, dict[str, float]] = {}
+    industries: dict[str, str | None] = {}
+    if codes:
+        rows = (await db.execute(
+            select(FactStockDaily.code, FactStockDaily.trade_date, FactStockDaily.close)
+            .where(FactStockDaily.code.in_(codes))
+            .where(FactStockDaily.trade_date >= start)
+            .where(FactStockDaily.trade_date <= end)
+        )).all()
+        for code, trade_day, close in rows:
+            if close is None:
+                continue
+            daily_rows_by_code.setdefault(code, {})[trade_day.isoformat()] = float(close)
+        industries = dict((await db.execute(
+            select(DimStock.code, DimStock.industry_l1).where(DimStock.code.in_(codes))
+        )).all())
+
+    return build_backtest_extras(
+        curve,
+        trades,
+        daily_rows_by_code,
+        industry_by_code=industries,
+        initial_cash=initial_cash,
+    )
+
+
 @router.post("/{algo_code}")
 async def create_backtest(
     algo_code: str,
@@ -160,6 +205,14 @@ async def create_backtest(
     result["requested_start"] = requested_start.isoformat()
     result["effective_start"] = start.isoformat()
     result["start_trimmed"] = trimmed
+    result.update(await _load_extras(
+        result.get("equity_curve"),
+        result.get("trades"),
+        date.fromisoformat(result["start_date"]),
+        date.fromisoformat(result["end_date"]),
+        result.get("params"),
+        db,
+    ))
     return result
 
 
@@ -170,7 +223,11 @@ async def get_backtest(bt_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     )).scalar_one_or_none()
     if row is None:
         raise NotFoundError(f"回测不存在: {bt_id}", detail={"bt_id": bt_id})
-    return _serialize(row)
+    payload = _serialize(row)
+    payload.update(await _load_extras(
+        row.equity_curve, row.trades, row.start_date, row.end_date, row.params, db
+    ))
+    return payload
 
 
 @router.get("/{bt_id}/trades")
@@ -216,6 +273,32 @@ async def export_backtest_csv(bt_id: str, db: AsyncSession = Depends(get_db)) ->
     writer.writerow(["date", "nav", "benchmark"])
     for point in (row.equity_curve or []):
         writer.writerow([point.get("date"), point.get("nav"), point.get("benchmark")])
+
+    extras = await _load_extras(
+        row.equity_curve, row.trades, row.start_date, row.end_date, row.params, db
+    )
+
+    def _pct2(value: float | None) -> float | str:
+        return "" if value is None else round(value, 2)
+
+    # 月度与回撤 block：与界面同口径（百分数，2 位小数）
+    writer.writerow([])
+    writer.writerow(["# monthly returns (%)"])
+    writer.writerow(["month", "strategy", "benchmark", "excess"])
+    for item in extras["monthly_returns"]:
+        writer.writerow([
+            item.get("ym"), _pct2(item.get("ret")),
+            _pct2(item.get("benchmark")), _pct2(item.get("excess")),
+        ])
+    writer.writerow([])
+    writer.writerow(["# drawdown (%)"])
+    writer.writerow(["date", "nav", "peak", "drawdown"])
+    for item in extras["drawdown_curve"]:
+        writer.writerow([
+            item.get("date"), item.get("nav"), item.get("peak"),
+            _pct2(item.get("drawdown")),
+        ])
+
     writer.writerow([])
     writer.writerow(["# trades"])
     writer.writerow(["date", "code", "name", "side", "price", "shares", "amount", "fee", "reason"])

@@ -491,9 +491,17 @@ Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positi
   "trades": [ { "date": "2025-10-23", "code": "600519", "name": "贵州茅台", "side": "buy",
                 "price": 1512.3, "shares": 100, "amount": 151230.0, "fee": 42.8,
                 "reason": "rebalance" } ],
+  "extras_available": true,
+  "monthly_returns": [ { "ym": "2025-11", "ret": 0.28, "benchmark": -2.72, "excess": 3.0 } ],
+  "drawdown_curve": [ { "date": "2025-10-21", "nav": 1.0, "peak": 1.0, "drawdown": 0.0 } ],
+  "rolling_excess_20d": [ { "date": "2025-10-21", "value": null } ],
+  "industry_exposure": [ { "date": "2025-10-22", "total_value": 998000.0, "cash": 120000.0,
+                           "cash_weight": 12.02, "stock_count": 20, "other_count": 1,
+                           "industries": [ { "name": "银行", "weight": 20.05,
+                                             "value": 200100.0, "count": 2 } ] } ],
   "created_at": "…" }
 ```
-### 6.2 GET `/api/v1/backtest/{bt_id}` — 同上；`GET /api/v1/backtest/{bt_id}/export.csv` — 净值曲线 CSV。
+### 6.2 GET `/api/v1/backtest/{bt_id}` — 同上；`GET /api/v1/backtest/{bt_id}/export.csv` — 净值曲线 CSV（含月度收益与回撤段，见 6.4）。
 
 ### 6.3 GET `/api/v1/backtest/{bt_id}/trades?code=`
 ```json
@@ -505,6 +513,30 @@ Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positi
 - 直接读 `backtest_run.trades`，**不重新计算回测**；`code` 可省略（省略返回全部），过滤按 6 位补零后精确匹配。
 - `shares=0` 的记录是被拒单（`reason ∈ limit_up/limit_down/suspended/no_data`），前端需与真实成交区分。
 - 回测不存在返回 404 `NOT_FOUND`。
+
+### 6.4 回测增强视图（T9）
+
+GET/POST 响应在 6.1 字段之外追加以下五项，全部由已落库的 `equity_curve` / `trades` 派生，**不重跑回测**：
+
+- `extras_available`：`equity_curve` 与 `trades` 均非空才为 true；旧记录返回 false，四个数组均为空。
+- `monthly_returns`：`[{ym, ret, benchmark, excess}]`，单位 %。
+  - 月度收益以「上月末净值」为基准串联（首月以月内首个净值点为基准），`∏(1+ret/100)-1` 与 `metrics.total_return` 一致（<0.1pp）；
+  - `benchmark` 历史不足时为 null，此时 `excess` 也为 null。
+- `drawdown_curve`：`[{date, nav, peak, drawdown}]`，`drawdown = (nav/peak-1)×100`，最小值等于 `metrics.max_drawdown×100`。
+- `rolling_excess_20d`：`[{date, value}]`，20 个交易区间滚动超额（%），前 20 个点为 null；基准缺失时对应点为 null。
+- `industry_exposure`：`[{date, total_value, cash, cash_weight, stock_count, other_count, industries:[{name, weight, value, count}]}]`，权重单位 %。
+  - 按成交重建调仓日持仓，估值用当日收盘价；当日无行情退化为最近收盘价，再无则用最近成交价；
+  - 行业取 `dim_stock.industry_l1`，缺失归入「其他」并由 `other_count` 计数；
+  - 末尾固定附「现金」桶（`count=0`），`industries` 权重之和恒为 100（±0.1pp）。
+
+`GET /api/v1/backtest/{bt_id}/export.csv` 依次输出（空行 + `#` 注释分隔）：
+
+1. 净值：`date,nav,benchmark`
+2. 月度收益（%）：`month,strategy,benchmark,excess`
+3. 回撤（%）：`date,nav,peak,drawdown`
+4. 成交（既有）：`date,code,name,side,price,shares,amount,fee,reason`
+
+CSV 与界面同源（同一引擎、同一单位）；月度与回撤为百分数、保留 2 位小数，净值沿用落库精度。
 
 ## 7. 前端路由
 

@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Download, FlaskConical, Loader2 } from 'lucide-react'
+import { Download, ExternalLink, FlaskConical, Loader2 } from 'lucide-react'
 import {
   CartesianGrid,
   Legend,
@@ -25,6 +25,7 @@ import type { BacktestMetrics } from '../types/backtest'
 import { fmtDate, fmtInt, fmtNumber, fmtRatio, shortDate } from '../lib/format'
 import { EmptyState, ErrorState } from './StateViews'
 import DataTable, { type DataTableColumn } from './DataTable'
+import BacktestExtras from './BacktestExtras'
 import type { BacktestTrade } from '../types/backtest'
 
 interface BacktestPanelProps {
@@ -149,6 +150,10 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
     }
   }
 
+  const stockLink = (code: string) => (
+    result ? `/stocks/${code}?bt=${result.bt_id}` : `/stocks/${code}`
+  )
+
   const tradeColumns: DataTableColumn<BacktestTrade>[] = [
     { key: 'date', header: '日期', value: (row) => row.date, sortable: true, render: (row) => fmtDate(row.date) },
     { key: 'code', header: '代码', value: (row) => row.code, render: (row) => <span className="font-mono">{row.code}</span> },
@@ -169,6 +174,24 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
     { key: 'amount', header: '金额', value: (row) => row.amount, align: 'right', render: (row) => fmtNumber(row.amount, 0) },
     { key: 'fee', header: '费用', value: (row) => row.fee, align: 'right', render: (row) => fmtNumber(row.fee, 2) },
     { key: 'reason', header: '原因', value: (row) => row.reason, align: 'left' },
+    {
+      key: 'kline',
+      header: 'K 线',
+      align: 'center',
+      render: (row) => (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            navigate(stockLink(row.code))
+          }}
+          className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+        >
+          在 K 线查看
+          <ExternalLink className="h-3 w-3" />
+        </button>
+      ),
+    },
   ]
 
   return (
@@ -291,6 +314,9 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
             </div>
           )}
 
+          {/* T9 派生视图：月收益 / 回撤 / 滚动超额 / 行业分布 */}
+          <BacktestExtras result={result} />
+
           {/* 成交明细（可折叠） */}
           <div>
             <button
@@ -308,7 +334,7 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
                   csvFilename={`trades_${result.bt_id}.csv`}
                   emptyText="本次回测没有成交记录"
                   maxHeight="360px"
-                  onRowClick={(row) => navigate(`/stocks/${row.code}`)}
+                  onRowClick={(row) => navigate(stockLink(row.code))}
                 />
               </div>
             )}

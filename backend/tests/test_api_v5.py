@@ -22,7 +22,9 @@ V5 API 集成测试（需要真实 PostgreSQL + 演示数据）
 """
 from __future__ import annotations
 
+import csv
 import os
+import uuid
 from datetime import date, timedelta
 
 import pytest
@@ -36,10 +38,10 @@ os.environ.setdefault("SCHEDULER_ENABLED", "0")
 os.environ.setdefault("AUTO_CREATE_TABLES", "0")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import func, select  # noqa: E402
+from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from app.db.models.strategy import StgRun, StgSignal  # noqa: E402
+from app.db.models.strategy import BacktestRun, StgRun, StgSignal  # noqa: E402
 from app.db.session import sync_engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.strategy.strategies import SPECS  # noqa: E402
@@ -355,9 +357,59 @@ def test_backtest_runs_and_persists(client):
     assert body["equity_curve"], "应有净值曲线"
     assert metrics["max_drawdown"] <= 0
 
+    # T9 派生视图：POST 即返回，避免前端二次请求
+    assert body["extras_available"] is True
+    monthly = body["monthly_returns"]
+    assert monthly and monthly[0]["ym"]
+    compounded = 1.0
+    for item in monthly:
+        if item["ret"] is not None:
+            compounded *= 1.0 + item["ret"] / 100.0
+    assert abs(compounded - 1.0 - metrics["total_return"]) < 0.001, "月度复利应与 total_return 自洽"
+
+    drawdowns = [item["drawdown"] for item in body["drawdown_curve"]]
+    assert len(drawdowns) == len(body["equity_curve"])
+    assert min(drawdowns) == pytest.approx(metrics["max_drawdown"] * 100, abs=1e-4)
+
+    assert len(body["rolling_excess_20d"]) == len(body["equity_curve"])
+    assert all(item["value"] is None for item in body["rolling_excess_20d"][:20])
+
+    exposure = body["industry_exposure"]
+    assert exposure, "有成交时应能重建行业分布"
+    for snapshot in exposure:
+        weights = sum(item["weight"] for item in snapshot["industries"])
+        assert weights == pytest.approx(100.0, abs=0.1), "行业权重 + 现金必须为 100%"
+        assert any(item["name"] == "现金" for item in snapshot["industries"])
+
     again = client.get(f"/api/v1/backtest/{body['bt_id']}")
     assert again.status_code == 200
-    assert again.json()["bt_id"] == body["bt_id"]
+    again_body = again.json()
+    assert again_body["bt_id"] == body["bt_id"]
+    assert again_body["monthly_returns"] == monthly
+    assert again_body["extras_available"] is True
+
+    # CSV 的月度/回撤 block 与界面同口径（百分数，2 位小数）
+    export = client.get(f"/api/v1/backtest/{body['bt_id']}/export.csv")
+    assert export.status_code == 200
+    lines = export.content.decode("utf-8-sig").splitlines()
+    month_index = lines.index("# monthly returns (%)")
+    assert lines[month_index + 1] == "month,strategy,benchmark,excess"
+    row = next(csv.reader([lines[month_index + 2]]))
+    assert row[0] == monthly[0]["ym"]
+    assert float(row[1]) == round(monthly[0]["ret"], 2)
+    if monthly[0]["benchmark"] is not None:
+        assert float(row[2]) == round(monthly[0]["benchmark"], 2)
+
+    dd_index = lines.index("# drawdown (%)")
+    assert lines[dd_index + 1] == "date,nav,peak,drawdown"
+    dd_lines: list[list[str]] = []
+    for line in lines[dd_index + 2:]:
+        if not line or line.startswith("#"):
+            break
+        dd_lines.append(next(csv.reader([line])))
+    dd_map = {row[0]: float(row[3]) for row in dd_lines}
+    worst = min(body["drawdown_curve"], key=lambda item: item["drawdown"])
+    assert dd_map[worst["date"]] == round(worst["drawdown"], 2)
 
     # 成交明细接口：复用已落库 trades，不重算
     trades_resp = client.get(f"/api/v1/backtest/{body['bt_id']}/trades")
@@ -374,6 +426,41 @@ def test_backtest_runs_and_persists(client):
     missing = client.get("/api/v1/backtest/BT-NOT-EXIST/trades")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_backtest_extras_unavailable_for_legacy_record(client):
+    """T9：旧记录没有曲线/成交时不能假装能派生，必须返回 extras_available=false。"""
+    bt_id = f"BT-LEGACY-{uuid.uuid4().hex[:8]}"
+    with Session(sync_engine) as session:
+        session.add(BacktestRun(
+            bt_id=bt_id,
+            algo_code="a3",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+            params={},
+            metrics={},
+            equity_curve=[],
+            trades=[],
+            status="success",
+        ))
+        session.commit()
+    try:
+        resp = client.get(f"/api/v1/backtest/{bt_id}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["extras_available"] is False
+        for key in ("monthly_returns", "drawdown_curve", "rolling_excess_20d", "industry_exposure"):
+            assert body[key] == []
+
+        export = client.get(f"/api/v1/backtest/{bt_id}/export.csv")
+        assert export.status_code == 200
+        text = export.content.decode("utf-8-sig")
+        assert "# monthly returns (%)" in text
+        assert "# drawdown (%)" in text
+    finally:
+        with Session(sync_engine) as session:
+            session.execute(delete(BacktestRun).where(BacktestRun.bt_id == bt_id))
+            session.commit()
 
 
 # ============================================================
