@@ -313,9 +313,10 @@ def _assemble(
     items: list[dict],
     *,
     from_cache: bool,
+    market_gate: dict | None = None,
 ) -> dict:
     """组装契约 5.2 响应。"""
-    return {
+    response = {
         "algo": spec.code,
         "algo_name": spec.name,
         "trade_date": run.trade_date.isoformat() if run.trade_date else None,
@@ -324,6 +325,9 @@ def _assemble(
         "count": len(items),
         "data": items,
     }
+    if market_gate is not None:
+        response["market_gate"] = strat.jsonable(market_gate)
+    return response
 
 
 async def _load_signal_rows(db: AsyncSession, run_id: str) -> list[StgSignal]:
@@ -373,7 +377,14 @@ async def get_cached_run(
             "策略缓存命中 algo=%s date=%s run_id=%s params=%s",
             spec.code, trade_date, run.run_id, fingerprint,
         )
-        return _assemble(run, spec, _items_from_signals(signals), from_cache=True)
+        market_gate = None
+        if spec.code in {"b4", "b5"}:
+            market_gate = strat.market_gate_payload(
+                await strat.load_market_context(db, trade_date), spec.code
+            )
+        return _assemble(
+            run, spec, _items_from_signals(signals), from_cache=True, market_gate=market_gate
+        )
     return None
 
 
@@ -466,6 +477,7 @@ async def _run_strategy_impl(
     try:
         candidates = await strat.build_candidates(spec.code, resolved_date, normalized, db)
         universe_count = int(candidates.attrs.get("universe_count", len(candidates)))
+        market_gate = strat.market_gate_payload(candidates.attrs.get("market"), spec.code)
         signals = strat.rank_signals(spec.code, candidates, normalized)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         items = _items_from_frame(signals)
@@ -500,7 +512,7 @@ async def _run_strategy_impl(
             "策略执行完成 algo=%s date=%s run_id=%s universe=%d signals=%d elapsed=%dms",
             spec.code, resolved_date, run_id, universe_count, len(items), elapsed_ms,
         )
-        return _assemble(run, spec, items, from_cache=False)
+        return _assemble(run, spec, items, from_cache=False, market_gate=market_gate)
 
     except Exception as exc:  # noqa: BLE001 - 失败也要留 run 记录再抛出
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -561,7 +573,14 @@ async def get_run(run_id: str) -> dict | None:
                 defaults={},
             )
         signals = await _load_signal_rows(db, run.run_id)
-        return _assemble(run, spec, _items_from_signals(signals), from_cache=True)
+        market_gate = None
+        if run.algo_code in {"b4", "b5"}:
+            market_gate = strat.market_gate_payload(
+                await strat.load_market_context(db, run.trade_date), run.algo_code
+            )
+        return _assemble(
+            run, spec, _items_from_signals(signals), from_cache=True, market_gate=market_gate
+        )
 
 
 async def list_runs(

@@ -680,6 +680,41 @@ async def load_market_context(
     }
 
 
+def market_gate_payload(market: dict | None, algo_code: str) -> dict[str, Any] | None:
+    """run 级市场门槛摘要（B4/B5），用于 0 信号时解释原因。"""
+    if not market:
+        return None
+    available = bool(market.get("available", False))
+    payload: dict[str, Any] = {
+        "index_code": market.get("index_code", BENCHMARK_INDEX_CODE),
+        "available": available,
+        "close": jsonable(market.get("close")),
+        "ma20": jsonable(market.get("ma20")),
+        "pct_chg": jsonable(market.get("pct_chg")),
+    }
+    if not available:
+        payload.update({"passed": True, "rule": "指数数据缺失，市场门槛按放行处理"})
+        return payload
+    if algo_code == "b4":
+        ma20 = market.get("ma20")
+        payload.update(
+            {
+                "passed": bool(market.get("b4_ok", True)),
+                "rule": "沪深300 收盘 ≥ MA20 × 0.995",
+                "threshold": None if ma20 is None else round(float(ma20) * 0.995, 4),
+            }
+        )
+    else:
+        payload.update(
+            {
+                "passed": bool(market.get("b5_ok", True)),
+                "rule": "沪深300 当日跌幅 > -2%",
+                "threshold": -2.0,
+            }
+        )
+    return payload
+
+
 def _to_float_series(series: pd.Series) -> pd.Series:
     """列转 float64（Decimal/字符串/None → float/NaN），空列安全。
 
@@ -1521,6 +1556,7 @@ __all__ = [
     "listed_trading_days",
     "apply_common_filters",
     "load_market_context",
+    "market_gate_payload",
     "rank_signals",
     "build_candidates",
 ]

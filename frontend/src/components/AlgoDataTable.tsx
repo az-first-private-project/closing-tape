@@ -5,11 +5,13 @@
  * 复用泛型 DataTable：支持排序、行点击跳个股详情、前端 CSV 导出。
  */
 import { useMemo } from 'react'
+import { Info } from 'lucide-react'
 import {
   rowScore,
   type AlgoMetricScalar,
   type AlgoParamsSnapshot,
   type AlgoStockRow,
+  type MarketGate,
 } from '../types/algo'
 import { fmtMetricValue } from '../lib/format'
 import DataTable, { type DataTableColumn } from './DataTable'
@@ -24,6 +26,8 @@ interface Props {
   fullDesc?: string | null
   /** run 参数快照（底部固定行） */
   params?: AlgoParamsSnapshot | null
+  /** B4/B5 的 run 级市场门槛（0 信号时解释原因） */
+  marketGate?: MarketGate | null
 }
 
 /** 无综合评分时，「得分」列展示各策略的排序指标 */
@@ -135,6 +139,26 @@ function isExplainable(algo?: string): boolean {
   return algo === 'a3' || /^b[1-5]$/.test(algo ?? '')
 }
 
+function fmtGateValue(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : value.toFixed(2)
+}
+
+/** 市场门槛提示：未通过或指数缺失时才返回文案 */
+function marketGateNotice(algo: string | undefined, gate?: MarketGate | null): string | null {
+  if (!gate) return null
+  if (gate.available === false) {
+    return '沪深300 指数数据缺失，市场门槛按放行处理。'
+  }
+  if (gate.passed !== false) return null
+  if (algo === 'b4') {
+    return `市场环境要求未满足：沪深300 收盘 ${fmtGateValue(gate.close)} < MA20 × 0.995 = ${fmtGateValue(gate.threshold)}，本次不产生信号。`
+  }
+  if (algo === 'b5') {
+    return `市场环境要求未满足：沪深300 当日涨跌幅 ${fmtGateValue(gate.pct_chg)}% ≤ -2%，本次不产生信号。`
+  }
+  return '市场环境要求未满足，本次不产生信号。'
+}
+
 export default function AlgoDataTable({
   data,
   algo,
@@ -142,8 +166,11 @@ export default function AlgoDataTable({
   csvFilename,
   fullDesc,
   params,
+  marketGate,
 }: Props) {
   const explainable = isExplainable(algo)
+  const gateNotice = marketGateNotice(algo, marketGate)
+  const gateBlocked = marketGate?.passed === false
   /**
    * 动态指标列：按首次出现顺序取并集。
    * 只有「得分」列本身展示该策略排序指标时才跳过，避免排序依据被隐藏
@@ -212,33 +239,41 @@ export default function AlgoDataTable({
   }, [metricKeys])
 
   return (
-    <DataTable
-      columns={columns}
-      rows={data}
-      rowKey={(row, index) => `${row.code}-${index}`}
-      onRowClick={onRowClick}
-      initialSort={{ key: 'rank', direction: 'asc' }}
-      csvFilename={csvFilename}
-      emptyText="本次运行没有选股信号"
-      maxHeight="520px"
-      renderExpanded={
-        explainable
-          ? (row) => (
-              <SignalExplanation
-                algo={algo}
-                row={row}
-                fullDesc={fullDesc}
-                params={params}
-              />
-            )
-          : undefined
-      }
-      footer={
-        <span>
-          共 {data.length} 条 · 动态指标 {metricKeys.length} 列 · 点击行可查看个股详情
-          {explainable && ' · 点击左侧箭头查看信号依据'}
-        </span>
-      }
-    />
+    <div className="space-y-2">
+      {gateNotice && (
+        <p className="flex items-start gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{gateNotice}</span>
+        </p>
+      )}
+      <DataTable
+        columns={columns}
+        rows={data}
+        rowKey={(row, index) => `${row.code}-${index}`}
+        onRowClick={onRowClick}
+        initialSort={{ key: 'rank', direction: 'asc' }}
+        csvFilename={csvFilename}
+        emptyText={gateBlocked ? '市场环境未满足，本次无信号' : '本次运行没有选股信号'}
+        maxHeight="520px"
+        renderExpanded={
+          explainable
+            ? (row) => (
+                <SignalExplanation
+                  algo={algo}
+                  row={row}
+                  fullDesc={fullDesc}
+                  params={params}
+                />
+              )
+            : undefined
+        }
+        footer={
+          <span>
+            共 {data.length} 条 · 动态指标 {metricKeys.length} 列 · 点击行可查看个股详情
+            {explainable && ' · 点击左侧箭头查看信号依据'}
+          </span>
+        }
+      />
+    </div>
   )
 }

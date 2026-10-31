@@ -58,6 +58,7 @@ from app.strategy.strategies import (  # noqa: E402
     _score_breakdown,
     _validate_params,
     apply_common_filters,
+    market_gate_payload,
     rank_signals,
 )
 
@@ -500,6 +501,40 @@ def test_a3_score_breakdown_uses_persisted_detail() -> None:
         part["contribution"] for part in partial["parts"] if part["contribution"] is not None
     ) == pytest.approx(partial["composite"], abs=0.01)
     json.dumps(partial, ensure_ascii=False, allow_nan=False)
+
+
+def test_market_gate_payload_for_run_level_hint() -> None:
+    """B4/B5 的 run 级门槛摘要：0 信号时前端可解释原因，缓存 run 也能现算。"""
+    market = {
+        "available": True,
+        "index_code": "000300",
+        "close": 4103.54,
+        "ma20": 4275.67,
+        "pct_chg": -0.8,
+        "b4_ok": False,
+        "b5_ok": True,
+    }
+    b4 = market_gate_payload(market, "b4")
+    assert b4 is not None
+    assert b4["passed"] is False
+    assert b4["threshold"] == pytest.approx(4254.29165, abs=0.01)
+    assert b4["rule"] == "沪深300 收盘 ≥ MA20 × 0.995"
+    assert b4["close"] == pytest.approx(4103.54)
+
+    b5 = market_gate_payload(market, "b5")
+    assert b5 is not None
+    assert b5["passed"] is True
+    assert b5["threshold"] == -2.0
+
+    missing = market_gate_payload(
+        {"available": False, "index_code": "000300", "b4_ok": True, "b5_ok": True}, "b4"
+    )
+    assert missing is not None
+    assert missing["available"] is False
+    assert missing["passed"] is True
+    assert "放行" in missing["rule"]
+    assert market_gate_payload(None, "b4") is None
+    json.dumps(b4, ensure_ascii=False, allow_nan=False)
 
 
 # =====================================================================

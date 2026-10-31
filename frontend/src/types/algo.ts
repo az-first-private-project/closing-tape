@@ -149,12 +149,26 @@ export function rowScore(row: AlgoStockRow): number | null {
   return null
 }
 
+/** run 级市场门槛摘要（仅 B4/B5，0 信号时解释原因） */
+export interface MarketGate {
+  index_code: string | null
+  available: boolean
+  close: number | null
+  ma20: number | null
+  pct_chg: number | null
+  passed: boolean | null
+  rule?: string | null
+  threshold?: number | null
+}
+
 /** GET /api/v1/algo/{algo_code} 响应（5.2） */
 export interface AlgoResult {
   algo: string
   algo_name: string
   trade_date: string
   run: AlgoRun
+  /** B4/B5 的市场环境要求（其他策略不返回） */
+  market_gate?: MarketGate | null
   from_cache: boolean
   count: number
   data: AlgoStockRow[]

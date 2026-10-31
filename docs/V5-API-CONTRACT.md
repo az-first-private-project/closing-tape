@@ -270,6 +270,18 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `data[].metrics` 为策略依据的完整指标，前端表格列由 `metrics` 动态生成。
 - `run` 额外字段：`status`（running/success/failed）、失败时 `error`、回测 run 带 `is_backtest`。
 
+**run 级市场门槛 `market_gate`（仅 B4/B5，V6 T7 补充）**
+
+b4/b5 每次响应顶层带 `market_gate`（新 run 与缓存 run 均按 `trade_date` 现算，不落库）：
+```json
+{ "index_code": "000300", "available": true, "close": 4103.54, "ma20": 4275.67,
+  "pct_chg": -0.8, "passed": false, "rule": "沪深300 收盘 ≥ MA20 × 0.995",
+  "threshold": 4254.2916 }
+```
+- `passed` 为该策略对应的门槛（b4=`b4_ok`，b5=`b5_ok`）；`rule` / `threshold` 供 UI 展示。
+- 指数数据缺失时 `available=false`、`passed=true`（按放行处理），`rule` 说明原因。
+- 0 信号时前端据此显示“市场环境要求未满足…”，而非笼统的“没有选股信号”。
+
 **逐条依据 `metrics.triggered`（B1–B5，V6 T7）**
 
 每个信号附带条件树逐条求值结果，与选股共用同一份 `CONDITION_SPECS`，不另建解释表：

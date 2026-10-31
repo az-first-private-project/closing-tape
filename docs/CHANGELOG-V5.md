@@ -533,3 +533,10 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 缓存键不含代码版本，重构前的历史 run 不会自动补 `triggered`；需按上述部署步骤手动 refresh 最新交易日。更早历史 run 只能显示降级提示。
 - b4 当前因市场门槛无真实信号，市场条件分组用 b5 验证；门槛由单元测试覆盖（`test_b4_market_scope_and_gate`）。
 - A3 某因子全市场无分位时不计入 `weight_sum`、`contribution` 为 `null`，但分项条仍显示中性 5.0 分；面板已写明该口径，逐项贡献之和仍与综合分一致。`raw` 为空的因子显示"因子输入缺失"。
+
+### 7.9 B4/B5 run 级市场门槛提示（2026-10-31）
+
+- 响应顶层新增 `market_gate`（仅 b4/b5）：`index_code / available / close / ma20 / pct_chg / passed / rule / threshold`，用于 0 信号时解释原因。
+- 不新增表/列：新 run 直接取 `build_candidates` 的 `attrs["market"]`；缓存 run 与 run 详情按 `trade_date` 调用 `load_market_context` 现算，旧 run 同样可显示。
+- 前端在门槛未通过或指数缺失时，于结果表上方显示原因（b4：收盘 < MA20 × 0.995；b5：当日跌幅 ≤ -2%），空态文案同步为“市场环境未满足”。
+- 验证：b4 2026-10-26 显示“沪深300 收盘 4103.54 < MA20 × 0.995 = 4254.29，本次不产生信号”；缓存回读一致；pytest / build / 浏览器通过。
