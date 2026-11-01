@@ -604,3 +604,38 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 **已知**
 
 - 本地个股行情截至 2026-10-26，而交易日历到 2026-10-30，直接用默认结束日期会报「2026-10-29 无个股行情数据」；需回补行情或把结束日选到数据就绪日。
+
+### 7.12 T10 参数敏感性矩阵（2026-11-01）
+
+**目标**：`rebalance_days × max_positions` 二维扫描，每格一次独立回测（复用同一引擎），热力图观察参数稳健性；同参数重发命中复用，不重复计算。
+
+**后端**
+
+- `backtest_run` 新增 `grid_id VARCHAR(36)`、`grid_cell JSONB` 与 `ix_backtest_run_grid`（Alembic `0007_backtest_grid`）；`grid_cell` 保存两轴坐标、区间与 `reused` 标记，矩阵可由行重建、不另建表。
+- 新增 `app/strategy/grid.py`：两轴去重升序、范围校验（1–250 / 1–100）、**24 格硬上限**（422 带 `detail.max_cells`）；按 `(algo,start,end,参数子集)` 命中 success 记录直接复用；未命中先落 `queued` 行，响应后由后台任务逐格执行。
+- `run_backtest` 增加可选 `bt_id`：复用调用方预建记录（同一条引擎代码路径，无特殊回测分支）；每格独立会话/事务，单格异常只标记该格 failed。
+- 后台并发信号量 2，按事件循环惰性绑定（TestClient/多循环安全）；格内 `limit` 抬到 `max(limit, max_positions)`，与落库快照同口径，避免“执行参数 ≠ 复用比对参数”导致永远不复用。
+- `POST /api/v1/backtest/{algo_code}/grid` 立即返回（`elapsed_ms=0`）；起始日早于数据起点自动裁剪并回传 `requested_start/effective_start/start_trimmed`；区间上限 6 年。
+- `GET /api/v1/backtest/grid/{grid_id}` 返回每格 `metrics` 六项摘要、`progress{done,total,failed}`、`total_elapsed_ms` 与 `aligned`（起止日 + 日历来源多数派）；不重算回测；未知 `grid_id` 404。
+
+**前端**
+
+- `BacktestPanel` 改为「单次回测 / 参数敏感性」两个标签页；T9 结果视图抽为 `BacktestResultView`，单次结果与矩阵单格详情共用。
+- 新增 `SensitivityMatrix.tsx`：结束日默认取 `/health.latest_trade_date`（避免行情落后自然日）；两轴多选预设 + 24 格超限提示；扫描中 3s 轮询、标签页隐藏或矩阵完成即停止；`grid_id`、进度、失败数与计算耗时合计。
+- 热力图：超额/回撤双向色阶（A 股红涨绿跌），可切 Sharpe/胜率/交易笔数；格内第二行固定对照回撤（或超额）；复用格标记「复用」；点击格展开完整 T9 回测视图。
+- 过拟合提示：默认参数格 vs 矩阵最优格，叠加四邻域超额极差；默认明显落后且邻域波动 ≥2pp 时给出「不建议把最优格当实盘参数」警告。
+- `vite.config.ts` 为 `/health` 增加 dev 代理（nginx 早已单独反代），否则 dev 下取不到最新交易日、矩阵默认结束日会落在无行情日期。
+
+**验证（数据截至 2026-10-26）**
+
+- 后端 2×2（`[10,20]×[10,20]`，2025-11-01~2026-10-26）：4 格独立 `bt_id` 均可 GET；后台并发实测进度 0→2→4；默认格 (20,20) 与 T9 单次回测六项指标完全一致（`total_return 0.130864` / `excess_return 0.249027` / `max_drawdown -0.103659` / `sharpe 0.8692` / `win_rate 0.3694` / `trade_count 242`）。
+- 重发同一矩阵：`reused=4, queued=0, elapsed_ms=0`，`bt_id` 不变、`backtest_run` 行数不增；失败格（未来无交易日）与区间/日历不一致格的隔离与 `aligned=false` 均有集成测试覆盖。
+- 浏览器（`Chrome/156.0.8078.48`，`--remote-debugging-pipe` 双真实标签页，反节流开关开启）：起始页 3 次请求（前置窗口），第二标签页激活后 `visibilityState` 由 `visible→hidden`、8s 后台窗口 **0 次**请求（`intervalsCovered=2.67`），回前台后 `hidden→visible` 并恢复 **3 次**（`gapS` 13.2/4.1/3.0）；矩阵完成后 7s 内 **0 次**请求，Console 无错误，退出码 0。
+- 同一轮浏览器跑默认 2×2（`[20,40]×[10,20]`，2025-01-02~2026-10-26）：`grid_id e828bbf1…` 4/4 完成、失败 0、耗时合计 1 分 28 秒（36.81/6.93/37.08/7.26 s）；热力图按超额红涨绿跌着色、回撤第二行、过拟合提示（默认 (20,20) 超额 +18.17%，邻域极差 20.47 pp），无 `NaN/undefined/-0.00%`。此前一轮已验证五种指标切换、复用标记、单格完整 T9 视图与亮/暗主题。
+- `pytest` 全量 **300 passed**（含 `test_grid_unit.py` 10 项与 `test_api_v5.py` T10 集成测试）；`npm run build` 通过（index 959.32 kB / gzip 282.12 kB，CSS 46.44 kB，KlineChart 194.96 kB，仅 chunk 体积告警）。
+
+**已知**
+
+- 复用会把历史记录 `grid_id` 改挂到最新矩阵，旧 `grid_id` 随即 404；矩阵链接不持久化，单机自用可接受。要保留历史需增加 `backtest_grid` 主表 + 关联表（约 1 张表 + 2 个接口，成本约半天）。
+- 后台执行是进程内 `BackgroundTasks`，服务重启会留下 `queued/running` 行且不会自动续跑；当前由用户重发矩阵触发复用/重算兜底。要可靠续跑需引入任务队列（成本高，暂不做）。
+- 并发上限 2 是进程内信号量；若未来多 worker 部署，实际并发为 2×worker 数，应改为数据库/队列级并发控制。

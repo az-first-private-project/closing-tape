@@ -7,6 +7,11 @@ const API_PROXY = {
     target: 'http://localhost:8000',
     changeOrigin: true,
   },
+  // /health 不在 /api 前缀下；nginx 已单独反代，dev 也需保持一致
+  '/health': {
+    target: 'http://localhost:8000',
+    changeOrigin: true,
+  },
 }
 
 export default defineConfig({

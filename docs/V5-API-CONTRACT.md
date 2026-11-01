@@ -538,6 +538,58 @@ GET/POST 响应在 6.1 字段之外追加以下五项，全部由已落库的 `e
 
 CSV 与界面同源（同一引擎、同一单位）；月度与回撤为百分数、保留 2 位小数，净值沿用落库精度。
 
+### 6.5 参数敏感性矩阵（T10）
+
+POST `/api/v1/backtest/{algo_code}/grid`，body：
+
+```json
+{ "start_date": "2025-11-01", "end_date": "2026-10-26",
+  "rebalance_days": [20, 40], "max_positions": [10, 20],
+  "strategy": { "limit": 20, "min_score": 6.0 } }
+```
+
+- 两轴各 1–10 个取值，去重升序；笛卡尔积上限 **24 格**，超出返回 422 `INVALID_PARAM`
+  （`detail: {cells, max_cells: 24}`）。
+- `start_date < end_date`，区间不超过 6 年；起始日早于该策略数据起点时自动裁剪，
+  响应中的 `requested_start` / `effective_start` / `start_trimmed` 如实标注。
+- 每个格子是一次独立回测（`backtest_run`，`status: queued → running → success|failed`），
+  各自独立事务，单格失败不影响其余格；后台并发上限 2。
+- **复用**：`(algo, start, end)` 相同且参数子集一致、状态为 success 的既有回测直接复用，
+  不重新计算。复用行会挂到新 `grid_id`（旧 `grid_id` 不再可查，只有最新矩阵持有该行）。
+- 立即返回（`elapsed_ms` 恒为 0），计算在后台进行：
+
+```json
+{ "grid_id": "…", "algo": "a3", "start_date": "2025-11-01", "end_date": "2026-10-26",
+  "requested_start": "2025-11-01", "effective_start": "2025-11-01", "start_trimmed": false,
+  "axes": { "rebalance_days": [20, 40], "max_positions": [10, 20] },
+  "cells": [ { "bt_id": "…", "params": { "rebalance_days": 20, "max_positions": 10 },
+               "rebalance_days": 20, "max_positions": 10, "status": "queued", "reused": false } ],
+  "total": 4, "reused": 0, "queued": 4, "elapsed_ms": 0 }
+```
+
+GET `/api/v1/backtest/grid/{grid_id}`：
+
+```json
+{ "grid_id": "…", "algo": "a3", "start_date": "2025-11-01", "end_date": "2026-10-26",
+  "axes": { "rebalance_days": [20, 40], "max_positions": [10, 20] },
+  "cells": [ { "bt_id": "…", "params": { "rebalance_days": 20, "max_positions": 10 },
+               "rebalance_days": 20, "max_positions": 10,
+               "status": "success", "reused": false,
+               "metrics": { "total_return": 0.1309, "excess_return": 0.249,
+                            "max_drawdown": -0.1037, "sharpe": 0.87,
+                            "win_rate": 0.369, "trade_count": 242 },
+               "elapsed_ms": 9282, "error": null, "aligned": true } ],
+  "progress": { "done": 4, "total": 4, "failed": 0 },
+  "total_elapsed_ms": 122990, "created_at": "…" }
+```
+
+- `metrics` 为 6.1 指标的子集，单位仍为小数比率；未完成的格 `metrics=null`，失败格附 `error`。
+- `aligned`：该格的起止日与交易日历来源与矩阵多数格一致才为 true；false 的格不参与热力图对比，
+  但 `bt_id` 仍可直接查 6.2。
+- 每个 `bt_id` 可独立 `GET /api/v1/backtest/{bt_id}`；未知 `grid_id` 返回 404 `NOT_FOUND`。
+- 重发完全相同的矩阵会全部命中复用：`reused=total`、`queued=0`、`elapsed_ms=0`，
+  且不新增 `backtest_run` 行。
+
 ## 7. 前端路由
 
 | 路由 | 页面 |

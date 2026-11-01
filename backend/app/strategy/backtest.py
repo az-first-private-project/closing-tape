@@ -661,8 +661,13 @@ async def run_backtest(
     strategy_params: dict | None = None,
     bt_params: dict | None = None,
     db: AsyncSession | None = None,
+    bt_id: str | None = None,
 ) -> dict:
-    """执行回测并落 ``backtest_run``，返回契约 6.1 结构。"""
+    """执行回测并落 ``backtest_run``，返回契约 6.1 结构。
+
+    ``bt_id`` 可复用调用方预建的记录（参数敏感性矩阵的排队格），
+    用于在同一引擎路径下更新状态，不新增特殊回测分支。
+    """
     spec = strat.get_spec(algo_code)
     backtest_params = BacktestParams.from_dict(bt_params)
     normalized = strat._validate_params(spec.code, strategy_params)  # noqa: SLF001
@@ -679,11 +684,13 @@ async def run_backtest(
     if db is not None:
         # 调用方持有事务：只 flush，不 commit（契约与 run_strategy 一致）
         return await _run_backtest_impl(
-            db, spec, backtest_params, normalized, start_date, end_date, owns_session=False
+            db, spec, backtest_params, normalized, start_date, end_date,
+            owns_session=False, bt_id=bt_id,
         )
     async with AsyncSessionLocal() as session:
         return await _run_backtest_impl(
-            session, spec, backtest_params, normalized, start_date, end_date, owns_session=True
+            session, spec, backtest_params, normalized, start_date, end_date,
+            owns_session=True, bt_id=bt_id,
         )
 
 
@@ -696,25 +703,47 @@ async def _run_backtest_impl(
     end_date: date,
     *,
     owns_session: bool,
+    bt_id: str | None = None,
 ) -> dict:
     """回测实现：落 running → 调仓信号 → 预取行情 → 模拟 → 绩效 → 落库。
 
     事务所有权：``db=None``（自建会话）时自行 commit（失败也留记录）；
     调用方传 db 时只 flush，commit/rollback 由调用方负责。
     """
-    bt_id = str(uuid.uuid4())
-    record = BacktestRun(
-        bt_id=bt_id,
-        algo_code=spec.code,
-        start_date=start_date,
-        end_date=end_date,
-        params={
+    record: BacktestRun | None = None
+    if bt_id is not None:
+        record = await db.get(BacktestRun, bt_id)
+        if record is None:
+            raise InvalidParamError(
+                f"回测记录不存在: {bt_id}", detail={"bt_id": bt_id}
+            )
+        record.algo_code = spec.code
+        record.start_date = start_date
+        record.end_date = end_date
+        record.params = {
             **backtest_params.as_snapshot(),
             "strategy": dict(strategy_params),
-        },
-        status="running",
-    )
-    db.add(record)
+        }
+        record.status = "running"
+        record.error = None
+        record.metrics = None
+        record.equity_curve = None
+        record.trades = None
+        record.elapsed_ms = None
+    else:
+        bt_id = str(uuid.uuid4())
+        record = BacktestRun(
+            bt_id=bt_id,
+            algo_code=spec.code,
+            start_date=start_date,
+            end_date=end_date,
+            params={
+                **backtest_params.as_snapshot(),
+                "strategy": dict(strategy_params),
+            },
+            status="running",
+        )
+        db.add(record)
     if owns_session:
         await db.commit()  # 失败也留痕（D4 硬要求）
     else:

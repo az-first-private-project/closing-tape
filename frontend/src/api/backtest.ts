@@ -2,7 +2,14 @@
  * 回测 API（契约第 6 节）
  */
 import { downloadCsv, request } from './client'
-import type { BacktestOptions, BacktestResult, BacktestTradesResponse } from '../types/backtest'
+import type {
+  BacktestGridCreateResponse,
+  BacktestGridDetail,
+  BacktestGridRequest,
+  BacktestOptions,
+  BacktestResult,
+  BacktestTradesResponse,
+} from '../types/backtest'
 
 /**
  * 运行回测（6.1 POST /backtest/{algo_code}）
@@ -44,4 +51,20 @@ export function fetchBacktestTrades(
 /** 导出净值曲线 CSV（6.2） */
 export function downloadBacktestCsv(btId: string): Promise<void> {
   return downloadCsv(`/backtest/${encodeURIComponent(btId)}/export.csv`, undefined, `backtest_${btId}.csv`)
+}
+
+/** 建立参数敏感性矩阵（T10）；后台逐格执行，立即返回 grid_id */
+export function createBacktestGrid(
+  algoCode: string,
+  payload: BacktestGridRequest,
+): Promise<BacktestGridCreateResponse> {
+  return request<BacktestGridCreateResponse>(
+    `/backtest/${encodeURIComponent(algoCode)}/grid`,
+    { method: 'POST', body: payload },
+  )
+}
+
+/** 查询矩阵状态与每格指标（T10） */
+export function fetchBacktestGrid(gridId: string): Promise<BacktestGridDetail> {
+  return request<BacktestGridDetail>(`/backtest/grid/${encodeURIComponent(gridId)}`)
 }

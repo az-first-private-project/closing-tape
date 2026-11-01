@@ -513,3 +513,183 @@ def test_watch_state_validation(watch_state_client):
         resp = client.put("/api/v1/watchlist", json=payload)
         assert resp.status_code == 422, (payload, resp.text)
         assert resp.json()["error"]["code"] == "INVALID_PARAM"
+
+
+# ============================================================
+# 参数敏感性矩阵（T10）
+# ============================================================
+
+def test_backtest_grid_end_to_end_and_reuse(client):
+    latest = client.get("/api/v1/market/dashboard").json()["trade_date"]
+    end = date.fromisoformat(latest)
+    requested_start = (end - timedelta(days=180)).isoformat()
+
+    # 先跑一次默认参数单回测，作为“同一格就是同一次回测”的基准
+    single = client.post(
+        f"/api/v1/backtest/a3?rebalance_days=20&max_positions=20"
+        f"&start={requested_start}&end={latest}"
+    )
+    assert single.status_code == 200, single.text
+    base = single.json()
+
+    payload = {
+        "start_date": base["start_date"],
+        "end_date": base["end_date"],
+        "rebalance_days": [20, 30],
+        "max_positions": [5, 20],
+    }
+    with Session(sync_engine) as session:
+        before = session.scalar(select(func.count()).select_from(BacktestRun))
+
+    resp = client.post("/api/v1/backtest/a3/grid", json=payload)
+    assert resp.status_code == 200, resp.text
+    grid = resp.json()
+    assert grid["total"] == 4
+    assert grid["elapsed_ms"] == 0
+    assert grid["queued"] == 4 - grid["reused"]
+    assert grid["reused"] >= 1
+    queued_cells = [c for c in grid["cells"] if not c["reused"]]
+    assert all(c["status"] == "queued" for c in queued_cells)
+
+    detail = client.get(f"/api/v1/backtest/grid/{grid['grid_id']}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["progress"] == {"done": 4, "total": 4, "failed": 0}
+    assert body["start_date"] == base["start_date"]
+    assert body["end_date"] == base["end_date"]
+    assert body["axes"]["rebalance_days"] == [20, 30]
+    assert body["axes"]["max_positions"] == [5, 20]
+    assert all(cell["aligned"] for cell in body["cells"])
+
+    by_key = {(c["rebalance_days"], c["max_positions"]): c for c in body["cells"]}
+    default_cell = by_key[(20, 20)]
+    assert default_cell["bt_id"] == base["bt_id"], "默认参数格必须复用同一行回测"
+    for key in ("total_return", "excess_return", "max_drawdown", "sharpe",
+                "win_rate", "trade_count"):
+        assert default_cell["metrics"][key] == base["metrics"][key]
+
+    # 每格 bt_id 均可独立 GET（同一套回测详情/派生视图）
+    first_elapsed = {}
+    for cell in body["cells"]:
+        one = client.get(f"/api/v1/backtest/{cell['bt_id']}")
+        assert one.status_code == 200, one.text
+        assert one.json()["status"] == "success"
+        first_elapsed[cell["bt_id"]] = cell["elapsed_ms"]
+
+    with Session(sync_engine) as session:
+        after_first = session.scalar(select(func.count()).select_from(BacktestRun))
+
+    # 重发同参数矩阵 → 全部命中复用，不新增回测行
+    again = client.post("/api/v1/backtest/a3/grid", json=payload).json()
+    assert again["grid_id"] != grid["grid_id"]
+    assert again["reused"] == 4 and again["queued"] == 0
+    assert again["elapsed_ms"] == 0
+    assert {c["bt_id"] for c in again["cells"]} == set(first_elapsed)
+
+    with Session(sync_engine) as session:
+        after_second = session.scalar(select(func.count()).select_from(BacktestRun))
+    assert after_second == after_first, "复用矩阵不应新增 backtest_run 行"
+
+    again_detail = client.get(f"/api/v1/backtest/grid/{again['grid_id']}").json()
+    assert again_detail["progress"] == {"done": 4, "total": 4, "failed": 0}
+    for cell in again_detail["cells"]:
+        assert cell["reused"] is True
+        assert cell["elapsed_ms"] == first_elapsed[cell["bt_id"]], "复用不得重算耗时"
+
+
+def test_backtest_grid_rejects_invalid_axes(client):
+    latest = client.get("/api/v1/market/dashboard").json()["trade_date"]
+    start = (date.fromisoformat(latest) - timedelta(days=60)).isoformat()
+
+    too_many = client.post("/api/v1/backtest/a3/grid", json={
+        "start_date": start, "end_date": latest,
+        "rebalance_days": [1, 2, 3, 4, 5], "max_positions": [1, 2, 3, 4, 5],
+    })
+    assert too_many.status_code == 422, too_many.text
+    error = too_many.json()["error"]
+    assert error["code"] == "INVALID_PARAM"
+    assert "24" in error["message"]
+
+    out_of_range = client.post("/api/v1/backtest/a3/grid", json={
+        "start_date": start, "end_date": latest,
+        "rebalance_days": [0], "max_positions": [5],
+    })
+    assert out_of_range.status_code == 422
+    assert out_of_range.json()["error"]["code"] == "INVALID_PARAM"
+
+    unknown_algo = client.post("/api/v1/backtest/zz/grid", json={
+        "start_date": start, "end_date": latest,
+        "rebalance_days": [20], "max_positions": [5],
+    })
+    assert unknown_algo.status_code == 404
+    assert unknown_algo.json()["error"]["code"] == "UNKNOWN_ALGO"
+
+    missing = client.get("/api/v1/backtest/grid/GRID-NOT-EXIST")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_backtest_grid_marks_failed_cells(client):
+    """真实引擎失败时：单格落 failed + error，接口仍 200，不抛出。"""
+    end = date.today() + timedelta(days=1)
+    while end.weekday() != 6:  # 找到未来的周日
+        end += timedelta(days=1)
+    start = end - timedelta(days=1)  # 周六 ~ 周日，日历为空
+    resp = client.post("/api/v1/backtest/a3/grid", json={
+        "start_date": start.isoformat(), "end_date": end.isoformat(),
+        "rebalance_days": [20], "max_positions": [5, 10],
+    })
+    assert resp.status_code == 200, resp.text
+    grid = resp.json()
+    detail = client.get(f"/api/v1/backtest/grid/{grid['grid_id']}").json()
+    assert detail["progress"] == {"done": 2, "total": 2, "failed": 2}
+    for cell in detail["cells"]:
+        assert cell["status"] == "failed"
+        assert cell["metrics"] is None
+        assert "交易日数量不足" in (cell["error"] or "")
+
+
+def test_backtest_grid_marks_unaligned_cells(client):
+    """同矩阵内区间不一致的格必须 aligned=false（热力图剔除）。"""
+    latest = client.get("/api/v1/market/dashboard").json()["trade_date"]
+    end = date.fromisoformat(latest)
+    start = (end - timedelta(days=60)).isoformat()
+    grid_id = str(uuid.uuid4())
+    ids = [f"BT-GRID-{uuid.uuid4().hex[:10]}" for _ in range(3)]
+    try:
+        with Session(sync_engine) as session:
+            cells = (
+                (10, latest, start),
+                (20, latest, start),
+                (30, "2020-01-02", "2019-12-01"),
+            )
+            for index, (rb, cell_end, cell_start) in enumerate(cells):
+                session.add(BacktestRun(
+                    bt_id=ids[index],
+                    algo_code="a3",
+                    start_date=date.fromisoformat(cell_start),
+                    end_date=date.fromisoformat(cell_end),
+                    params={"calendar_source": "db"},
+                    metrics={"total_return": 0.1, "excess_return": 0.02,
+                             "max_drawdown": -0.05, "sharpe": 1.0,
+                             "win_rate": 0.5, "trade_count": 3},
+                    status="success",
+                    elapsed_ms=100 * (index + 1),
+                    grid_id=grid_id,
+                    grid_cell={"rebalance_days": rb, "max_positions": 5,
+                               "start_date": cell_start, "end_date": cell_end,
+                               "reused": False},
+                ))
+            session.commit()
+
+        body = client.get(f"/api/v1/backtest/grid/{grid_id}").json()
+        by_rb = {cell["rebalance_days"]: cell for cell in body["cells"]}
+        assert by_rb[10]["aligned"] is True
+        assert by_rb[20]["aligned"] is True
+        assert by_rb[30]["aligned"] is False
+        assert body["progress"] == {"done": 3, "total": 3, "failed": 0}
+        assert body["total_elapsed_ms"] == 600
+    finally:
+        with Session(sync_engine) as session:
+            session.execute(delete(BacktestRun).where(BacktestRun.bt_id.in_(ids)))
+            session.commit()

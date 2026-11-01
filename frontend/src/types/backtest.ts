@@ -138,3 +138,80 @@ export interface BacktestOptions {
   /** 策略参数（同 5.2，平铺进 query string） */
   params?: AlgoParams
 }
+
+/** 参数敏感性矩阵：轴（T10） */
+export interface BacktestGridAxes {
+  rebalance_days: number[]
+  max_positions: number[]
+}
+
+/** 矩阵每格指标摘要（T10，比率为小数） */
+export interface BacktestGridMetrics {
+  total_return: number | null
+  excess_return: number | null
+  max_drawdown: number | null
+  sharpe: number | null
+  win_rate: number | null
+  trade_count: number | null
+}
+
+/** POST 建矩阵时返回的格（后台尚未执行） */
+export interface BacktestGridCellBrief {
+  bt_id: string
+  params: { rebalance_days: number; max_positions: number }
+  rebalance_days: number
+  max_positions: number
+  status: 'queued' | 'success' | string
+  reused: boolean
+}
+
+/** GET 矩阵详情时的格（带指标、耗时与对齐标记） */
+export interface BacktestGridCell extends Omit<BacktestGridCellBrief, 'status'> {
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  metrics: BacktestGridMetrics | null
+  elapsed_ms: number | null
+  error: string | null
+  /** 与矩阵主区间/日历一致；false 的格会从热力图剔除 */
+  aligned: boolean
+}
+
+/** POST /api/v1/backtest/{algo_code}/grid 入参（T10） */
+export interface BacktestGridRequest {
+  start_date: string
+  end_date: string
+  rebalance_days: number[]
+  max_positions: number[]
+  /** 策略参数快照，与单次回测同构 */
+  strategy?: AlgoParams
+}
+
+/** POST /api/v1/backtest/{algo_code}/grid 响应（T10） */
+export interface BacktestGridCreateResponse {
+  grid_id: string
+  algo: string
+  start_date: string
+  end_date: string
+  requested_start: string
+  effective_start: string
+  start_trimmed: boolean
+  axes: BacktestGridAxes
+  cells: BacktestGridCellBrief[]
+  total: number
+  reused: number
+  queued: number
+  /** 建矩阵本身不跑回测，固定为 0 */
+  elapsed_ms: number
+}
+
+/** GET /api/v1/backtest/grid/{grid_id} 响应（T10） */
+export interface BacktestGridDetail {
+  grid_id: string
+  algo: string
+  start_date: string
+  end_date: string
+  axes: BacktestGridAxes
+  cells: BacktestGridCell[]
+  progress: { done: number; total: number; failed: number }
+  total_elapsed_ms: number
+  created_at: string | null
+}

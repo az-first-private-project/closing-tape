@@ -10,10 +10,11 @@ from __future__ import annotations
 import csv
 import io
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,9 +26,22 @@ from app.db.models import (
 from app.db.session import get_db
 from app.engine.backtest_view import build_backtest_extras
 from app.strategy.backtest import run_backtest
+from app.strategy.grid import create_grid, execute_grid, get_grid
 from app.strategy.strategies import SPECS
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["回测"])
+
+
+class GridRequest(BaseModel):
+    """参数敏感性矩阵入参（T10）：轴名与单次回测一致。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_date: date
+    end_date: date
+    rebalance_days: list[int] = Field(..., min_length=1, max_length=10)
+    max_positions: list[int] = Field(..., min_length=1, max_length=10)
+    strategy: dict[str, Any] | None = None
 
 #: B1–B5 用于判断特征回填起点的代表列（列名不能参数化，这里显式映射）
 _B_START_COLUMNS = {
@@ -214,6 +228,84 @@ async def create_backtest(
         db,
     ))
     return result
+
+
+@router.post("/{algo_code}/grid")
+async def create_backtest_grid(
+    algo_code: str,
+    payload: GridRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """创建参数敏感性矩阵（T10）：立即返回，逐格走后台任务。
+
+    每格复用单次回测引擎（同一代码路径），命中同参数成功记录时直接复用不重算。
+    """
+    if algo_code not in SPECS:
+        raise UnknownAlgoError(f"未知策略: {algo_code}",
+                               detail={"available": sorted(SPECS.keys())})
+
+    requested_start = payload.start_date
+    start = requested_start
+    end = payload.end_date
+    if start >= end:
+        raise InvalidParamError("start_date 必须早于 end_date")
+    if (end - start).days > 365 * 6:
+        raise InvalidParamError("矩阵区间不能超过 6 年（本系统历史深度为近 5 年）")
+
+    trimmed = False
+    data_start = await _data_start(algo_code, db)
+    if data_start and data_start > start:
+        start = data_start
+        trimmed = True
+        if start >= end:
+            raise InvalidParamError(
+                f"数据只从 {data_start} 开始，矩阵区间内没有可用数据",
+                detail={"effective_start": data_start.isoformat()},
+            )
+
+    strategy_params = payload.strategy or {}
+    result = await create_grid(
+        db,
+        algo_code=algo_code,
+        start=start,
+        end=end,
+        rebalance_days=payload.rebalance_days,
+        max_positions=payload.max_positions,
+        strategy_params=strategy_params,
+    )
+
+    if result["pending"]:
+        background_tasks.add_task(
+            execute_grid,
+            algo_code=algo_code,
+            start=start,
+            end=end,
+            strategy_params=strategy_params,
+            pending=result["pending"],
+        )
+
+    return {
+        "grid_id": result["grid_id"],
+        "algo": algo_code,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "requested_start": requested_start.isoformat(),
+        "effective_start": start.isoformat(),
+        "start_trimmed": trimmed,
+        "axes": result["axes"],
+        "cells": result["cells"],
+        "total": len(result["cells"]),
+        "reused": result["reused"],
+        "queued": len(result["pending"]),
+        "elapsed_ms": 0,
+    }
+
+
+@router.get("/grid/{grid_id}")
+async def get_backtest_grid(grid_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """矩阵状态与每格指标摘要（只读，不重算任何回测）。"""
+    return await get_grid(db, grid_id)
 
 
 @router.get("/{bt_id}")

@@ -134,10 +134,15 @@ class BacktestRun(Base):
     status: Mapped[str] = mapped_column(String(16), default="success")
     error: Mapped[str | None] = mapped_column(Text)
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    grid_id: Mapped[str | None] = mapped_column(String(36), comment="参数敏感性矩阵 ID（T10）")
+    grid_cell: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="矩阵坐标 {rebalance_days,max_positions,start_date,end_date,reused}"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
         Index("ix_backtest_run_algo", "algo_code", "created_at"),
+        Index("ix_backtest_run_grid", "grid_id"),
     )
 
 
