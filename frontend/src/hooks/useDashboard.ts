@@ -5,9 +5,9 @@
  * - useTradeCalendar：拉取最近 N 天交易日历，供日期选择器使用。
  */
 import { useQuery } from '@tanstack/react-query'
-import { fetchDashboard } from '../api/market'
+import { fetchDashboard, fetchIndexSeries } from '../api/market'
 import { fetchTradeCalendar } from '../api/meta'
-import type { DashboardData } from '../types/market'
+import type { DashboardData, IndexSeriesResponse } from '../types/market'
 
 /** 本地日期 → YYYY-MM-DD */
 function localDateString(date: Date): string {
@@ -22,6 +22,17 @@ export function useDashboard(tradeDate?: string) {
     queryFn: () => fetchDashboard(tradeDate),
     staleTime: 5 * 60 * 1000,
     // 只有「最新交易日」视图需要定时刷新，回看历史时不必轮询
+    refetchInterval: tradeDate ? false : 10 * 60 * 1000,
+  })
+}
+
+/** 指数近期日线序列（T14 sparkline），按交易日与窗口缓存 */
+export function useIndexSeries(days = 60, tradeDate?: string, enabled = true) {
+  return useQuery<IndexSeriesResponse>({
+    queryKey: ['index-series', days, tradeDate || 'latest'],
+    queryFn: () => fetchIndexSeries(days, tradeDate),
+    enabled,
+    staleTime: 5 * 60 * 1000,
     refetchInterval: tradeDate ? false : 10 * 60 * 1000,
   })
 }

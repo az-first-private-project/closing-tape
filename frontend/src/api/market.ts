@@ -4,6 +4,7 @@
 import { request } from './client'
 import type {
   DashboardData,
+  IndexSeriesResponse,
   MarketTemperature,
   SectorDetail,
   SectorList,
@@ -18,6 +19,16 @@ import type {
 export function fetchDashboard(tradeDate?: string): Promise<DashboardData> {
   return request<DashboardData>('/market/dashboard', {
     query: { trade_date: tradeDate ?? undefined },
+  })
+}
+
+/**
+ * 指数近期日线序列（T14 sparkline）
+ * days 为自然日；取 60 天覆盖长假后的 30 个交易日，前端再截最后 30 点。
+ */
+export function fetchIndexSeries(days = 60, tradeDate?: string): Promise<IndexSeriesResponse> {
+  return request<IndexSeriesResponse>('/market/indices', {
+    query: { trade_date: tradeDate ?? undefined, days },
   })
 }
 

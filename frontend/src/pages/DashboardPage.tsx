@@ -13,7 +13,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Activity, RefreshCw } from 'lucide-react'
-import { useDashboard, useTradeCalendar } from '../hooks/useDashboard'
+import { useDashboard, useIndexSeries, useTradeCalendar } from '../hooks/useDashboard'
 import { useWatchSignals, useWatchlist } from '../hooks/useWatchSignals'
 import WatchButton from '../components/WatchButton'
 import WatchlistPanel from '../components/WatchlistPanel'
@@ -249,6 +249,7 @@ export default function DashboardPage() {
 
   const data = dashboard.data
   const showLoadingSkeleton = useDelayedFlag(dashboard.isLoading && !data)
+  const indexSeries = useIndexSeries(60, selectedDate || undefined, !!data)
 
   /** 交易日历：只保留开市日，倒序（最新在前） */
   const openDays = useMemo(() => {
@@ -310,8 +311,18 @@ export default function DashboardPage() {
   const scoredCount = data.stats?.scored_sectors ?? sectors.filter((sector) => sector.composite_score !== null).length
   const totalSectors = data.stats?.total_sectors ?? sectors.length
 
-  const indexCards = orderIndices(indices).map(toIndexCard)
-  const usCards = usIndices.map(toUsIndexCard)
+  const seriesMap = indexSeries.data?.series ?? {}
+  const sparkFor = (code: string) =>
+    seriesMap[code]?.map((point) => point.close).slice(-30)
+
+  const indexCards = orderIndices(indices).map((index) => ({
+    ...toIndexCard(index),
+    spark: sparkFor(index.index_code),
+  }))
+  const usCards = usIndices.map((index) => ({
+    ...toUsIndexCard(index),
+    spark: sparkFor(index.index_code),
+  }))
   const indexRanks = computeIndexRanks(indexCards)
   const hasIndexWarming = indexCards.some(isIndexWarming)
 

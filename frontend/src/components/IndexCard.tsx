@@ -6,6 +6,7 @@
  */
 import { motion } from 'framer-motion'
 import { fmtNumber, fmtPct, pctColor, EMPTY_TEXT } from '../lib/format'
+import Sparkline from './Sparkline'
 
 export type IndexPeriodKey = 'ret_1d' | 'ret_5d' | 'ret_20d' | 'ret_60d' | 'ret_ytd'
 
@@ -31,6 +32,8 @@ export interface IndexCardData {
   rel_300_ytd?: number | null
   /** 同周期内 A 股指数间的名次（美股不传） */
   ranks?: Partial<Record<IndexPeriodKey, IndexPeriodRank>>
+  /** 近 30 个交易日收盘价走势（T14）；缺失时不画线但保留占位 */
+  spark?: (number | null)[]
   /** 底部补充说明（如美股交易日） */
   subtitle?: string | null
 }
@@ -45,7 +48,7 @@ const PERIODS: { key: IndexPeriodKey; label: string }[] = [
 
 /** 表头与数据行必须共用同一套列宽，否则右侧徽章会错位 */
 const ROW_GRID =
-  'grid grid-cols-[minmax(150px,1.4fr)_repeat(5,minmax(72px,0.8fr))_minmax(160px,1.2fr)] items-center gap-x-2'
+  'grid grid-cols-[minmax(196px,1.5fr)_repeat(5,minmax(72px,0.8fr))_minmax(160px,1.2fr)] items-center gap-x-2'
 
 /** 同周期内按收益降序排名；缺失周期不参与排名 */
 export function computeIndexRanks(
@@ -136,12 +139,28 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
             </span>
           )}
         </div>
-        <p
-          className="text-xs text-muted-foreground num truncate"
-          title={`高 ${fmtNumber(index.high, 2)} / 低 ${fmtNumber(index.low, 2)}`}
-        >
-          {fmtNumber(index.close, 2)}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p
+            className="text-xs text-muted-foreground num truncate"
+            title={`高 ${fmtNumber(index.high, 2)} / 低 ${fmtNumber(index.low, 2)}`}
+          >
+            {fmtNumber(index.close, 2)}
+          </p>
+          {index.spark && index.spark.length > 0 ? (
+            <Sparkline
+              values={index.spark}
+              days={30}
+              width={72}
+              height={22}
+              fill
+              label={`${index.index_name} 近 30 日收盘走势`}
+              formatValue={(value) => fmtNumber(value, 2)}
+              className="w-[72px] shrink-0"
+            />
+          ) : (
+            <span className="h-[22px] w-[72px] shrink-0" aria-hidden="true" />
+          )}
+        </div>
       </div>
 
       {/* 5 个周期 + 同期排名 */}

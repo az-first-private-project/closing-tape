@@ -11,10 +11,10 @@ import { useTemperature, useTemperatureSeries } from '../hooks/useTemperature'
 import type {
   MarketTemperature as MarketTemperatureData,
   TemperatureComponent,
-  TemperatureSeriesPoint,
 } from '../types/market'
 import { temperatureBand, temperatureColor, temperatureLabel } from '../lib/market'
 import { fmtDate } from '../lib/format'
+import Sparkline from './Sparkline'
 
 const GAUGE_RADIUS = 78
 const GAUGE_CENTER_Y = 100
@@ -90,64 +90,6 @@ function Gauge({ score }: { score: number | null }) {
         <span>100</span>
       </div>
     </div>
-  )
-}
-
-/** 内联 sparkline：固定 0–100 纵轴，保证跨日形状可比；缺失日断开折线 */
-function TemperatureSparkline({ points }: { points: TemperatureSeriesPoint[] }) {
-  if (points.length === 0) {
-    return <p className="text-[11px] text-muted-foreground">暂无历史温度序列</p>
-  }
-  const width = 240
-  const height = 44
-  const padding = 2
-  const step = points.length > 1 ? width / (points.length - 1) : 0
-  const y = (score: number) =>
-    padding + (1 - Math.min(100, Math.max(0, score)) / 100) * (height - padding * 2)
-
-  const segments: { x: number; y: number }[][] = []
-  let current: { x: number; y: number }[] = []
-  points.forEach((point, index) => {
-    if (point.temp_score === null) {
-      if (current.length > 0) segments.push(current)
-      current = []
-      return
-    }
-    current.push({ x: index * step, y: y(point.temp_score) })
-  })
-  if (current.length > 0) segments.push(current)
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full h-11"
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="近 60 个交易日温度走势"
-    >
-      <line
-        x1={0}
-        x2={width}
-        y1={y(50)}
-        y2={y(50)}
-        stroke="var(--color-border)"
-        strokeWidth={1}
-        strokeDasharray="2 3"
-        vectorEffect="non-scaling-stroke"
-      />
-      {segments.map((segment, index) => (
-        <polyline
-          key={index}
-          points={segment.map((point) => `${point.x},${point.y}`).join(' ')}
-          fill="none"
-          stroke="var(--color-chart-1)"
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
-    </svg>
   )
 }
 
@@ -270,7 +212,18 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
             </span>
           )}
         </div>
-        <TemperatureSparkline points={seriesPoints} />
+        <Sparkline
+          values={seriesPoints.map((point) => point.temp_score)}
+          days={60}
+          height={44}
+          domain={[0, 100]}
+          baseline={50}
+          fill
+          color="var(--color-chart-1)"
+          label={`近 ${seriesPoints.length} 个交易日温度走势`}
+          formatValue={(value) => value.toFixed(1)}
+          className="w-full"
+        />
       </div>
     </section>
   )

@@ -11,11 +11,13 @@ import { Fragment, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, Info, Star } from 'lucide-react'
 import { useConsensus } from '../hooks/useAlgo'
+import { useKline } from '../hooks/useStock'
 import type { ConsensusAlgoHit, ConsensusItem } from '../types/algo'
 import { getWatchlist, toggleWatch, MAX_WATCHLIST } from '../lib/watchlist'
-import { fmtMetricValue, fmtPct, fmtScore, pctColor } from '../lib/format'
+import { fmtMetricValue, fmtNumber, fmtPct, fmtScore, pctColor } from '../lib/format'
 import { EmptyState, ErrorState } from './StateViews'
 import FreshnessBadge from './FreshnessBadge'
+import Sparkline from './Sparkline'
 
 /** 命中数徽章：圆点 + 比例色阶（满命中用实心 primary） */
 function HitBadge({ hits, total }: { hits: number; total: number }) {
@@ -42,6 +44,28 @@ function HitBadge({ hits, total }: { hits: number; total: number }) {
         {hits}/{safeTotal}
       </span>
     </span>
+  )
+}
+
+/** 个股 30 日收盘走势：按 code 走 react-query 缓存，展开榜单才请求 */
+function StockSparkline({ code, tradeDate }: { code: string; tradeDate?: string }) {
+  const query = useKline(code, 30, tradeDate)
+  if (query.isLoading) {
+    return <span className="inline-block h-[24px] w-[84px]" aria-hidden="true" />
+  }
+  if (query.isError || !query.data || query.data.items.length === 0) {
+    return <span className="text-[11px] text-muted-foreground">—</span>
+  }
+  return (
+    <Sparkline
+      values={query.data.items.map((item) => item.close)}
+      days={30}
+      width={84}
+      height={24}
+      label={`${code} 近 30 日收盘走势`}
+      formatValue={(value) => fmtNumber(value, 2)}
+      className="ml-auto w-[84px]"
+    />
   )
 }
 
@@ -203,13 +227,14 @@ export default function ConsensusBoard({
             />
           ) : (
             <div className="overflow-x-auto -mx-1">
-              <table className="w-full min-w-[880px] text-sm">
+              <table className="w-full min-w-[960px] text-sm">
                 <thead>
                   <tr className="text-[11px] text-muted-foreground border-b border-border">
                     <th className="text-left font-medium py-2 pl-1 min-w-[10rem]">代码 / 名称</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[8.5rem]">命中数</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[6rem]">行业</th>
                     <th className="text-right font-medium py-2 px-2">当日涨跌</th>
+                    <th className="text-right font-medium py-2 px-2 min-w-[6.5rem]">30 日走势</th>
                     <th className="text-right font-medium py-2 px-2">综合分</th>
                     <th className="text-right font-medium py-2 px-2 min-w-[10rem]">命中策略</th>
                     <th className="text-right font-medium py-2 pr-1 min-w-[5.5rem]">自选</th>
@@ -244,6 +269,9 @@ export default function ConsensusBoard({
                           <td className="py-2.5 px-2 text-xs">{item.industry_l1 ?? '—'}</td>
                           <td className={`py-2.5 px-2 text-right num ${pctColor(item.pct_chg)}`}>
                             {fmtPct(item.pct_chg)}
+                          </td>
+                          <td className="py-2.5 px-2 text-right">
+                            <StockSparkline code={item.code} tradeDate={data?.trade_date} />
                           </td>
                           <td className="py-2.5 px-2 text-right num">{fmtScore(item.composite_score)}</td>
                           <td className="py-2.5 px-2 text-right">
@@ -288,7 +316,7 @@ export default function ConsensusBoard({
                         </tr>
                         {isExpanded && (
                           <tr className="border-b border-border/60 bg-muted/20">
-                            <td colSpan={7} className="p-3">
+                            <td colSpan={8} className="p-3">
                               <HitDetails item={item} onOpenAlgo={onOpenAlgo} />
                             </td>
                           </tr>
@@ -305,7 +333,7 @@ export default function ConsensusBoard({
 
           <p className="text-[11px] text-muted-foreground">
             各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。
-            共识只说明多策略同时选中，不代表更强收益。
+            共识只说明多策略同时选中，不代表更强收益。30 日走势为未复权收盘价，按个股缓存 5 分钟。
           </p>
         </div>
       )}

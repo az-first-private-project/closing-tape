@@ -704,3 +704,32 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 按钮内等待态现为静态图标 + 骨架点，不再有旋转动画；视觉上不再暗示“正在进行”，长任务需配合文案。
 - 验收脚本创建的失败回测行（2026-10-31~2026-11-01）留在 `backtest_run` 表；该行不计入策略统计（统计只取 `status='success'` 且 `is_backtest=false`）。
 - 本轮浏览器视口为 758×482（CDP）与 311px（MCP 错误态），375/1440/1920 未验证。
+
+### 7.15 T14 表格内嵌 30 日 Sparkline（2026-11-01）
+
+**目标**：纯 SVG 微型走势线（零依赖、无 canvas、无浮层），同页 100 条不明显掉帧；0/1/全等值/含 null 均不崩，宽度变化靠 viewBox 自适应。
+
+**前端**
+
+- 新增 `src/lib/sparkline.ts`（纯函数）：清洗非有限值为 null、只取最后 `days` 点、>200 点等距降采样且保留首尾；null 断点分段；0/1 个有效点、全 null、全等值均输出全宽平线；支持固定/自适应纵轴与界内 baseline。
+- 新增 `src/components/Sparkline.tsx`：`viewBox + preserveAspectRatio="none"` 自适应宽度，描边 `vectorEffect="non-scaling-stroke"` 防拉伸；默认按首末方向用 `colorVar()` 红涨绿跌，可显式覆盖；**有效点不足时无条件灰色**（不再被显式 color 覆盖）；hover 用原生 `<title>`（末值/区间/点数/缺失数），不引 tooltip 库；带 `role="img"` 与 `aria-label`。
+- 接入：`StrategyLadder` 近 20 期胜率（0–1、baseline 0.5）、`MarketTemperature` 60 日温度（0–100、baseline 50、面积填充，替换原内联 SVG）、`IndexCard` 30 日收盘（新增 `useIndexSeries(60)` 复用 `/market/indices`，staleTime 5 分钟，60 自然日覆盖长假）、`ConsensusBoard` 个股 30 日收盘（逐股 `useKline(30)`，缓存 5 分钟，表格新增「30 日走势」列）。
+- `ScoreRanking` 仅加 TODO：板块综合分无历史接口，不为此新增重接口；需 `/market/sectors` 增序列或独立端点，成本约半天。
+- `package.json` 新增 `test:sparkline`；`sparkline.test.mjs` 12 项（断点、空/单点/全 null/全等值、截断、降采样、固定/自适应纵轴、baseline 越界、非有限值、等距 x）。
+
+**验证（Chrome/156.0.8078.48，headless CDP pipe，可见 1400×1600）**
+
+- 100 条基准 + 4 条退化同页：104 个 SVG / 3012 点；模块加载→挂载完成 **48.1ms**，DOM 稳定 **48.7ms**；启动阶段最长帧 **44.4ms**（dev，含首屏布局），无 ≥50ms 长任务；稳定后约 **5.6ms/帧**。
+- 交互：点「重绘 100 条」`flushSync` 提交 **10.5ms**（另一轮 11.5ms），800ms 内 147 帧、最大帧 **5.8ms**、>50ms 帧 **0**；Performance 指标 Layout 9 次/23ms、RecalcStyle 11 次/11ms、Task 199ms。
+- 退化：空/单点/全等值分别为 0/1/5 点，描边均为 `rgb(100,116,139)`（`--color-flat`）并带「数据不足」；含 2 个 null 的 6 点序列分段绘制、`data-missing=2`、红色。
+- 主题：属性保持 `var(--color-up)`，计算值亮 `rgb(220,38,38)` ↔ 暗 `rgb(248,113,113)`；亮/暗 token 为 `#dc2626/#067647/#64748b` ↔ `#f87171/#4ade80/#94a3b8`。
+- 响应式：容器 160→320px 时 SVG 142→302px，`viewBox="0 0 120 28"` 与高度 28 不变，点坐标不重算、无溢出；`/dashboard` 8 条（60 日温度 + 7×30 日指数、0 缺失、禁用文案 0、`scrollWidth 413 ≤ 419`），`/algo-center` 共 19 条（7 天梯 + 12 共识，共识每条 30 点/0 缺失）。
+- `npm run test:sparkline` 12 passed、`test:treemap` 6 passed、`npm run build` 通过（index 983.53 kB / gzip 288.99 kB，CSS 48.02 kB，KlineChart 194.96 kB，仅既有 chunk 体积告警）。
+
+**已知**
+
+- 天梯 `spark` 当前仅 1 个已完成周期（多数策略 0 个，窗口内 14 信号 / 9 个未到期），故显示灰色「数据不足」；需等后续交易日成熟或回填历史胜率，不是组件缺陷。
+- 共识榜按行逐股请求 kline（min_count=2 时 12 行 = 12 请求），有 5 分钟缓存；榜单扩到几十行时请求数线性增长，需批量端点（契约变更，约 1 个接口 + 查询，半天）。
+- ScoreRanking 未接入（无板块评分历史端点），保持 TODO；补齐需契约变更 + 历史回填。
+- 仅原生 `<title>` 悬浮，无 tooltip 库；触屏无 hover 反馈，需要时再加点击浮层（约 1 个组件 + 定位逻辑）。
+- 100 条性能为 dev server + 临时 harness 实测（harness 已删），生产构建更快但未单独复测；375/1440/1920 三档未逐一验证（本轮为 419/1400 宽）。

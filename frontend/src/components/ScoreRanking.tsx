@@ -5,6 +5,10 @@
  *  - 评分统一 0–10 分制，评分条宽度 = score/10 * 100%；
  *  - 未评分（composite_score === null）显示「未评分」，绝不用 5 分兜底；
  *  - 展示已评分板块数 / 总板块数。
+ *
+ * TODO(T14): 板块综合分历史尚无接口，暂不接入 30 日 sparkline。
+ * 需要 /market/sectors 增加 days 序列或独立的 sector score history 端点；
+ * 不为 sparkline 单独新增重接口。
  */
 import { motion } from 'framer-motion'
 import {

@@ -10,83 +10,16 @@
 import { useMemo, useState } from 'react'
 import { Info } from 'lucide-react'
 import { useLadder } from '../hooks/useAlgo'
-import type { LadderHorizonStats, LadderItem, LadderSparkPoint } from '../types/algo'
+import type { LadderHorizonStats, LadderItem } from '../types/algo'
 import { ErrorState, EmptyState } from './StateViews'
 import FreshnessBadge from './FreshnessBadge'
+import Sparkline from './Sparkline'
 import { fmtInt, fmtPct, fmtRatio, pctColor } from '../lib/format'
 
 const WINDOWS = [20, 60, 120] as const
 const HORIZONS = [5, 10, 20] as const
 
 const WINDOW_LABEL: Record<number, string> = { 20: '近 20 日', 60: '近 60 日', 120: '近 120 日' }
-
-/** 胜率 sparkline：固定 0–100% 纵轴，缺失点断开 */
-function WinRateSparkline({ points }: { points: LadderSparkPoint[] }) {
-  if (points.length === 0) {
-    return <span className="text-[11px] text-muted-foreground">—</span>
-  }
-  const width = 104
-  const height = 30
-  const padding = 3
-  const step = points.length > 1 ? width / (points.length - 1) : 0
-  const y = (value: number) =>
-    padding + (1 - Math.min(1, Math.max(0, value))) * (height - padding * 2)
-
-  const segments: { x: number; y: number }[][] = []
-  let current: { x: number; y: number }[] = []
-  points.forEach((point, index) => {
-    if (point.win_rate === null) {
-      if (current.length > 0) segments.push(current)
-      current = []
-      return
-    }
-    current.push({ x: index * step, y: y(point.win_rate) })
-  })
-  if (current.length > 0) segments.push(current)
-
-  const last = points[points.length - 1]
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-[104px] h-[30px]"
-      role="img"
-      aria-label={`近 ${points.length} 个信号日胜率走势`}
-    >
-      <title>{`${last.trade_date} 胜率 ${fmtRatio(last.win_rate)}`}</title>
-      <line
-        x1={0}
-        x2={width}
-        y1={y(0.5)}
-        y2={y(0.5)}
-        stroke="var(--color-border)"
-        strokeWidth={1}
-        strokeDasharray="2 3"
-      />
-      {segments.map((segment, index) =>
-        segment.length === 1 ? (
-          <circle
-            key={index}
-            cx={segment[0].x}
-            cy={segment[0].y}
-            r={1.8}
-            fill="var(--color-chart-1)"
-          />
-        ) : (
-          <polyline
-            key={index}
-            points={segment.map((point) => `${point.x},${point.y}`).join(' ')}
-            fill="none"
-            stroke="var(--color-chart-1)"
-            strokeWidth={1.5}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        ),
-      )}
-    </svg>
-  )
-}
 
 /** 样本状态提示：0 样本时区分「待成熟」与「全部不可成交/缺数据」 */
 function sampleHint(stats: LadderHorizonStats): '待成熟' | '无有效样本' | '低样本' | null {
@@ -332,7 +265,18 @@ export default function StrategyLadder({
                     ))}
                     <td className="text-right py-2.5 pr-1">
                       <div className="flex flex-col items-end gap-1">
-                        <WinRateSparkline points={stats?.spark ?? []} />
+                        <Sparkline
+                          values={(stats?.spark ?? []).map((point) => point.win_rate)}
+                          days={20}
+                          width={104}
+                          height={30}
+                          domain={[0, 1]}
+                          baseline={0.5}
+                          color="var(--color-chart-1)"
+                          label={`近 20 期 ${horizon} 日胜率`}
+                          formatValue={(value) => fmtRatio(value)}
+                          className="w-[104px]"
+                        />
                         <span className={`text-[11px] num ${hint === '低样本' ? 'text-warning' : 'text-muted-foreground'}`}>
                           {item.total_signals === 0 ? '无信号' : hint ?? '样本充足'}
                         </span>

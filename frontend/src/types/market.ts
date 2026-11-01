@@ -29,6 +29,24 @@ export interface IndexQuote {
   rel_300_ytd?: number | null
 }
 
+/** 指数日线序列点（T14：GET /market/indices?days>1） */
+export interface IndexSeriesPoint {
+  trade_date: string
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  pct_chg: number | null
+  volume: number | null
+  amount: number | null
+}
+
+/** GET /api/v1/market/indices?days>1 */
+export interface IndexSeriesResponse {
+  trade_date: string | null
+  series: Record<string, IndexSeriesPoint[]>
+}
+
 /** 美股指数（3.1 us_indices，结构较 A 股指数精简） */
 export interface UsIndexQuote {
   index_code: string
