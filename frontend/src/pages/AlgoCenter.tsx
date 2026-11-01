@@ -7,8 +7,8 @@
  *   动态列结果表格、Top10 评分图、CSV 导出、历史 run 切换；
  * - 回测面板：POST /backtest/{algo_code}，绩效指标 + 净值曲线 + 成交明细 + 导出。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { CalendarDays, Download, History } from 'lucide-react'
 import { useAlgoList, useAlgoRun, useAlgoRuns, useAlgoRunDetail } from '../hooks/useAlgo'
@@ -45,6 +45,9 @@ function shortRunId(runId: string): string {
 
 export default function AlgoCenter() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  /** 已应用过的 ?algo=，避免列表后台刷新时重置用户改过的参数 */
+  const appliedAlgoParam = useRef<string | null>(null)
 
   // ---- 算法清单 ----
   const algoListQuery = useAlgoList()
@@ -81,14 +84,29 @@ export default function AlgoCenter() {
     [algoList, selectedCode],
   )
 
-  // 列表加载后默认选中第一个启用中的算法
+  // 列表加载后：优先应用 ?algo= 深链（命令面板/外部链接），否则默认选中第一个启用中的算法
   useEffect(() => {
     if (algoList.length === 0) return
+    const requested = searchParams.get('algo')
+    if (requested) {
+      const requestedAlgo = algoList.find((algo) => algo.algo_code === requested)
+      if (requestedAlgo) {
+        if (appliedAlgoParam.current !== requested) {
+          appliedAlgoParam.current = requested
+          setSelectedCode(requested)
+          setParams(buildDefaultParams(requestedAlgo))
+          setHistoryRunId(null)
+          setExportError(null)
+        }
+        return
+      }
+    }
+    appliedAlgoParam.current = null
     if (selectedCode && algoList.some((algo) => algo.algo_code === selectedCode)) return
     const first = algoList.find((algo) => algo.is_active !== false) ?? algoList[0]
     setSelectedCode(first.algo_code)
     setParams(buildDefaultParams(first))
-  }, [algoList, selectedCode])
+  }, [algoList, searchParams, selectedCode])
 
   // ---- 交互 ----
   const handleSelect = useCallback(
@@ -99,8 +117,15 @@ export default function AlgoCenter() {
       setHistoryRunId(null)
       setExportError(null)
       runMutation.reset()
+      // 手动换策略后 URL 不再代表当前策略，清掉深链参数
+      if (searchParams.has('algo')) {
+        appliedAlgoParam.current = null
+        const next = new URLSearchParams(searchParams)
+        next.delete('algo')
+        setSearchParams(next, { replace: true })
+      }
     },
-    [algoList, runMutation],
+    [algoList, runMutation, searchParams, setSearchParams],
   )
 
   const handleParamChange = useCallback((key: string, value: number | string) => {

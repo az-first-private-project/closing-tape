@@ -4,32 +4,11 @@
  */
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import {
-  Activity,
-  BarChart3,
-  Brain,
-  Info,
-  LineChart,
-  Moon,
-  Search,
-  Star,
-  Sun,
-  TrendingUp,
-} from 'lucide-react'
+import { BarChart3, Moon, Search, Sun } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
 import { useWatchBadge } from '../hooks/useWatchSignals'
+import { NAV_ITEMS, PALETTE_OPEN_EVENT } from '../lib/navigation'
 import { cn } from '../lib/utils'
-
-/** 导航配置 */
-const NAV_ITEMS = [
-  { to: '/', label: '首页', icon: BarChart3, end: true },
-  { to: '/dashboard', label: '盘后分析', icon: TrendingUp, end: false },
-  { to: '/algo-center', label: '选股中心', icon: Brain, end: false },
-  { to: '/paper', label: '纸面跟踪', icon: LineChart, end: false },
-  { to: '/watchlist', label: '自选', icon: Star, end: false },
-  { to: '/jobs', label: '任务监控', icon: Activity, end: false },
-  { to: '/about', label: '关于', icon: Info, end: false },
-] as const
 
 export default function Navbar() {
   const { theme, toggle } = useTheme()
@@ -66,10 +45,20 @@ export default function Navbar() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="搜索财经新闻…"
-                className="w-full pl-10 pr-4 py-2 rounded-full border border-input bg-background text-sm
+                className="w-full pl-10 pr-16 py-2 rounded-full border border-input bg-background text-sm
                   focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent
                   placeholder:text-muted-foreground"
               />
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event(PALETTE_OPEN_EVENT))}
+                aria-label="打开命令面板（Ctrl+K 或 Command+K）"
+                title="命令面板（Ctrl/⌘ + K）"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted/60
+                  px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                ⌘K
+              </button>
             </div>
           </form>
 

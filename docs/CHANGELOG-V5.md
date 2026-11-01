@@ -733,3 +733,41 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - ScoreRanking 未接入（无板块评分历史端点），保持 TODO；补齐需契约变更 + 历史回填。
 - 仅原生 `<title>` 悬浮，无 tooltip 库；触屏无 hover 反馈，需要时再加点击浮层（约 1 个组件 + 定位逻辑）。
 - 100 条性能为 dev server + 临时 harness 实测（harness 已删），生产构建更快但未单独复测；375/1440/1920 三档未逐一验证（本轮为 419/1400 宽）。
+
+### 7.16 T15 Ctrl+K 命令面板（2026-11-01）
+
+**目标**：自建命令面板（不引 cmdk/fuse.js/downshift），全局 Ctrl/⌘+K 唤起，键盘完成“打开→搜索→选中→跳转”，股票/页面/策略分组，且查询词与最近记录均不得成为 HTML 注入面。
+
+**前端**
+
+- 新增 `src/lib/navigation.ts`：抽出共享 `NAV_ITEMS`（7 个现有路由：首页/盘后分析/选股中心/纸面跟踪/自选/任务监控/关于）与 `PALETTE_OPEN_EVENT`，Navbar 与面板共用，避免循环依赖。
+- 新增 `src/lib/palette.ts`：`mergeRecent` 按 `kind+path` 去重并置顶、上限 10；`loadPaletteRecent` 校验条目/去重/截断，非法 JSON 与存储抛错均降级为空；`splitHighlight` 仅做大小写不敏感子串切分并保留原文大小写。
+- 新增 `src/components/CommandPalette.tsx`：Ctrl/⌘+K 切换、Esc 关闭、↑↓ 循环选择、Enter 跳转、Tab/Shift+Tab 切换有结果的分组；`role="dialog" aria-modal="true"` + `role="combobox"`/`listbox`/`option` 与 `aria-activedescendant`；打开时锁 `body` 滚动、记录并归还触发元素焦点；关闭/卸载还原。
+- 股票搜索：`/stocks/search` 最少 1 字符、250ms 防抖、最多 8 条，React Query `signal` 透传到 `client.ts`，输入变化自动 abort 上一请求；IME 组合期（`compositionstart`→`compositionend`）不发起请求，组合结束后才重新计时。
+- 策略：`/algo/list` 首次打开才请求，复用 `['algo-list']` 缓存（与选股中心同源）；页面始终只来自静态 `NAV_ITEMS`。高亮用 React 节点 `<mark>` 渲染，无 `dangerouslySetInnerHTML`。
+- 最近记录：localStorage `gfna-palette-recent`，展示前 3 条、总计最多 10 条，仅空查询时显示。
+- 跳转：策略项进入 `/algo-center?algo=<code>`；`AlgoCenter` 按参数值只应用一次，手动切换策略时清除 `algo` 参数。
+- `Navbar` 搜索框右侧加入可点击 `⌘K` 提示（`aria-label`/`title`），原新闻搜索仍提交到 `/?q=`；`Layout` 全局挂载一次面板；`api/stock.ts` 的 `searchStocks` 增加可选 `signal`。
+- `package.json` 新增 `test:palette`；`palette.test.mjs` 7 项（子串/大小写/多次命中/空查询、注入形态查询、去重置顶、上限 10、非法存储容错）。
+
+**验证（Chrome/156.0.8078.48，headless CDP pipe，1400×1000）**
+
+- 打开：`/dashboard` 初始 `/algo/list` 0 次；点 Navbar `⌘K` 后 1 次，面板 14 项（7 页面 + 7 策略），焦点在输入框，`body` 计算样式 `overflow:hidden`；Tab 切到策略组、↓ 切到下一策略；Esc 后面板卸载、`overflow` 还原、焦点回到 `⌘K`；再次 Ctrl+K 打开 `/algo/list` 仍为 1 次（缓存命中）。
+- IME：`compositionstart` 后依次输入「贵」「贵州」，各等待 400ms，`/stocks/search` 请求均为 **0**；`compositionend` 后 450ms 内发出 **1** 次 `q=贵州`，结果含贵州轮胎/贵州茅台/贵州燃气。
+- 竞态：600ms 网络延迟下先输 `600`、330ms 后改成 `600519`；`q=600` 请求 1 次且 `net::ERR_ABORTED`（canceled），`q=600519` 1 次成功，界面仅显示 600519，无旧结果串入。
+- 键盘全流程：输入 `b1`→Enter 跳到 `/algo-center?algo=b1`，页面出现「双均线动量突破」，localStorage 记录该策略；再输入「盘后」→Tab→Enter 回 `/dashboard`，最近记录 2 条。
+- 最近记录：预置 5 条后重开面板只显示前 3 条；去重与 10 条上限由单测覆盖。
+- XSS：输入 `<img src=x onerror=xss()>` 与 `<script>window.__xss=2</script>`（均 ≤32 字符以便通过后端校验），输入框保留原字符串、空态文案原样显示，DOM 内 `img/script` 节点均为 **0**，`window.__xss` 始终 `undefined`。
+- 焦点/滚动：连按 Tab/Shift+Tab 各 3 次，焦点始终在输入框、活动分组在页面/策略间循环；打开前 `scrollY=300`，打开后与滚轮 600 后仍为 **300**；Esc 后焦点归还 Navbar `⌘K`。
+- 原行为：Navbar 新闻搜索提交后 URL 为 `/?q=%E6%B5%8B%E8%AF%95%E6%96%B0%E9%97%BB`，`⌘K` 提示仍在；全程无 5xx、无 console error/exception（仅既有 React Router v7 future flag 警告）。
+- 相邻页面冒烟（整页刷新后 Ctrl+K 开合）：`/paper`、`/watchlist`、`/jobs`、`/about`、`/stocks/600519`、`/algo-center?algo=b1` 关键文本均存在；面板分别 14/7/7/7/14/14 项、焦点在输入框、`overflow:hidden`；Esc 后 `overflow` 还原；冷启动深链页仅 B1 卡片出现「已选中」，URL 保留 `algo=b1`；0 console error、0 exception、0 个 5xx。
+- `npm run test:palette` 7 passed、`test:treemap` 6 passed、`test:sparkline` 12 passed、后端 `pytest tests -q` **285 passed / 33 skipped**；`npm run build` 通过（index 994.24 kB / gzip 292.52 kB，较 T14 +10.71 kB / +3.53 kB；CSS 50.45 kB，KlineChart 194.96 kB，仅既有 chunk 体积告警）。
+
+**已知**
+
+- 任务书提到的 `/ladder` 独立路由并不存在（天梯当前在 `/algo-center` 内），因此未造一个空路由；若确需独立页，需新增路由与页面（约半天）。
+- 移动端没有可见入口：`⌘K` 按钮位于 `hidden md:block` 的新闻搜索框内，窄屏只能靠外接键盘快捷键；需移动端入口时可在 Navbar 加按钮/菜单项（约 1 小时）。
+- 后端 `q` 最长 32 字符，超长查询返回 422，面板会显示「搜索失败，请稍后重试」而非“无结果/查询过长”；前端加长度提示或 422 专属文案约 10 分钟。
+- 焦点陷阱采用“Tab 只切分组、焦点始终留在输入框”的策略；鼠标点击“清空”按钮后焦点会回到输入框，但若未来在对话框内新增可聚焦控件，需要把 Tab 处理提升为通用焦点环。
+- 最近记录只存 `kind/label/sublabel/path`，路径参数变化（如 `/algo-center?algo=a3`→`b1`）会按完整 path 视为不同记录；10 条上限内可接受。
+- 本轮为 dev server + 临时 CDP 脚本实测（脚本在系统临时目录，不入库）；移动端 375/768 与生产构建性能未单独复测。

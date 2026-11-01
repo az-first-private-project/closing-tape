@@ -25,9 +25,14 @@ export function fetchKline(
   })
 }
 
-/** 个股搜索（4.3） */
-export function searchStocks(q: string, limit = 20): Promise<StockSearchResponse> {
+/** 个股搜索（4.3）；signal 用于命令面板取消上一次输入请求 */
+export function searchStocks(
+  q: string,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<StockSearchResponse> {
   return request<StockSearchResponse>('/stocks/search', {
     query: { q, limit },
+    signal,
   })
 }
