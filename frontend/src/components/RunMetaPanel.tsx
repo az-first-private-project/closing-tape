@@ -112,7 +112,7 @@ export default function RunMetaPanel({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-muted transition-colors disabled:opacity-50"
             title="忽略缓存重新计算（force_refresh=true）"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className="w-3.5 h-3.5" />
             {refreshing ? '重算中…' : '强制刷新'}
           </button>
         )}

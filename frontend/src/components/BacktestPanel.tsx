@@ -6,7 +6,7 @@
  * 两个标签页共用同一份回测结果视图（BacktestResultView）。
  */
 import { useState } from 'react'
-import { Download, FlaskConical, Loader2 } from 'lucide-react'
+import { Download, FlaskConical } from 'lucide-react'
 import { useBacktest } from '../hooks/useBacktest'
 import { downloadBacktestCsv } from '../api/backtest'
 import { ApiError } from '../api/client'
@@ -171,7 +171,11 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
               disabled={mutation.isPending}
               className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
             >
-              {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FlaskConical className="w-4 h-4" />}
+              {mutation.isPending ? (
+                <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />
+              ) : (
+                <FlaskConical className="w-4 h-4" />
+              )}
               {mutation.isPending ? '回测中…' : '运行回测'}
             </button>
           </div>

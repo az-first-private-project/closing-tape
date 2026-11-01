@@ -14,7 +14,8 @@ import { markHitsSeen } from '../lib/watchlist'
 import { fmtDate } from '../lib/format'
 import WatchlistPanel from '../components/WatchlistPanel'
 import FreshnessBadge from '../components/FreshnessBadge'
-import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import { EmptyState, ErrorState, SkeletonTable } from '../components/StateViews'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 
 const DAYS = 10
 
@@ -22,6 +23,7 @@ export default function WatchlistPage() {
   const { watchlist, query } = useWatchBadge(DAYS)
   const data = query.data
   const items = data?.items ?? []
+  const showSkeleton = useDelayedFlag(query.isLoading)
 
   useEffect(() => {
     if (!data) return
@@ -51,8 +53,8 @@ export default function WatchlistPage() {
           disabled={query.isFetching}
           className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <RefreshCw className={`w-4 h-4 ${query.isFetching ? 'animate-spin' : ''}`} />
-          刷新命中
+          <RefreshCw className="w-4 h-4" />
+          刷新命中{query.isFetching ? '中…' : ''}
         </button>
       </div>
 
@@ -92,7 +94,12 @@ export default function WatchlistPage() {
             }
           />
         ) : query.isLoading ? (
-          <LoadingState text="正在检查自选股命中…" />
+          <div
+            aria-busy="true"
+            style={{ visibility: showSkeleton ? 'visible' : 'hidden' }}
+          >
+            <SkeletonTable rows={5} cols={5} />
+          </div>
         ) : query.isError ? (
           <ErrorState title="自选股命中加载失败" error={query.error} onRetry={() => query.refetch()} />
         ) : items.length === 0 ? (

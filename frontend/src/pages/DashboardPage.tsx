@@ -28,7 +28,14 @@ import ScoreRanking from '../components/ScoreRanking'
 import AIReport from '../components/AIReport'
 import MarketTemperature from '../components/MarketTemperature'
 import FreshnessBadge from '../components/FreshnessBadge'
-import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import {
+  EmptyState,
+  ErrorState,
+  SkeletonChart,
+  SkeletonKpiRow,
+  SkeletonLine,
+} from '../components/StateViews'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 import type { IndexQuote, MarginData, SectorQuote, UsIndexQuote } from '../types/market'
 import { fmtPct, fmtScore, fmtYi, pctColor } from '../lib/format'
 
@@ -241,6 +248,7 @@ export default function DashboardPage() {
   const watchHits = useWatchSignals(watchlist)
 
   const data = dashboard.data
+  const showLoadingSkeleton = useDelayedFlag(dashboard.isLoading && !data)
 
   /** 交易日历：只保留开市日，倒序（最新在前） */
   const openDays = useMemo(() => {
@@ -255,8 +263,21 @@ export default function DashboardPage() {
   // ---------- 加载 / 错误 ----------
   if (dashboard.isLoading && !data) {
     return (
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        <LoadingState text="正在加载盘后分析数据…" />
+      <div
+        className="max-w-7xl mx-auto px-4 py-6 space-y-6"
+        aria-busy="true"
+        style={{ visibility: showLoadingSkeleton ? 'visible' : 'hidden' }}
+      >
+        <div className="space-y-2">
+          <SkeletonLine className="h-7 w-56" />
+          <SkeletonLine className="h-3 w-80 max-w-full" />
+        </div>
+        <SkeletonKpiRow count={4} />
+        <SkeletonChart height={260} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <SkeletonChart height={280} />
+          <SkeletonChart height={280} />
+        </div>
       </div>
     )
   }
@@ -334,8 +355,8 @@ export default function DashboardPage() {
             className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
             title="重新加载当前交易日数据"
           >
-            <RefreshCw className={`w-4 h-4 ${dashboard.isFetching ? 'animate-spin' : ''}`} />
-            刷新
+            <RefreshCw className="w-4 h-4" />
+            刷新{dashboard.isFetching ? '中…' : ''}
           </button>
         </div>
       </div>

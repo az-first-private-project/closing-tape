@@ -13,11 +13,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
-import { Loader2, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { useSectorDetail, useSectors } from '../hooks/useSectors'
 import type { LeaderStock, SectorQuote, SectorType } from '../types/market'
 import { squarify } from '../lib/treemap'
 import { trendHeat } from '../lib/color'
+import { SkeletonChart, SkeletonLine } from './StateViews'
 import {
   EMPTY_TEXT,
   fmtAmount,
@@ -312,7 +313,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
             </button>
           ) : null}
           {sectorsQuery.isFetching && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="加载中" />
+            <span className="skeleton h-3.5 w-3.5 rounded-full" aria-label="加载中" />
           )}
         </div>
       </div>
@@ -559,9 +560,14 @@ function SectorDrawer({
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
           {detailQuery.isPending && (
-            <div className="flex h-40 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              正在加载板块详情…
+            <div className="space-y-3" aria-busy="true">
+              <div className="space-y-2">
+                <SkeletonLine className="h-5 w-40" />
+                <SkeletonLine className="h-3 w-64 max-w-full" />
+              </div>
+              <SkeletonChart height={180} />
+              <SkeletonLine className="h-3 w-full" />
+              <SkeletonLine className="h-3 w-4/5" />
             </div>
           )}
           {detailQuery.isError && (

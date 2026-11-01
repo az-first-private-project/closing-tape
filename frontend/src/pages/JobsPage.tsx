@@ -12,7 +12,13 @@ import { useFreshness } from '../hooks/useFreshness'
 import { useJobs } from '../hooks/useJobs'
 import FreshnessBadge from '../components/FreshnessBadge'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
-import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import {
+  EmptyState,
+  ErrorState,
+  SkeletonKpiRow,
+  SkeletonTable,
+} from '../components/StateViews'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 import type { Job } from '../types/jobs'
 import { fmtDateTime, fmtDuration, fmtInt } from '../lib/format'
 
@@ -133,6 +139,8 @@ export default function JobsPage() {
     },
     paused,
   )
+  const showFreshnessSkeleton = useDelayedFlag(freshnessQuery.isLoading)
+  const showJobsSkeleton = useDelayedFlag(jobsQuery.isLoading)
 
   const jobs = jobsQuery.data ?? []
   const failedCount = useMemo(() => jobs.filter((job) => job.status === 'failed').length, [jobs])
@@ -182,8 +190,8 @@ export default function JobsPage() {
             disabled={jobsQuery.isFetching}
             className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
           >
-            <RefreshCw className={`w-4 h-4 ${jobsQuery.isFetching ? 'animate-spin' : ''}`} />
-            刷新
+            <RefreshCw className="w-4 h-4" />
+            刷新{jobsQuery.isFetching ? '中…' : ''}
           </button>
         </div>
       </div>
@@ -192,7 +200,12 @@ export default function JobsPage() {
       <div className="space-y-2">
         <h2 className="font-semibold text-sm">数据新鲜度总览</h2>
         {freshnessQuery.isLoading ? (
-          <LoadingState text="正在加载数据新鲜度…" />
+          <div
+            aria-busy="true"
+            style={{ visibility: showFreshnessSkeleton ? 'visible' : 'hidden' }}
+          >
+            <SkeletonKpiRow count={6} />
+          </div>
         ) : freshnessQuery.isError ? (
           <ErrorState title="数据新鲜度加载失败" error={freshnessQuery.error} onRetry={() => freshnessQuery.refetch()} />
         ) : (
@@ -204,7 +217,12 @@ export default function JobsPage() {
       <div className="space-y-2">
         <h2 className="font-semibold text-sm">采集 / 策略任务</h2>
         {jobsQuery.isLoading ? (
-          <LoadingState text="正在加载任务列表…" />
+          <div
+            aria-busy="true"
+            style={{ visibility: showJobsSkeleton ? 'visible' : 'hidden' }}
+          >
+            <SkeletonTable rows={8} cols={6} />
+          </div>
         ) : jobsQuery.isError ? (
           <ErrorState title="任务列表加载失败" error={jobsQuery.error} onRetry={() => jobsQuery.refetch()} />
         ) : jobs.length === 0 ? (

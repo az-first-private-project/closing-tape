@@ -49,7 +49,16 @@ import {
   shortDate,
 } from '../lib/format'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
-import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import {
+  EmptyState,
+  ErrorState,
+  SkeletonCard,
+  SkeletonChart,
+  SkeletonKpiRow,
+  SkeletonLine,
+  SkeletonTable,
+} from '../components/StateViews'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 
 const NAV_DAYS = 250
 /** 手动同步后加速轮询的最长时间（完整区间重算可能跑几十秒） */
@@ -208,7 +217,7 @@ function PaperCard({
             }}
             className="shrink-0 inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+            <RefreshCw className="w-3.5 h-3.5" />
             {syncing ? '同步中…' : '立即同步'}
           </button>
         ) : (
@@ -467,7 +476,7 @@ function PaperDetailPanel({
           disabled={syncing}
           className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+          <RefreshCw className="w-4 h-4" />
           {syncing ? '后台重算中…' : '手动同步'}
         </button>
       </div>
@@ -573,6 +582,8 @@ export default function PaperPage() {
   const listQuery = usePaperPortfolios(polling)
   const detailQuery = usePaperDetail(selected || null, NAV_DAYS, polling && syncing?.algo === selected)
   const syncMutation = usePaperSync()
+  const showListSkeleton = useDelayedFlag(listQuery.isLoading)
+  const showDetailSkeleton = useDelayedFlag(detailQuery.isLoading)
 
   useEffect(() => {
     if (!syncing) return
@@ -637,8 +648,8 @@ export default function PaperPage() {
           disabled={listQuery.isFetching}
           className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-4 h-4 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
-          刷新
+          <RefreshCw className="w-4 h-4" />
+          刷新{listQuery.isFetching ? '中…' : ''}
         </button>
       </div>
 
@@ -652,7 +663,15 @@ export default function PaperPage() {
       )}
 
       {listQuery.isLoading ? (
-        <LoadingState text="正在加载纸面组合…" />
+        <div
+          className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"
+          aria-busy="true"
+          style={{ visibility: showListSkeleton ? 'visible' : 'hidden' }}
+        >
+          {Array.from({ length: 6 }).map((_, index) => (
+            <SkeletonCard key={index} lines={5} />
+          ))}
+        </div>
       ) : listQuery.isError ? (
         <ErrorState
           title="纸面组合加载失败"
@@ -698,7 +717,19 @@ export default function PaperPage() {
           }
         />
       ) : detailQuery.isLoading ? (
-        <LoadingState text="正在加载组合明细…" />
+        <div
+          className="space-y-4"
+          aria-busy="true"
+          style={{ visibility: showDetailSkeleton ? 'visible' : 'hidden' }}
+        >
+          <div className="space-y-2">
+            <SkeletonLine className="h-6 w-48" />
+            <SkeletonLine className="h-3 w-72 max-w-full" />
+          </div>
+          <SkeletonKpiRow count={6} />
+          <SkeletonChart height={300} />
+          <SkeletonTable rows={5} cols={6} />
+        </div>
       ) : detailQuery.isError ? (
         <ErrorState
           title="组合明细加载失败"

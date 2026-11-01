@@ -5,7 +5,7 @@
  * - 选择型：下拉框；文本型：文本框；
  * - 参数变化只更新本地状态，「执行算法」按钮才真正发请求（不再滑杆一动就请求）。
  */
-import { Loader2, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
 import type { AlgoMeta, AlgoParamDef, AlgoParamValue, AlgoParams } from '../types/algo'
 import { fmtAmount } from '../lib/format'
 
@@ -183,7 +183,11 @@ export default function AlgoParamPanel({
           disabled={isRunning}
           className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
         >
-          {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+          {isRunning ? (
+            <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />
+          ) : (
+            <Play className="w-4 h-4" />
+          )}
           {isRunning ? '执行中…' : '执行算法'}
         </button>
         <button

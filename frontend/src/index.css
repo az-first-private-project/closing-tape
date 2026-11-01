@@ -176,6 +176,12 @@ body {
   border-radius: var(--radius-lg);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
 /* ==================== 滚动条美化 ==================== */
 ::-webkit-scrollbar {
   width: 6px;

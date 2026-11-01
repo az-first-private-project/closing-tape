@@ -1,18 +1,36 @@
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, ExternalLink, Calendar, User, Bot, Loader2 } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Calendar, User, Bot } from 'lucide-react'
 import { useArticle } from '../hooks/useArticles'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
+import { SkeletonLine } from '../components/StateViews'
 import { formatTime, getSourceColor } from '../lib/utils'
 
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>()
   const { data: article, isLoading, isError } = useArticle(Number(id))
+  const showSkeleton = useDelayedFlag(isLoading)
 
   if (isLoading) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-        <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary" />
-        <p className="mt-4 text-muted-foreground">加载文章中...</p>
+      <div
+        className="max-w-4xl mx-auto px-4 py-8"
+        aria-busy="true"
+        style={{ visibility: showSkeleton ? 'visible' : 'hidden' }}
+      >
+        <div className="space-y-4">
+          <SkeletonLine className="h-3 w-24" />
+          <SkeletonLine className="h-8 w-4/5" />
+          <SkeletonLine className="h-4 w-1/2" />
+          <div className="space-y-3 border-t border-border pt-6">
+            {Array.from({ length: 9 }).map((_, index) => (
+              <SkeletonLine
+                key={index}
+                className={index % 4 === 3 ? 'h-3 w-2/3' : 'h-3 w-full'}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     )
   }

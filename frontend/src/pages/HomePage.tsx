@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, Loader2, SearchX } from 'lucide-react'
+import { CheckCircle2, SearchX } from 'lucide-react'
 import StatsBar from '../components/StatsBar'
 import FilterTabs from '../components/FilterTabs'
 import ArticleCard from '../components/ArticleCard'
 import PaginationBar from '../components/PaginationBar'
+import { ErrorState } from '../components/StateViews'
 import { useArticles, useSearch, useAutoCrawl } from '../hooks/useArticles'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 
 export default function HomePage() {
   const [searchParams] = useSearchParams()
@@ -34,7 +36,8 @@ export default function HomePage() {
 
   // 如果在搜索，用搜索结果；否则用文章列表
   const isSearching = searchQuery.length > 0
-  const { data, isLoading, isError, error } = isSearching ? searchQueryHook : articlesQuery
+  const { data, isLoading, isError, error, refetch } = isSearching ? searchQueryHook : articlesQuery
+  const showListSkeleton = useDelayedFlag(isLoading)
 
   return (
     <div>
@@ -51,7 +54,7 @@ export default function HomePage() {
         {/* 自动抓取进度（旧新闻保持可见） */}
         {crawling && (
           <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm text-primary">
-            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+            <span className="skeleton h-4 w-4 shrink-0 rounded-full" aria-hidden="true" />
             正在搜索最新财经新闻…已有新闻可先浏览
           </div>
         )}
@@ -69,9 +72,13 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* 加载状态 — 骨架屏 */}
+        {/* 加载状态 — 骨架占位始终参与布局，超过 150ms 才可见，避免闪烁与跳变 */}
         {isLoading && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+            aria-busy="true"
+            style={{ visibility: showListSkeleton ? 'visible' : 'hidden' }}
+          >
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="skeleton h-56 rounded-xl" />
             ))}
@@ -80,37 +87,31 @@ export default function HomePage() {
 
         {/* 错误状态 */}
         {isError && (
-          <div className="text-center py-20">
-            <p className="text-alert text-lg">⚠️ 加载失败</p>
-            <p className="text-muted-foreground text-sm mt-2">
-              {(error as Error)?.message || '请检查网络连接后重试'}
-            </p>
-          </div>
+          <ErrorState title="新闻加载失败" error={error} onRetry={() => refetch()} />
         )}
 
         {/* 空状态 */}
         {!isLoading && !isError && data && data.items.length === 0 && (
-          <div className="text-center py-20">
-            {crawling ? (
-              <>
-                <Loader2 className="w-14 h-14 mx-auto text-primary/60 mb-4 animate-spin" />
-                <p className="text-muted-foreground text-lg">正在搜索最新财经新闻…</p>
-                <p className="text-muted-foreground/60 text-sm mt-2">
-                  首次抓取通常需要几秒钟，请稍候
-                </p>
-              </>
-            ) : (
-              <>
-                <SearchX className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
-                <p className="text-muted-foreground text-lg">
-                  {isSearching ? `未找到与「${searchQuery}」相关的新闻` : '暂无新闻数据'}
-                </p>
-                <p className="text-muted-foreground/60 text-sm mt-2">
-                  {isSearching ? '请尝试其他关键词' : '新闻抓取失败或被限流，刷新页面可重试'}
-                </p>
-              </>
-            )}
-          </div>
+          crawling ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" aria-busy="true">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="skeleton h-56 rounded-xl" />
+              ))}
+              <p className="col-span-full text-center text-sm text-muted-foreground">
+                正在搜索最新财经新闻…首次抓取通常需要几秒钟
+              </p>
+            </div>
+          ) : (
+            <div className="text-center py-20">
+              <SearchX className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
+              <p className="text-muted-foreground text-lg">
+                {isSearching ? `未找到与「${searchQuery}」相关的新闻` : '暂无新闻数据'}
+              </p>
+              <p className="text-muted-foreground/60 text-sm mt-2">
+                {isSearching ? '请尝试其他关键词' : '新闻抓取失败或被限流，刷新页面可重试'}
+              </p>
+            </div>
+          )
         )}
 
         {/* 文章网格 */}

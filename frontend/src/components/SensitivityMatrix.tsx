@@ -7,7 +7,7 @@
  */
 import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { LayoutGrid, Loader2, Play } from 'lucide-react'
+import { LayoutGrid, Play } from 'lucide-react'
 import { useBacktestDetail, useBacktestGrid, useBacktestGridDetail } from '../hooks/useBacktest'
 import { fetchHealth } from '../api/meta'
 import type { AlgoParams } from '../types/algo'
@@ -331,7 +331,7 @@ export default function SensitivityMatrix({
           className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {gridMutation.isPending || scanning ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />
           ) : (
             <Play className="w-4 h-4" />
           )}

@@ -674,3 +674,33 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 最新交易日通常不是调仓日，待执行清单多为空；不可成交原因只在调仓信号日出现，验收以历史落库样本为准。
 - 全区间重算耗时随跟踪期增长：a4 679 个交易日约 48.5s、a3 563 日约 49.6s；当前串行 17:30 任务可接受，策略数量大增时需并发或缓存（成本高，暂不做）。
 - 内置 MCP 视口固定 311px，375/1440/1920 视口未在本轮验证。
+
+### 7.14 T13 骨架屏替换 spinner（2026-11-01）
+
+**目标**：用与最终布局同形的骨架屏替换全站 9 处 `animate-spin`，延迟 150ms 才出现且提前占位；统一错误态展示 `ApiError.message` + `detail.next_action` + 重试。
+
+**前端**
+
+- 新增 `useDelayedFlag(active, delay=150)`（自研，不引依赖）与 `StateViews` 骨架原语：`SkeletonLine / SkeletonCard / SkeletonTable(rows, cols) / SkeletonChart(h) / SkeletonKpiRow`。
+- 9 处 `animate-spin` 全部移除（`grep -r animate-spin frontend/src` = 0）：`AlgoParamPanel`、`BacktestPanel`、`SensitivityMatrix`、`RunMetaPanel`、`SectorHeatmap`、`WatchlistPage`、`PaperPage`、`HomePage`、`DetailPage`；按钮内等待态改为静态图标 + 骨架点，不再旋转。
+- 关键实现：加载时**始终渲染完整骨架布局**，150ms 前用 `visibility: hidden` 占位、之后才可见。避免“空白 → 骨架 → 内容”两次位移；Dashboard/Home/Detail/Paper/Watchlist/Jobs 六个页面统一此模式。
+- `index.css` 在 `prefers-reduced-motion: reduce` 下关闭 `.skeleton` 的 shimmer 动画。
+- `ErrorState` 从 `detail.next_action` 提取建议文案（类型收窄，缺失则不渲染）；`HomePage` 原内联“⚠️ 加载失败”改为 `ErrorState` + `refetch`，补齐重试入口。
+- `main.tsx` 查询默认 `networkMode: 'always'`：默认 `online` 模式断网时查询被挂起（`isLoading=false`），页面会落到“暂无数据”且没有重试按钮；改为真实发请求、由 `client.ts` 统一报 `NETWORK_ERROR`。`client.ts` 重试语义未改动。
+
+**验证（Chrome/156.0.8078.48，CDP pipe，真实网络节流）**
+
+- 600ms 延迟下点击 `/dashboard`：首个**可见**骨架 **186ms**（>150ms 防闪烁生效），骨架节点 16 个，可见持续 5060ms；接口耗时 3719ms。
+- 布局守恒：骨架 `minTop=89` 与终态 `h1Top=89` 一致；`PerformanceObserver('layout-shift')` **0 条 / CLS 0.0000**（修复前空白占位过渡 CLS 0.5559，来源为 FOOTER 与 Navbar 位移）。
+- reduced-motion 模拟下骨架 `animation-name=none / duration=0s`；禁用文案扫描 `-0.0%`/`NaN` 命中 0；加载稳定后骨架与 spinner 计数均为 0。
+- 断网（`offline:true`，`navigator.onLine=false`）：`/dashboard`、`/paper`、`/algo-center`、`/stocks/600519`、`/` 均显示 `ErrorState` + `NETWORK_ERROR` + 1 个重试按钮，骨架/spinner 均为 0；`/watchlist` 与 `/jobs` 强制刷新同样进入错误态并可重试；恢复网络后点重试，`/paper` 回到正常数据。
+- `next_action` 真实样本：`/algo-center` 发起 2026-10-31~2026-11-01 回测 → `回测执行失败`、`DATA_NOT_READY`、「交易日数量不足，无法回测」、`建议：POST /api/v1/admin/ingest/calendar`，重试按钮可用。
+- `pytest` 全量 **318 passed**；`npm run test:treemap` 6 passed；`npm run build` 通过（index 980.23 kB / gzip 287.65 kB，CSS 47.95 kB，KlineChart 194.96 kB，仅既有 chunk 体积告警）。
+
+**已知**
+
+- `/watchlist` 断网首次进入可能先显示导航栏缓存的命中结果（共享 `useWatchBadge` 查询，`staleTime` 5 分钟），需点“刷新命中”才会出现错误态；属缓存优先策略，非骨架缺陷。
+- `networkMode: 'always'` 会让断网时真实发出请求并失败，比默认挂起多产生一次失败请求；换来的是明确错误态与重试入口。
+- 按钮内等待态现为静态图标 + 骨架点，不再有旋转动画；视觉上不再暗示“正在进行”，长任务需配合文案。
+- 验收脚本创建的失败回测行（2026-10-31~2026-11-01）留在 `backtest_run` 表；该行不计入策略统计（统计只取 `status='success'` 且 `is_backtest=false`）。
+- 本轮浏览器视口为 758×482（CDP）与 311px（MCP 错误态），375/1440/1920 未验证。
