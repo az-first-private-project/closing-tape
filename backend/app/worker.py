@@ -5,6 +5,7 @@
   - 15:36 盘后流水线（真实交易日历判断，节假日不跑）
   - 16:30 选股（等评分与日报就绪）
   - 17:10 信号前瞻统计（依赖 16:30 选股结果）
+  - 17:30 纸面组合（完整区间重算，非交易日跳过）
   - 02:00 历史补齐（断点续传，夜间执行）
   - 每 N 分钟新闻采集（作为情绪因子输入）
 
@@ -85,6 +86,21 @@ async def run_signal_perf_job(db) -> None:
     await run_task("signal_perf", trade_date=latest, db=db)
 
 
+async def run_paper_job(db) -> None:
+    """纸面组合整体重算（V6 T11）。非交易日不写行；单组合失败已在引擎内隔离。"""
+    from app.engine.paper import sync_all_paper_portfolios
+    from app.ingest.calendar import is_trade_day
+
+    today = date.today()
+    if not await is_trade_day(db, today):
+        logger.info("%s 非交易日，跳过纸面组合", today)
+        return
+
+    results = await sync_all_paper_portfolios(db)
+    failed = [item["algo"] for item in results if item.get("status") == "failed"]
+    logger.info("纸面组合结束 total=%d failed=%s", len(results), failed)
+
+
 async def run_news_crawl_job(db) -> None:
     """新闻采集（国内四源 JSON 快讯；失败不阻断主链）。"""
     from app.services.news_collector import collect_news
@@ -123,6 +139,9 @@ def start_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=10, timezone=_TZ),
                       args=["signal_perf", run_signal_perf_job],
                       id="signal_perf", name="信号前瞻统计", replace_existing=True)
+    scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=30, timezone=_TZ),
+                      args=["paper", run_paper_job],
+                      id="paper", name="纸面组合跟踪", replace_existing=True)
     scheduler.add_job(_with_lock, CronTrigger(hour=2, minute=0, timezone=_TZ),
                       args=["backfill", run_backfill_job],
                       id="backfill", name="历史补齐", replace_existing=True)
@@ -131,8 +150,8 @@ def start_scheduler() -> AsyncIOScheduler:
                       id="news_crawl", name="新闻采集", replace_existing=True)
 
     scheduler.start()
-    logger.info("定时任务已启动：15:36 盘后 / 16:30 选股 / 17:10 信号统计 / 02:00 补齐 / 每 %d 分钟新闻",
-                CRAWL_INTERVAL_MINUTES)
+    logger.info("定时任务已启动：15:36 盘后 / 16:30 选股 / 17:10 信号统计 / 17:30 纸面"
+                " / 02:00 补齐 / 每 %d 分钟新闻", CRAWL_INTERVAL_MINUTES)
     return scheduler
 
 
@@ -159,4 +178,4 @@ def job_status() -> list[dict]:
 
 __all__ = ["start_scheduler", "stop_scheduler", "job_status",
            "run_daily_pipeline_job", "run_algo_job", "run_signal_perf_job",
-           "run_news_crawl_job", "run_backfill_job"]
+           "run_paper_job", "run_news_crawl_job", "run_backfill_job"]

@@ -159,6 +159,14 @@ class BacktestConfig:
 
 BACKTEST = BacktestConfig()
 
+# ==================== 纸面组合（V6 T11）====================
+# 空 = 全部现存策略；env 逗号分隔覆盖，例如 PAPER_ENABLED_ALGOS=a3,b1
+PAPER_ENABLED_ALGOS: tuple[str, ...] = tuple(
+    item.strip().lower()
+    for item in _env("PAPER_ENABLED_ALGOS", "").split(",")
+    if item.strip()
+)
+
 # 策略默认参数（A1/A2 已下线，B1–B5 为短线策略）
 STRATEGY_DEFAULTS = {
     "a3": {"limit": 20, "min_score": 6.0},     # 0–10 分制（不是 0–100！）

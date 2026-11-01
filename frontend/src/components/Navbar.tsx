@@ -1,6 +1,6 @@
 /**
  * 顶部导航（契约第 7 节路由）
- * 导航项：首页 / 盘后分析 / 选股中心 / 任务监控 / 关于
+ * 导航项：首页 / 盘后分析 / 选股中心 / 纸面跟踪 / 任务监控 / 关于
  */
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
@@ -9,6 +9,7 @@ import {
   BarChart3,
   Brain,
   Info,
+  LineChart,
   Moon,
   Search,
   Star,
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/', label: '首页', icon: BarChart3, end: true },
   { to: '/dashboard', label: '盘后分析', icon: TrendingUp, end: false },
   { to: '/algo-center', label: '选股中心', icon: Brain, end: false },
+  { to: '/paper', label: '纸面跟踪', icon: LineChart, end: false },
   { to: '/watchlist', label: '自选', icon: Star, end: false },
   { to: '/jobs', label: '任务监控', icon: Activity, end: false },
   { to: '/about', label: '关于', icon: Info, end: false },
@@ -56,7 +58,7 @@ export default function Navbar() {
           </Link>
 
           {/* 搜索框 */}
-          <form onSubmit={handleSearch} className="flex-1 max-w-md">
+          <form onSubmit={handleSearch} className="hidden md:block flex-1 max-w-md">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
@@ -71,8 +73,8 @@ export default function Navbar() {
             </div>
           </form>
 
-          {/* 导航 + 主题切换 */}
-          <div className="flex items-center gap-0.5">
+          {/* 导航 + 主题切换：窄屏横向滚动，避免把页面撑出视口 */}
+          <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon
               const isWatchlist = item.to === '/watchlist'
@@ -83,7 +85,7 @@ export default function Navbar() {
                   end={item.end}
                   className={({ isActive }) =>
                     cn(
-                      'flex items-center gap-1 px-2.5 py-2 text-sm rounded-lg transition-colors',
+                      'flex shrink-0 items-center gap-1 px-2.5 py-2 text-sm rounded-lg transition-colors',
                       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       isActive
                         ? 'text-primary bg-primary/10'
@@ -121,7 +123,7 @@ export default function Navbar() {
 
             <button
               onClick={toggle}
-              className="ml-1 p-2 rounded-lg hover:bg-secondary transition-colors"
+              className="ml-1 shrink-0 p-2 rounded-lg hover:bg-secondary transition-colors"
               aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
             >
               {theme === 'light' ? (

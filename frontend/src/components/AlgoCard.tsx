@@ -2,9 +2,12 @@
  * 算法卡片（契约 5.1）
  * =====================
  * 展示算法名称、类型、简介、信号数与参数数量；未启用算法置灰不可选。
+ * 启用算法额外提供「纸面跟踪」入口（V6 T11）。
  * 类型覆盖：价值/评分（A3、A4）与趋势/反转/突破（B1–B5）。
  */
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
+import { LineChart } from 'lucide-react'
 import type { AlgoMeta } from '../types/algo'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -69,27 +72,41 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
       </p>
 
       {/* 底部：信号数 + 参数数 + 操作 */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <span>信号数: <span className="num">{signalCount !== null ? signalCount : '—'}</span></span>
           <span>·</span>
           <span>参数 {algo.params_schema.length} 项</span>
         </div>
-        <button
-          type="button"
-          disabled={!enabled}
-          className={`
-            text-xs px-3 py-1 rounded-lg transition-colors
-            ${
-              isActive
-                ? 'bg-primary text-primary-foreground'
-                : 'border border-border hover:bg-muted text-foreground'
-            }
-            disabled:opacity-50
-          `}
-        >
-          {enabled ? (isActive ? '已选中' : '查看详情') : '未启用'}
-        </button>
+        <div className="flex items-center gap-2">
+          {enabled && (
+            <Link
+              to={`/paper?algo=${algo.algo_code}`}
+              onClick={(event) => event.stopPropagation()}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-border
+                text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={`查看「${algo.algo_name}」的纸面组合跟踪`}
+            >
+              <LineChart className="w-3.5 h-3.5" />
+              纸面跟踪
+            </Link>
+          )}
+          <button
+            type="button"
+            disabled={!enabled}
+            className={`
+              text-xs px-3 py-1 rounded-lg transition-colors
+              ${
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border hover:bg-muted text-foreground'
+              }
+              disabled:opacity-50
+            `}
+          >
+            {enabled ? (isActive ? '已选中' : '查看详情') : '未启用'}
+          </button>
+        </div>
       </div>
     </motion.div>
   )

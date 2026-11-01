@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, PrimaryKeyConstraint,
-    String, Text,
+    String, Text, desc,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -146,4 +146,59 @@ class BacktestRun(Base):
     )
 
 
-__all__ = ["StgRun", "StgSignal", "StgSignalPerf", "BacktestRun"]
+class PaperPortfolio(Base):
+    """纸面组合（V6 T11）。
+
+    一策略一组合，``params`` 保存创建时的策略/回测参数快照与复用的 ``bt_id``；
+    净值整体重算，不维护增量持仓状态。
+    """
+
+    __tablename__ = "paper_portfolio"
+
+    portfolio_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    algo_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(64))
+    start_date: Mapped[date | None] = mapped_column(Date, comment="建仓日 = 策略首个实盘 run 交易日")
+    params: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="策略参数 / 回测参数快照 / paper bt_id"
+    )
+    rebalance_days: Mapped[int | None] = mapped_column(Integer)
+    max_positions: Mapped[int | None] = mapped_column(Integer)
+    initial_capital: Mapped[float | None] = mapped_column(Numeric(20, 2))
+    status: Mapped[str] = mapped_column(String(16), default="active",
+                                        comment="active/waiting/failed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PaperNav(Base):
+    """纸面组合每日净值与收盘快照（V6 T11）。"""
+
+    __tablename__ = "paper_nav"
+    __table_args__ = (
+        PrimaryKeyConstraint("portfolio_id", "trade_date", name="pk_paper_nav"),
+        Index("ix_paper_nav_portfolio_date", "portfolio_id", desc("trade_date")),
+    )
+
+    portfolio_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("paper_portfolio.portfolio_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    nav: Mapped[float | None] = mapped_column(Numeric(16, 6))
+    benchmark: Mapped[float | None] = mapped_column(Numeric(16, 6))
+    drawdown: Mapped[float | None] = mapped_column(Numeric(8, 3), comment="相对历史峰值，负数")
+    holdings: Mapped[list[dict] | None] = mapped_column(JSONB, comment="收盘持仓快照")
+    cash_ratio: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    pending_orders: Mapped[list[dict] | None] = mapped_column(
+        JSONB, comment="下一交易日待执行（fillable=false 含停牌/涨跌停原因）"
+    )
+    vs_backtest: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="与同区间人工回测的差值；仅最新行写入"
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+__all__ = [
+    "StgRun", "StgSignal", "StgSignalPerf", "BacktestRun",
+    "PaperPortfolio", "PaperNav",
+]

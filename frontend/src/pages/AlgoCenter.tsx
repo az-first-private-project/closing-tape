@@ -238,15 +238,15 @@ export default function AlgoCenter() {
           </p>
         </div>
         {selectedCode && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {/* 交易日选择：自动 = 该策略所需数据最新就绪的交易日 */}
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <label className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               <CalendarDays className="w-3.5 h-3.5" />
               交易日
               <select
                 value={selectedDate}
                 onChange={(event) => handleDateChange(event.target.value)}
-                className="px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[15rem]"
+                className="min-w-0 px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[15rem]"
                 title="自动：选择该策略所需数据（指标/资金流/估值）最新齐全的交易日"
               >
                 <option value="">自动（最近数据就绪日）</option>
@@ -259,13 +259,13 @@ export default function AlgoCenter() {
             </label>
 
             {/* 历史 run 切换 */}
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <label className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               <History className="w-3.5 h-3.5" />
               历史 run
               <select
                 value={historyRunId ?? ''}
                 onChange={(event) => setHistoryRunId(event.target.value || null)}
-                className="px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[16rem]"
+                className="min-w-0 px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[16rem]"
               >
                 <option value="">当前运行结果</option>
                 {runOptions.map((run) => (

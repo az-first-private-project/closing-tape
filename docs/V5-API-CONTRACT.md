@@ -590,6 +590,86 @@ GET `/api/v1/backtest/grid/{grid_id}`：
 - 重发完全相同的矩阵会全部命中复用：`reused=total`、`queued=0`、`elapsed_ms=0`，
   且不新增 `backtest_run` 行。
 
+### 6.6 纸面组合跟踪（T11）
+
+**口径**：一策略一组合，每次同步把 `start_date → 最新行情日` 用同一个回测引擎**整段重算**
+并覆盖 `paper_nav`（幂等 upsert，不做增量持仓状态机）。佣金/印花税/滑点/整手、T+1 开盘成交、
+停牌/涨跌停判定与回测完全一致；`start_date` = 策略首个成功**实盘** run 的交易日（不含回测 run），
+因此只代表同口径跟踪，不代表可交易收益。响应统一返回 `caliber` 说明。
+
+`start_date` 取自 `stg_run`，首个实盘 run 之前的日子不会补算；策略尚无实盘 run 时返回
+409 `DATA_NOT_READY`。
+
+GET `/api/v1/paper/portfolios`：
+
+```json
+{ "items": [ {
+  "portfolio_id": "…", "algo_code": "b3", "name": "均线回踩",
+  "status": "active", "start_date": "2026-09-10", "tracking_days": 27,
+  "latest_trade_date": "2026-10-26", "rebalance_days": 20, "max_positions": 20,
+  "initial_capital": 1000000.0,
+  "nav": 0.993352, "benchmark_nav": 0.902197,
+  "total_return": -0.006648, "benchmark_return": -0.097803, "excess_return": 0.091155,
+  "max_drawdown": -0.007,
+  "vs_backtest": { "bt_id": "…", "total_return": -0.006648, "excess_return": 0.091155,
+                   "max_drawdown": -0.007, "total_return_diff": 0.0,
+                   "excess_return_diff": 0.0, "max_drawdown_diff": 0.0, "as_of": "2026-10-26" },
+  "freshness": { "latest_trade_date": "2026-10-26", "market_trade_date": "2026-10-26",
+                 "lag_days": 0, "stale": false, "updated_at": "…", "ready": true }
+} ], "total": 7 }
+```
+
+- `status`：`pending`（启用但尚未创建组合，此时 `portfolio_id=null`）/ `waiting`（建仓日尚无下一交易日）/
+  `active` / `failed`。列表包含全部 `PAPER_ENABLED_ALGOS`（默认全部策略），未初始化的按 `pending` 占位。
+- 收益/回撤/差值均为小数比率；`tracking_days` 为 `paper_nav` 实际行数。
+- `freshness`：`latest_trade_date` 为最新净值日，`market_trade_date` 为行情最新交易日，
+  `stale = latest_trade_date < market_trade_date`，`lag_days` 为自然日差；`ready=false` 表示尚无净值。
+- `vs_backtest` 取**同区间且同参数**（调仓/持仓/费率/初始资金/排除规则/策略参数完全一致）
+  最新一次成功人工回测（排除 `params.source="paper"`），差值为「纸面 − 回测」；
+  无同参数人工回测时为 null（参数不同不能归因于执行差异，故不参与比较）。
+
+GET `/api/v1/paper/portfolio/{algo_code}?days=250`：
+
+```json
+{ "portfolio_id": "…", "algo_code": "b3", "name": "均线回踩", "status": "active",
+  "start_date": "2026-09-10", "tracking_days": 27,
+  "params": { "rebalance_days": 20, "max_positions": 20, "initial_capital": 1000000.0,
+              "strategy": { "…": "建仓时固化的策略参数快照" } },
+  "caliber": "后复权估值；佣金/印花税/滑点/整手与回测引擎完全一致；…",
+  "series": [ { "date": "2026-09-10", "nav": 1.0, "benchmark": 1.0, "drawdown": 0.0 } ],
+  "holdings": [ { "code": "603221", "name": "爱丽家居", "shares": 1200,
+                  "weight": 0.02, "cost": 17.4412, "price": 17.55, "pnl_pct": 0.0062 } ],
+  "cash_ratio": 0.9584,
+  "pending_orders": [ { "side": "sell", "code": "600000", "name": "浦发银行",
+                        "reason": "T+1 开盘", "fillable": false,
+                        "block_reason": "一字跌停" } ],
+  "vs_backtest": { "…": "同列表结构；无同参数回测时为 null" },
+  "summary": { "nav": 0.993352, "benchmark_nav": 0.902197, "total_return": -0.006648,
+               "benchmark_return": -0.097803, "excess_return": 0.091155,
+               "max_drawdown": -0.007 },
+  "freshness": { "…": "同列表结构" } }
+```
+
+- `days` 为返回的最近净值点数（1–2000，默认 250），按日期升序；`tracking_days` 为全量行数。
+- `holdings` 为最新一天收盘持仓，`weight` 为占总资产比例（0–1），`cost` 含手续费，`pnl_pct` 为浮盈比例。
+- `pending_orders` 为**最新一天收盘后**的下一交易日计划，取回测快照（下一交易日确为调仓成交日时）
+  或由最新信号派生；`fillable=true` 可成交、`false` 不可成交并给 `block_reason`（停牌/一字涨停/一字跌停/无开盘价）、
+  `null` 表示 T+1 行情尚未产生待校验。已知卖不出的持仓仍占名额，不会再生成对应买入计划。
+- 未创建的组合返回 404 `NOT_FOUND`；未知策略 404 `UNKNOWN_ALGO`；策略不在 `PAPER_ENABLED_ALGOS`
+  返回 422 `INVALID_PARAM`。
+
+POST `/api/v1/paper/portfolio/{algo_code}/sync` → `202` 语义（HTTP 200）立即返回：
+
+```json
+{ "status": "accepted", "algo": "b3", "mode": "background",
+  "hint": "轮询 GET /api/v1/paper/portfolio/b3 查看结果" }
+```
+
+- 后台执行完整区间重算，单组合 advisory lock，重复触发时后到者跳过；完成后覆盖 `paper_nav`。
+- 定时任务：`CronTrigger(hour=17, minute=30)`，位于 `algos`(16:30) 与 `signal_perf`(17:10) 之后；
+  非交易日（`trade_calendar.is_open=false`）只记录 skip 日志、不写任何行；单组合失败标记 `failed` 且不影响其余。
+- 同一交易日重复执行是幂等 upsert：`(portfolio_id, trade_date)` 主键，行数不变、无重复。
+
 ## 7. 前端路由
 
 | 路由 | 页面 |
@@ -597,7 +677,8 @@ GET `/api/v1/backtest/grid/{grid_id}`：
 | `/` | 新闻首页（保留） |
 | `/article/:id` | 新闻详情（保留） |
 | `/dashboard` | 盘后分析（原 `/dashboard-v3`，旧新闻统计页删除） |
-| `/algo-center` | 选股中心（参数/run 元信息/CSV） |
+| `/algo-center` | 选股中心（参数/run 元信息/CSV、纸面跟踪入口） |
+| `/paper` | 纸面组合跟踪（V6 T11） |
 | `/stocks/:code` | 个股详情（新增） |
 | `/jobs` | 任务监控（新增） |
 | `/about` | 关于 |

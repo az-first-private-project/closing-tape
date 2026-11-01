@@ -36,7 +36,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping, NamedTuple, Sequence
+from typing import Any, Callable, Mapping, NamedTuple, Sequence
 
 import pandas as pd
 from sqlalchemy import select, update
@@ -431,12 +431,109 @@ async def load_benchmark_closes(
 # 组合模拟（纯函数，便于不依赖 DB 的测试）
 # =====================================================================
 
+def _target_list(
+    target_items: Sequence[Mapping[str, Any]], max_positions: int
+) -> list[tuple[str, str]]:
+    """目标持仓去重、补零并截断到 max_positions（与 _rebalance 同规则）。"""
+    targets: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in target_items:
+        raw_code = item.get("code")
+        if not raw_code:
+            continue
+        code = str(raw_code).zfill(6)
+        if code in seen:
+            continue
+        seen.add(code)
+        targets.append((code, str(item.get("name") or code)))
+    return targets[:max_positions]
+
+
+#: 待执行清单使用中文原因，成交记录沿用既有英文 reason（不影响既有读端）
+_TRADE_REASONS = {"停牌": "suspended", "一字涨停": "limit_up", "一字跌停": "limit_down"}
+
+
+def _order_fillable(bar: Bar | None, side: str) -> tuple[bool | None, str | None]:
+    """能否成交的唯一判定：回测成交、每日快照、待执行清单共用。"""
+    if bar is None:
+        return None, None  # T+1 行情尚未产生，无法预判
+    if bar.is_suspended:
+        return False, "停牌"
+    if side == "buy" and bar.is_limit_up:
+        return False, "一字涨停"
+    if side == "sell" and bar.is_limit_down:
+        return False, "一字跌停"
+    if bar.open is None or bar.open <= 0:
+        return False, "无开盘价"
+    return True, None
+
+
+def build_pending_orders(
+    current_holdings: Sequence[Mapping[str, Any]],
+    target_items: Sequence[Mapping[str, Any]],
+    params: BacktestParams,
+    *,
+    next_bar: Callable[[str], Bar | None] | None = None,
+) -> list[dict]:
+    """收盘后生成下一交易日待执行清单。
+
+    ``next_bar`` 为下一交易日行情（历史行可用）；最新一天尚未开盘时传 None，
+    此时 ``fillable`` 为 null，由前端提示“待 T+1 开盘校验”。
+    """
+    targets = _target_list(target_items, params.max_positions)
+    target_codes = {code for code, _ in targets}
+    orders: list[dict] = []
+    sold: set[str] = set()
+
+    for item in current_holdings:
+        code = str(item.get("code") or "").zfill(6)
+        if not code or code in target_codes:
+            continue
+        bar = next_bar(code) if next_bar else None
+        fillable, block_reason = _order_fillable(bar, "sell")
+        orders.append({
+            "side": "sell",
+            "code": code,
+            "name": str(item.get("name") or code),
+            "reason": "T+1 开盘",
+            "fillable": fillable,
+            "block_reason": block_reason,
+        })
+        if fillable is not False:
+            # 已知卖不出（停牌/跌停）时持仓仍占名额，不能据此计划买入
+            sold.add(code)
+
+    held = {
+        str(item.get("code") or "").zfill(6) for item in current_holdings
+    } - sold
+    free_slots = max(0, int(params.max_positions) - len(held))
+    for code, name in targets:
+        if free_slots <= 0:
+            break
+        if code in held:
+            continue
+        bar = next_bar(code) if next_bar else None
+        fillable, block_reason = _order_fillable(bar, "buy")
+        orders.append({
+            "side": "buy",
+            "code": code,
+            "name": name,
+            "reason": "T+1 开盘",
+            "fillable": fillable,
+            "block_reason": block_reason,
+        })
+        free_slots -= 1
+    return orders
+
+
 def simulate_portfolio(
     trading_days: Sequence[date],
     executions: Mapping[date, Sequence[Mapping[str, Any]]],
     price_book: Mapping[str, Mapping[date, Bar]],
     benchmark_closes: Mapping[date, float] | None,
     params: BacktestParams,
+    *,
+    snapshots_out: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict], bool]:
     """按"T+1 开盘成交"模拟组合，返回 ``(equity_curve, trades, adjusted)``。
 
@@ -507,18 +604,7 @@ def simulate_portfolio(
         nonlocal cash
 
         # 目标持仓（去重、截断到 max_positions）
-        targets: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for item in target_items:
-            raw_code = item.get("code")
-            if not raw_code:
-                continue
-            code = str(raw_code).zfill(6)
-            if code in seen:
-                continue
-            seen.add(code)
-            targets.append((code, str(item.get("name") or code)))
-        targets = targets[: params.max_positions]
+        targets = _target_list(target_items, params.max_positions)
         target_codes = {code for code, _ in targets}
 
         # ---- 1) 卖出不在目标里的持仓（跌停/停牌/无数据卖不出就继续持有，下次再试）----
@@ -527,17 +613,12 @@ def simulate_portfolio(
                 continue
             position = positions[code]
             bar = _bar(code, day)
-            if bar is None:
-                _append_trade(day, code, position["name"], "sell", None, 0, 0.0, 0.0, "no_data")
-                continue
-            if bar.is_suspended:
-                _append_trade(day, code, position["name"], "sell", None, 0, 0.0, 0.0, "suspended")
-                continue
-            if bar.is_limit_down:
-                _append_trade(day, code, position["name"], "sell", None, 0, 0.0, 0.0, "limit_down")
-                continue
-            if bar.open is None or bar.open <= 0:
-                _append_trade(day, code, position["name"], "sell", None, 0, 0.0, 0.0, "no_data")
+            fillable, block_reason = _order_fillable(bar, "sell")
+            if fillable is not True:
+                _append_trade(
+                    day, code, position["name"], "sell", None, 0, 0.0, 0.0,
+                    _TRADE_REASONS.get(block_reason or "", "no_data"),
+                )
                 continue
             price = _sell_price(float(bar.open))
             shares = int(position["shares"])
@@ -566,17 +647,12 @@ def simulate_portfolio(
             remaining = len(new_targets) - index
             budget = min(target_value, cash / remaining) if remaining > 0 else 0.0
             bar = _bar(code, day)
-            if bar is None:
-                _append_trade(day, code, name, "buy", None, 0, 0.0, 0.0, "no_data")
-                continue
-            if bar.is_suspended:
-                _append_trade(day, code, name, "buy", None, 0, 0.0, 0.0, "suspended")
-                continue
-            if bar.is_limit_up:
-                _append_trade(day, code, name, "buy", None, 0, 0.0, 0.0, "limit_up")
-                continue
-            if bar.open is None or bar.open <= 0:
-                _append_trade(day, code, name, "buy", None, 0, 0.0, 0.0, "no_data")
+            fillable, block_reason = _order_fillable(bar, "buy")
+            if fillable is not True:
+                _append_trade(
+                    day, code, name, "buy", None, 0, 0.0, 0.0,
+                    _TRADE_REASONS.get(block_reason or "", "no_data"),
+                )
                 continue
 
             price = _buy_price(float(bar.open))
@@ -608,17 +684,19 @@ def simulate_portfolio(
                 "name": name,
                 "shares": int(shares),
                 "units": float(shares) / adj,   # 后复权份额：市值 = units × close × adj
+                "cost_basis": round(amount + fee, _MONEY_DIGITS),
             }
             last_value[code] = round(shares * price, _MONEY_DIGITS)
             _append_trade(day, code, name, "buy", price, shares, amount, fee, "rebalance")
 
-    for day in trading_days:
+    for index, day in enumerate(trading_days):
         target = executions.get(day)
         if target is not None:
             _rebalance(day, target)
 
         # ---- 收盘净值：现金 + Σ(units × close × adj_factor) ----
         total = cash
+        day_values: dict[str, float] = {}
         for code, position in positions.items():
             bar = _bar(code, day)
             if bar is not None and bar.close is not None and bar.close > 0:
@@ -626,6 +704,7 @@ def simulate_portfolio(
                 last_value[code] = value
             else:
                 value = last_value.get(code, 0.0)
+            day_values[code] = value
             total += value
         nav = (total / params.initial_cash) if params.initial_cash else 0.0
 
@@ -647,6 +726,40 @@ def simulate_portfolio(
             }
         )
 
+        if snapshots_out is not None:
+            holdings: list[dict] = []
+            for code, position in positions.items():
+                value = day_values.get(code, 0.0)
+                shares = int(position.get("shares") or 0)
+                cost_basis = float(position.get("cost_basis") or 0.0)
+                holdings.append({
+                    "code": code,
+                    "name": position.get("name") or code,
+                    "shares": shares,
+                    "weight": round(value / total, 6) if total else 0.0,
+                    "cost": round(cost_basis / shares, 4) if shares else 0.0,
+                    "price": round(value / shares, 4) if shares else 0.0,
+                    "pnl_pct": round(value / cost_basis - 1.0, 6) if cost_basis else 0.0,
+                })
+            holdings.sort(key=lambda item: item["weight"], reverse=True)
+            next_day = trading_days[index + 1] if index + 1 < len(trading_days) else None
+            next_target = executions.get(next_day) if next_day is not None else None
+            # 只有下一交易日确为调仓成交日才有"待执行"；否则明天无操作
+            pending: list[dict] = []
+            if next_target is not None:
+                pending = build_pending_orders(
+                    holdings,
+                    next_target,
+                    params,
+                    next_bar=lambda code, _day=next_day: _bar(code, _day),
+                )
+            snapshots_out.append({
+                "date": day.isoformat(),
+                "holdings": holdings,
+                "cash_ratio": round(cash / total, 4) if total else 0.0,
+                "pending_orders": pending,
+            })
+
     return curve, trades, adjusted_ok
 
 
@@ -662,11 +775,16 @@ async def run_backtest(
     bt_params: dict | None = None,
     db: AsyncSession | None = None,
     bt_id: str | None = None,
+    *,
+    snapshots_out: list[dict] | None = None,
+    tag: str | None = None,
 ) -> dict:
     """执行回测并落 ``backtest_run``，返回契约 6.1 结构。
 
-    ``bt_id`` 可复用调用方预建的记录（参数敏感性矩阵的排队格），
-    用于在同一引擎路径下更新状态，不新增特殊回测分支。
+    ``bt_id`` 可复用调用方预建的记录（参数敏感性矩阵的排队格、纸面组合的
+    每日重算），用于在同一引擎路径下更新状态，不新增特殊回测分支。
+    ``snapshots_out`` 收集每日收盘持仓/现金比/待执行单（T11）；
+    ``tag`` 写入 params.source，便于区分纸面组合产生的回测记录。
     """
     spec = strat.get_spec(algo_code)
     backtest_params = BacktestParams.from_dict(bt_params)
@@ -686,11 +804,13 @@ async def run_backtest(
         return await _run_backtest_impl(
             db, spec, backtest_params, normalized, start_date, end_date,
             owns_session=False, bt_id=bt_id,
+            snapshots_out=snapshots_out, tag=tag,
         )
     async with AsyncSessionLocal() as session:
         return await _run_backtest_impl(
             session, spec, backtest_params, normalized, start_date, end_date,
             owns_session=True, bt_id=bt_id,
+            snapshots_out=snapshots_out, tag=tag,
         )
 
 
@@ -704,6 +824,8 @@ async def _run_backtest_impl(
     *,
     owns_session: bool,
     bt_id: str | None = None,
+    snapshots_out: list[dict] | None = None,
+    tag: str | None = None,
 ) -> dict:
     """回测实现：落 running → 调仓信号 → 预取行情 → 模拟 → 绩效 → 落库。
 
@@ -711,6 +833,12 @@ async def _run_backtest_impl(
     调用方传 db 时只 flush，commit/rollback 由调用方负责。
     """
     record: BacktestRun | None = None
+    params_snapshot = {
+        **backtest_params.as_snapshot(),
+        "strategy": dict(strategy_params),
+    }
+    if tag:
+        params_snapshot["source"] = tag
     if bt_id is not None:
         record = await db.get(BacktestRun, bt_id)
         if record is None:
@@ -720,10 +848,7 @@ async def _run_backtest_impl(
         record.algo_code = spec.code
         record.start_date = start_date
         record.end_date = end_date
-        record.params = {
-            **backtest_params.as_snapshot(),
-            "strategy": dict(strategy_params),
-        }
+        record.params = dict(params_snapshot)
         record.status = "running"
         record.error = None
         record.metrics = None
@@ -737,10 +862,7 @@ async def _run_backtest_impl(
             algo_code=spec.code,
             start_date=start_date,
             end_date=end_date,
-            params={
-                **backtest_params.as_snapshot(),
-                "strategy": dict(strategy_params),
-            },
+            params=dict(params_snapshot),
             status="running",
         )
         db.add(record)
@@ -805,6 +927,7 @@ async def _run_backtest_impl(
             price_book,
             benchmark_closes,
             backtest_params,
+            snapshots_out=snapshots_out,
         )
 
         # ---- 5) 绩效 ----
@@ -835,6 +958,7 @@ async def _run_backtest_impl(
             **backtest_params.as_snapshot(),
             "strategy": dict(strategy_params),
             "calendar_source": calendar_source,
+            **({"source": tag} if tag else {}),
         }
         record.metrics = strat.jsonable(metrics)
         record.equity_curve = strat.jsonable(curve)
@@ -944,6 +1068,7 @@ __all__ = [
     "load_trading_days",
     "load_price_book",
     "load_benchmark_closes",
+    "build_pending_orders",
     "simulate_portfolio",
     "run_backtest",
 ]
