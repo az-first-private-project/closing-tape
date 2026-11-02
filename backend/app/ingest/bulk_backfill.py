@@ -184,6 +184,17 @@ def _dv_ttm(
     return round(total / close * 100.0, 4) if close > 0 else 0.0
 
 
+def _volume_multiplier(code: str, src: str) -> int:
+    """返回原始成交量换算成「股」的倍数。
+
+    腾讯主板/创业板返回「手」，但科创板（68 开头）返回的已经是「股」；
+    新浪统一先除以 100 归一成「手」，因此只有腾讯科创板需要跳过 ×100。
+    """
+    if src == "tencent" and code.startswith("68"):
+        return 1
+    return 100
+
+
 def _price_rows(
     code: str,
     meta: dict[str, Any],
@@ -218,8 +229,12 @@ def _price_rows(
         high = item.get("high")
         low = item.get("low")
         open_ = item.get("open")
-        volume_lots = item.get("volume")
-        volume = int(volume_lots * 100) if volume_lots is not None else None
+        raw_volume = item.get("volume")
+        volume = (
+            int(raw_volume * _volume_multiplier(code, src))
+            if raw_volume is not None
+            else None
+        )
 
         # 用前复权价算真实涨跌幅，并反推交易所口径的调整后前收盘
         pct_chg = None

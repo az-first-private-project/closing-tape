@@ -195,8 +195,14 @@ async def phase_history(boards, start: date, end: date, progress: dict,
     for index, board in enumerate(pending, start=1):
         code = board["sector_code"]
         try:
-            frame = await _fetch_with_retry(fetch_board_history, board, start, end)
-            rows = history_rows(frame, board)
+            # 区间首日涨跌幅要拿前一交易日收盘来算，只取 [start, end] 会让 start 当天 pct_chg 为空
+            frame = await _fetch_with_retry(
+                fetch_board_history, board, start - timedelta(days=10), end
+            )
+            rows = [
+                row for row in history_rows(frame, board)
+                if start <= row["trade_date"] <= end
+            ]
             written = await upsert_history(rows)
             done[code] = written
             failed.pop(code, None)
