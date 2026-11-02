@@ -130,6 +130,9 @@ MARGIN_BALANCE = ("融资余额", "融资余额(元)", "融资余额(亿元)")
 SHORT_BALANCE = ("融券余量金额", "融券余额", "融券余额(元)", "融券总额")
 NORTH_DATE = ("日期", "date")
 NORTH_NET = ("当日成交净买额", "当日净买额", "北向资金净流入", "northward_net")
+# 两融 T+1 披露；最新已披露日距请求日超过该天数视为"未披露/源异常"，不得落库。
+# 15 天覆盖春节/国庆长假，同时挡住 akshare 无参调用返回多年前历史数据的坑。
+MARGIN_MAX_PUBLISHED_LAG_DAYS = 15
 
 # 股票池补充
 DELIST_CODE = ("公司代码", "证券代码", "股票代码", "代码")
@@ -666,6 +669,25 @@ def _margin_map_szse(
             "short_balance": _num(_pick(row, SHORT_BALANCE)),
         }
     return result
+
+
+def _margin_effective_date(
+    sse_map: dict[date, dict[str, float | None]],
+    requested_date: date,
+    max_lag_days: int = MARGIN_MAX_PUBLISHED_LAG_DAYS,
+) -> date | None:
+    """区间内已披露的最新两融日期；无数据或过旧（超过 ``max_lag_days``）返回 None。
+
+    过旧判定不可省略：akshare 的 ``stock_margin_sse()`` 无参调用默认区间截止
+    2023-09-22，网络抖动触发兜底时会把三年前的数据当成"最新已披露日"。
+    """
+    published = [day for day in sse_map if day <= requested_date]
+    if not published:
+        return None
+    latest = max(published)
+    if (requested_date - latest).days > max_lag_days:
+        return None
+    return latest
 
 
 def _normalize_north(df: pd.DataFrame | None) -> dict[date, float | None]:
@@ -1505,9 +1527,13 @@ class AkshareProvider(BaseProvider):
         因此这里：
 
         1. 上交所按区间拉取（带 ``信用交易日期``）→ 取 ``<= trade_date`` 的最新
-           已披露日作为 **effective_date**（可能 = D-1）；
+           已披露日作为 **effective_date**（可能 = D-1），过旧则视为未披露；
         2. 深交所按 **effective_date 显式请求**（接口支持 date 参数）；
         3. 落库行使用 effective_date，并在 detail 里标记 ``published_date_lag``。
+
+        两个市场都必须成功：库里存的是沪深合计，缺任一市场会低估约一半；
+        也**不做无日期参数的兜底**（akshare 默认区间分别截止 2023-09-22 和
+        2024-04-11，会把陈旧数据标成请求日）。
 
         单位：上交所金额**元**（/1e8→亿元）；深交所金额**已是亿元**；
         北向"当日成交净买额"缺失属预期内（2024-08 后口径变化），失败不报错。
@@ -1527,24 +1553,21 @@ class AkshareProvider(BaseProvider):
             )
             sse_ok = True
         except ProviderError as exc:
+            # 不做无日期参数兜底：akshare 的默认区间截止 2023-09-22，
+            # 会把多年前的数据当"最新已披露日"落库。
             logger.warning("上交所两融获取失败：%s", exc)
-            try:  # 兜底：部分版本/网络下只能拿到历史全量（无日期参数）
-                self._throttle()
-                sse_df = self._fetch_one(ak.stock_margin_sse, "stock_margin_sse(no-range)")
-                sse_ok = sse_df is not None and not sse_df.empty
-            except ProviderError as exc2:
-                logger.warning("上交所两融兜底获取也失败：%s", exc2)
 
         sse_map = _margin_map_sse(sse_df) if sse_ok else {}
-        published_dates = sorted(day for day in sse_map if day <= requested_date)
-        date_verified = bool(sse_ok and published_dates)
-        effective_date = published_dates[-1] if published_dates else requested_date
-        if sse_ok and not published_dates:
-            # 上交所成功但区间无数据：说明尚未披露，宁可"跳过"也不写错日期
+        effective_date = _margin_effective_date(sse_map, requested_date)
+        if sse_ok and effective_date is None:
+            # 上交所成功但区间内无近期数据：说明尚未披露或源返回陈旧历史，
+            # 宁可"跳过"也不写错日期
             raise ProviderError(
-                f"上交所两融区间内无已披露数据（{lookback_start} ~ {requested_date}）",
+                f"上交所两融区间内无近期已披露数据（{lookback_start} ~ {requested_date}）",
                 detail={"provider": "akshare", "reason": "margin_not_published"},
             )
+        if effective_date is None:
+            effective_date = requested_date
 
         try:
             szse_df = self._fetch_one(
@@ -1554,21 +1577,24 @@ class AkshareProvider(BaseProvider):
             )
             szse_ok = True
         except ProviderError as exc:
+            # 不做无参兜底：该接口返回单行且无日期列，无参时 akshare 固定取
+            # date="20240411"，会被误标成请求日写入。宁可缺一个市场的数据。
             logger.warning("深交所两融获取失败：%s", exc)
-            try:  # 兜底：部分版本不接受 date 参数（返回值为最新一天，日期未知）
-                self._throttle()
-                szse_df = self._fetch_one(ak.stock_margin_szse, "stock_margin_szse(no-arg)")
-                szse_ok = szse_df is not None and not szse_df.empty
-            except ProviderError as exc2:
-                logger.warning("深交所两融兜底获取也失败：%s", exc2)
 
-        if not sse_ok and not szse_ok:
+        if not sse_ok:
+            # 没有上交所数据就无法确认披露日，SZSE 的日期只能靠猜
             raise ProviderError(
-                "两融数据全部获取失败（上交所 + 深交所）",
-                detail={"provider": "akshare", "trade_date": requested_date.isoformat()},
+                "上交所两融获取失败，无法确认披露日期",
+                detail={"provider": "akshare", "reason": "sse_unavailable"},
+            )
+        if not szse_ok:
+            # 库里存的是沪深合计；只有单市场会低估约一半，不能落库
+            raise ProviderError(
+                "深交所两融获取失败，无法确认沪深合计余额",
+                detail={"provider": "akshare", "reason": "szse_unavailable"},
             )
 
-        szse_map = _margin_map_szse(szse_df, effective_date) if szse_ok else {}
+        szse_map = _margin_map_szse(szse_df, effective_date)
 
         # 北向：软失败（2024-08 后可能长期无数据，属预期内）
         self._throttle()
@@ -1614,7 +1640,7 @@ class AkshareProvider(BaseProvider):
         return FetchResult(
             rows=len(frame),
             total=len(frame),
-            failed=0 if (sse_ok and szse_ok) else 1,
+            failed=0,
             elapsed_ms=elapsed,
             detail={
                 "data": frame,
@@ -1622,7 +1648,6 @@ class AkshareProvider(BaseProvider):
                 "requested_date": requested_date.isoformat(),
                 "effective_date": effective_date.isoformat(),
                 "published_date_lag": lag,
-                "date_verified": date_verified,
                 "sse_available": sse_ok,
                 "szse_available": szse_ok,
                 "north_available": north_map.get(effective_date) is not None,

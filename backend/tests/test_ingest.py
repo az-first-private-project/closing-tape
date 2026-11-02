@@ -27,6 +27,8 @@ pd = pytest.importorskip("pandas")
 from app.core.errors import ProviderError
 from app.ingest.akshare_provider import (  # noqa: E402
     SHARES_PER_LOT,
+    AkshareProvider,
+    _margin_effective_date,
     _margin_map_sse,
     _margin_map_szse,
     _normalize_calendar,
@@ -332,6 +334,61 @@ def test_margin_szse_already_yi_and_uses_default_date() -> None:
     item = result[date(2026, 10, 20)]
     assert item["margin_balance"] == pytest.approx(6000.5)
     assert item["short_balance"] == pytest.approx(12.3)
+
+
+def test_margin_effective_date_picks_latest_within_lookback() -> None:
+    sse_map = {
+        date(2026, 10, 19): {"margin_balance": 1.0},
+        date(2026, 10, 20): {"margin_balance": 2.0},
+    }
+    assert _margin_effective_date(sse_map, date(2026, 10, 21)) == date(2026, 10, 20)
+
+
+def test_margin_effective_date_rejects_stale_history() -> None:
+    """akshare 无参 SSE 默认区间截止 2023-09-22，不能当最新披露日。"""
+    sse_map = {date(2023, 9, 22): {"margin_balance": 1.0}}
+    assert _margin_effective_date(sse_map, date(2026, 10, 30)) is None
+
+
+def test_margin_effective_date_ignores_future_rows() -> None:
+    sse_map = {date(2026, 10, 31): {"margin_balance": 1.0}}
+    assert _margin_effective_date(sse_map, date(2026, 10, 30)) is None
+
+
+def test_fetch_margin_never_calls_endpoints_without_date(monkeypatch) -> None:
+    """网络失败时不得走无日期参数兜底（会把 2023/2024 数据标成请求日）。"""
+    provider = AkshareProvider()
+    calls: list[tuple[str, dict]] = []
+
+    def fake_fetch(frame, what, **kwargs):
+        calls.append((what, kwargs))
+        raise ProviderError("boom")
+
+    monkeypatch.setattr(provider, "_fetch_one", fake_fetch)
+    with pytest.raises(ProviderError, match="上交所"):
+        provider.fetch_margin(date(2026, 10, 30))
+
+    sse_calls = [kwargs for what, kwargs in calls if what == "stock_margin_sse"]
+    szse_calls = [kwargs for what, kwargs in calls if what == "stock_margin_szse"]
+    assert sse_calls and all({"start_date", "end_date"} <= set(kw) for kw in sse_calls)
+    assert szse_calls and all("date" in kw for kw in szse_calls)
+
+
+def test_fetch_margin_szse_failure_raises_instead_of_partial_row(monkeypatch) -> None:
+    """库里存沪深合计；只有上交所数据时不能写半份余额。"""
+    provider = AkshareProvider()
+    sse_frame = pd.DataFrame(
+        [{"信用交易日期": "2026-10-30", "融资余额": 1.0e12, "融券余量金额": 2.0e10}]
+    )
+
+    def fake_fetch(frame, what, **kwargs):
+        if what == "stock_margin_sse":
+            return sse_frame
+        raise ProviderError("szse down")
+
+    monkeypatch.setattr(provider, "_fetch_one", fake_fetch)
+    with pytest.raises(ProviderError, match="深交所"):
+        provider.fetch_margin(date(2026, 10, 30))
 
 
 # ============================================================
