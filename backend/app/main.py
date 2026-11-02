@@ -43,7 +43,8 @@ from app.core.config import (  # noqa: E402
 from app.core.errors import AppError  # noqa: E402
 from app.core.logging import bind_run, get_logger, setup_logging  # noqa: E402
 from app.db.base import Base  # noqa: E402
-from app.db.session import dispose_engines, engine  # noqa: E402
+from app.db.session import AsyncSessionLocal, dispose_engines, engine  # noqa: E402
+from app.services.freshness import get_freshness_items, summarize  # noqa: E402
 
 setup_logging()
 logger = get_logger("main")
@@ -187,11 +188,15 @@ async def health() -> dict:
             latest_trade_date = (await conn.execute(
                 text("SELECT max(trade_date) FROM fact_stock_daily")
             )).scalar()
-            critical = (await conn.execute(text(
-                "SELECT count(*) FROM meta_data_quality WHERE status = 'ok'"
-            ))).scalar()
-            data_ready = bool(latest_trade_date) and bool(critical)
-            detail = {"fresh_datasets": int(critical or 0)}
+            async with AsyncSessionLocal() as session:
+                items = await get_freshness_items(session)
+            summary = summarize(items)
+            data_ready = summary["ready"]
+            detail = {
+                "fresh_datasets": sum(1 for item in items if item["status"] == "ok"),
+                "total_datasets": len(items),
+                "message": summary["message"],
+            }
     except Exception as exc:                          # noqa: BLE001
         detail = {"error": f"{type(exc).__name__}: {exc}"}
 

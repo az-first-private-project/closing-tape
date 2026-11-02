@@ -19,7 +19,7 @@ import asyncio
 import html
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -350,6 +350,37 @@ async def collect_news(session) -> dict:
         "新闻采集完成：发现 %d 条，新增 %d 条，淘汰 %d 条，%dms",
         total_found, total_new, trimmed, elapsed_ms,
     )
+
+    # 新鲜度记录：新闻不经过 run_task，必须在这里写 meta_data_quality
+    success_sources = sum(1 for item in report.values() if item["error"] is None)
+    try:
+        from app.pipeline import mark_failure, mark_success
+
+        if success_sources == 0:
+            errors = "; ".join(
+                f"{name}: {item['error']}"
+                for name, item in report.items() if item["error"]
+            )
+            await mark_failure(session, "news", f"所有新闻源抓取失败: {errors}"[:2000])
+        else:
+            await mark_success(
+                session, "news",
+                rows=total_new,
+                coverage=round(success_sources / len(report), 4) if report else 0.0,
+                anomalies=len(report) - success_sources,
+                trade_date=date.today(),
+                detail={
+                    "found": total_found,
+                    "new": total_new,
+                    "trimmed": trimmed,
+                    "sources_ok": success_sources,
+                    "sources_total": len(report),
+                },
+            )
+    except Exception:                                  # noqa: BLE001 —— 元数据失败不影响采集
+        logger.exception("新闻新鲜度记录失败（采集结果已落库）")
+        await session.rollback()
+
     return summary
 
 
