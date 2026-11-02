@@ -38,7 +38,7 @@ class StgRun(Base):
     data_version: Mapped[str | None] = mapped_column(String(32), comment="数据版本(最新交易日+行数指纹)")
     is_backtest: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="success",
-                                        comment="running/success/failed")
+                                        comment="running/success/failed/superseded")
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
 

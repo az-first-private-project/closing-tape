@@ -10,7 +10,9 @@
      更新时同样失效，见 ``data_version``）；
   3. 命中缓存必须 4 项全等，否则重算；
   4. 任何一次运行都先落 `stg_run(status="running")`，结束更新 success/failed
-     ——**没有 run 记录的结果不可复现，不能返回给前端**。
+     ——**没有 run 记录的结果不可复现，不能返回给前端**；
+  5. 新 run 成功后，同一 (algo, trade_date, 参数指纹) 的旧成功 run 标记为
+     ``superseded``：重复执行 ``algos`` 不会留下多条有效 run 污染统计。
 
 事务所有权（与 Lead 的 API/pipeline 约定）：
   - `db=None`：自建会话并自行 commit/rollback（失败也留 failed 记录）；
@@ -31,7 +33,7 @@ import time
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 from sqlalchemy import func, select, update
@@ -341,6 +343,57 @@ async def _load_signal_rows(db: AsyncSession, run_id: str) -> list[StgSignal]:
 
 
 # =====================================================================
+# 幂等：同一逻辑键只保留一条有效 run
+# =====================================================================
+
+def superseded_run_ids(
+    keep_run_id: str,
+    algo_code: str,
+    fingerprint: str,
+    candidates: Iterable[tuple[str, dict | None]],
+) -> list[str]:
+    """从候选 run 中挑出应被取代的旧 run（同参数、非本次 run）。"""
+    return [
+        run_id
+        for run_id, params in candidates
+        if run_id != keep_run_id
+        and params_fingerprint(algo_code, params or {}) == fingerprint
+    ]
+
+
+async def _supersede_previous_runs(
+    db: AsyncSession, run: StgRun, fingerprint: str
+) -> list[str]:
+    """把同一 (algo, trade_date, 参数) 的旧成功实盘 run 标记 superseded。
+
+    只改状态、不删数据：旧 run 仍可通过 /algo/runs/{run_id} 审计，
+    但不再参与缓存命中和任何 status='success' 的统计。
+    """
+    if run.is_backtest:
+        return []
+    rows = (await db.execute(
+        select(StgRun.run_id, StgRun.params)
+        .where(StgRun.algo_code == run.algo_code)
+        .where(StgRun.trade_date == run.trade_date)
+        .where(StgRun.is_backtest.is_(False))
+        .where(StgRun.status == "success")
+        .where(StgRun.run_id != run.run_id)
+    )).all()
+    stale = superseded_run_ids(run.run_id, run.algo_code, fingerprint, rows)
+    if stale:
+        await db.execute(
+            update(StgRun)
+            .where(StgRun.run_id.in_(stale))
+            .values(status="superseded")
+        )
+        logger.info(
+            "旧 run 标记 superseded algo=%s date=%s count=%d keep=%s",
+            run.algo_code, run.trade_date, len(stale), run.run_id,
+        )
+    return stale
+
+
+# =====================================================================
 # 缓存查找
 # =====================================================================
 
@@ -448,6 +501,7 @@ async def _run_strategy_impl(
         if resolved_date is None:
             resolved_date = await latest_trade_date(db)
     version = await data_version(db, resolved_date)
+    fingerprint = params_fingerprint(spec.code, normalized)
 
     if not force:
         cached = await get_cached_run(spec.code, resolved_date, normalized, db)
@@ -503,6 +557,7 @@ async def _run_strategy_impl(
         run.elapsed_ms = elapsed_ms
         run.data_version = version
         run.status = "success"
+        await _supersede_previous_runs(db, run, fingerprint)
         if owns_session:
             await db.commit()
         else:
@@ -637,4 +692,5 @@ __all__ = [
     "get_cached_run",
     "get_run",
     "list_runs",
+    "superseded_run_ids",
 ]

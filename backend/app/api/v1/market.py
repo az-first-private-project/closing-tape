@@ -554,10 +554,23 @@ def _temperature_payload(row: MarketTemperatureDaily) -> dict:
 
 
 async def _count_signals(db: AsyncSession, trade_date: date) -> int:
+    """当日信号数：每个策略只取最新一条有效 run，避免重复/回测 run 叠加。"""
     from app.db.models import StgRun
-    total = (await db.execute(
-        select(func.coalesce(func.sum(StgRun.signal_count), 0))
+    latest = (
+        select(StgRun.algo_code, StgRun.signal_count)
         .where(StgRun.trade_date == trade_date)
+        .where(StgRun.is_backtest.is_(False))
+        .where(StgRun.status == "success")
+        .distinct(StgRun.algo_code)
+        .order_by(
+            StgRun.algo_code,
+            StgRun.created_at.desc().nullslast(),
+            StgRun.run_id.desc(),
+        )
+        .subquery()
+    )
+    total = (await db.execute(
+        select(func.coalesce(func.sum(latest.c.signal_count), 0))
     )).scalar()
     return int(total or 0)
 

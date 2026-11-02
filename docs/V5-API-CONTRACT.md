@@ -268,7 +268,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   **`composite_score` 才是 0–10 的综合因子得分**（可能为 null）。前端"得分"列请用后者。
 - **参数必须真生效**：不同 `pe_max` 必须产生不同 `run_id` 与不同结果。
 - `data[].metrics` 为策略依据的完整指标，前端表格列由 `metrics` 动态生成。
-- `run` 额外字段：`status`（running/success/failed）、失败时 `error`、回测 run 带 `is_backtest`。
+- `run` 额外字段：`status`（running/success/failed/superseded；superseded 表示同参数旧 run 已被新 run 取代，仍可审计但不参与统计）、失败时 `error`、回测 run 带 `is_backtest`。
 
 **run 级市场门槛 `market_gate`（仅 B4/B5，V6 T7 补充）**
 
