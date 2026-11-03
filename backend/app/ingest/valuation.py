@@ -137,6 +137,10 @@ UPDATE_CHUNK_ROWS = 1000
 #: 分红是年度/半年度事件，不需要每天抓；30 天窗口 = 每日增量几乎零请求，
 #: 新分红最迟 30 天内入库（dv_ttm 用的是 trailing-12 个月的分红，影响可控）。
 DIVIDEND_REFRESH_DAYS = 30
+#: 东财批量分红回看年数：覆盖历史估值重算起点（2021-09）并留冗余
+DIVIDEND_BULK_YEARS = 6
+#: 批量分红单次 upsert 行数（6 列 × 2000 行，远低于 PG 参数上限）
+DIVIDEND_BULK_CHUNK = 2000
 #: 股息率回看窗口（自然日）：ex_date ∈ (d-365, d] 的分红计入当天的近 12 个月合计
 DV_WINDOW_DAYS = 365
 
@@ -1561,7 +1565,9 @@ def _dividend_rows_from_frame(
 
 
 async def _upsert_dividend_rows(
-    db: "AsyncSession | None", rows: Sequence[dict[str, Any]]
+    db: "AsyncSession | None",
+    rows: Sequence[dict[str, Any]],
+    update_columns: Sequence[str] | None = None,
 ) -> int:
     """幂等写入分红缓存（``ON CONFLICT (code, ex_date) DO UPDATE``）。"""
     if not rows:
@@ -1574,7 +1580,11 @@ async def _upsert_dividend_rows(
             DimStockDividend,
             list(rows),
             ["code", "ex_date"],
-            update_columns=["dps", "announce_date", "report_period", "src"],
+            update_columns=(
+                list(update_columns)
+                if update_columns is not None
+                else ["dps", "announce_date", "report_period", "src"]
+            ),
         )
 
 
@@ -1928,6 +1938,20 @@ def _valuation_update_rows(code: str, frame: pd.DataFrame) -> list[dict[str, Any
     return rows
 
 
+def _typed_null(value: Any, type_: Any) -> Any:
+    """``None`` → 带类型的 SQL NULL（``CAST(NULL AS NUMERIC(...))``）。
+
+    ``VALUES`` 里的裸 ``None`` 会被 SQLAlchemy 渲染成无类型字面量 ``NULL``。若某列在
+    这一批里恰好全空（实测 300548 整段无 BPS），PostgreSQL 只能把该列推断成 ``text``，
+    UPDATE numeric 列就抛 ``DatatypeMismatchError``。显式 CAST 让空列仍带数值类型。
+    """
+    if value is None:
+        from sqlalchemy import cast, literal
+
+        return cast(literal(None), type_)
+    return value
+
+
 def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
     """构造 ``UPDATE fact_stock_daily SET pe_ttm/pb/dv_ttm FROM (VALUES ...)`` 语句。
 
@@ -1939,22 +1963,25 @@ def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
     from app.db.models.fact import FactStockDaily
 
     table = FactStockDaily.__table__
+    pe_type = Numeric(16, 4)
+    pb_type = Numeric(16, 4)
+    dv_type = Numeric(10, 4)
     value_rows = [
         (
             row["code"],
             row["trade_date"],
-            row.get("pe_ttm"),
-            row.get("pb"),
-            row.get("dv_ttm"),
+            _typed_null(row.get("pe_ttm"), pe_type),
+            _typed_null(row.get("pb"), pb_type),
+            _typed_null(row.get("dv_ttm"), dv_type),
         )
         for row in rows
     ]
     payload = values(
         column("code", String(6)),
         column("trade_date", Date()),
-        column("pe_ttm", Numeric(16, 4)),
-        column("pb", Numeric(16, 4)),
-        column("dv_ttm", Numeric(10, 4)),
+        column("pe_ttm", pe_type),
+        column("pb", pb_type),
+        column("dv_ttm", dv_type),
         name="v",
     ).data(value_rows)
     return (
@@ -2209,6 +2236,42 @@ async def sync_financials(
 # ============================================================
 # 阶段 1b 入口：巨潮现金分红 → dim_stock_dividend
 # ============================================================
+async def _sync_dividends_bulk(
+    db: "AsyncSession | None", code_list: Sequence[str], today: date
+) -> int:
+    """东财全市场分红实施记录一次性回补（巨潮不可用时的主路径）。
+
+    ``RPT_SHAREBONUS_DET`` 的 ``PRETAX_BONUS_RMB`` 是每 10 股税前金额，入库换算成
+    每股 ``dps``。只更新 ``dps/src``，保留巨潮已写入的 ``announce_date``。
+    失败抛 :class:`ProviderError`，由 :func:`sync_dividends` 降级逐只巨潮。
+    """
+    from app.ingest.em_dividends import fetch_dividends
+
+    start = date(today.year - DIVIDEND_BULK_YEARS, today.month, today.day)
+    events = await fetch_dividends(start, today)
+    allowed = set(_normalize_codes(code_list))
+    rows: list[dict[str, Any]] = []
+    written = 0
+    for code, items in events.items():
+        if code not in allowed:
+            continue
+        for ex_date, per_10 in items:
+            dps = _as_db_value(float(per_10) / 10.0, 6)
+            if dps is None or dps <= 0:
+                continue
+            rows.append({
+                "code": code, "ex_date": ex_date, "dps": dps,
+                "announce_date": None, "report_period": None, "src": "eastmoney",
+            })
+            if len(rows) >= DIVIDEND_BULK_CHUNK:
+                written += await _upsert_dividend_rows(
+                    db, rows, update_columns=["dps", "src"]
+                )
+                rows = []
+    written += await _upsert_dividend_rows(db, rows, update_columns=["dps", "src"])
+    return written
+
+
 async def sync_dividends(
     codes: list[str] | None = None,
     db: "AsyncSession | None" = None,
@@ -2324,6 +2387,7 @@ async def sync_dividends(
     job_id = await _job_begin(db, task, DATASET, params, total=len(code_list))
     batch_rows: list[dict[str, Any]] = []
     batch_codes: list[str] = []
+    source_tag = "cninfo"
 
     async def _flush_batch() -> None:
         nonlocal written
@@ -2336,45 +2400,60 @@ async def sync_dividends(
         batch_codes.clear()
 
     try:
-        for index, code in enumerate(pending, start=1):
+        # 巨潮按代码逐只抓在 DNS/风控不可用时整批失败；东财 RPT_SHAREBONUS_DET
+        # 一次分页拉全市场，作为主路径；失败再降级逐只巨潮。
+        if pending:
             try:
-                raw = await _ak_call("stock_dividend_cninfo", symbol=code)
-                if raw is None:
-                    # 查询成功但没有数据 → "无分红"，查过即完成（不写库）
-                    done.add(code)
-                else:
-                    rows = _dividend_rows_from_frame(code, normalize_dividends(raw))
-                    if rows:
-                        batch_rows.extend(rows)
-                        batch_codes.append(code)  # 落库成功后才标记完成（见 _flush_batch）
-                    else:
-                        done.add(code)
-            except Exception as exc:  # noqa: BLE001 —— 单只失败不影响整体
-                failed[code] = f"{type(exc).__name__}: {exc}"
-                logger.warning("分红抓取失败 code=%s：%s", code, exc)
-
-            if len(batch_codes) >= SYNC_BATCH_CODES:
-                await _flush_batch()
-            if index % SYNC_CHECKPOINT_EVERY == 0 or index == len(pending):
-                await _flush_batch()
+                written = await _sync_dividends_bulk(db, code_list, today)
+                done.update(pending)
+                failed.clear()  # 旧断点里的逐只失败已由批量全量覆盖
+                source_tag = "eastmoney"
                 logger.info(
-                    "分红同步进度 %d/%d（检查 %d，失败 %d，写入 %d 行）",
-                    index, len(pending), len(done), len(failed), written,
+                    "分红同步：东财批量完成，%d 只，%d 行", len(pending), written
                 )
-                await _job_update(
-                    db,
-                    job_id,
-                    done=len(done),
-                    failed=len(failed),
-                    rows_written=written,
-                    checkpoint={
-                        "params": params,
-                        "completed_codes": sorted(done),
-                        "checked_codes": sorted(done),
-                        "checked_at": today.isoformat(),
-                        "failed_codes": dict(sorted(failed.items())[:500]),
-                    },
-                )
+            except Exception as exc:  # noqa: BLE001 —— 降级逐只巨潮
+                logger.warning("东财批量分红失败，降级逐只巨潮：%s", exc)
+
+        if source_tag == "cninfo":
+            for index, code in enumerate(pending, start=1):
+                try:
+                    raw = await _ak_call("stock_dividend_cninfo", symbol=code)
+                    if raw is None:
+                        # 查询成功但没有数据 → "无分红"，查过即完成（不写库）
+                        done.add(code)
+                    else:
+                        rows = _dividend_rows_from_frame(code, normalize_dividends(raw))
+                        if rows:
+                            batch_rows.extend(rows)
+                            batch_codes.append(code)  # 落库成功后才标记完成（见 _flush_batch）
+                        else:
+                            done.add(code)
+                except Exception as exc:  # noqa: BLE001 —— 单只失败不影响整体
+                    failed[code] = f"{type(exc).__name__}: {exc}"
+                    logger.warning("分红抓取失败 code=%s：%s", code, exc)
+
+                if len(batch_codes) >= SYNC_BATCH_CODES:
+                    await _flush_batch()
+                if index % SYNC_CHECKPOINT_EVERY == 0 or index == len(pending):
+                    await _flush_batch()
+                    logger.info(
+                        "分红同步进度 %d/%d（检查 %d，失败 %d，写入 %d 行）",
+                        index, len(pending), len(done), len(failed), written,
+                    )
+                    await _job_update(
+                        db,
+                        job_id,
+                        done=len(done),
+                        failed=len(failed),
+                        rows_written=written,
+                        checkpoint={
+                            "params": params,
+                            "completed_codes": sorted(done),
+                            "checked_codes": sorted(done),
+                            "checked_at": today.isoformat(),
+                            "failed_codes": dict(sorted(failed.items())[:500]),
+                        },
+                    )
 
         await _flush_batch()
         elapsed = int((time.perf_counter() - started) * 1000)
@@ -2394,7 +2473,7 @@ async def sync_dividends(
                 message=f"{len(failed)} 只标的分红抓取失败（未写库，重跑可补）",
                 samples=sorted(failed)[:5],
             )
-        status = "ok" if written > 0 or not pending else "error"
+        status = "ok" if not pending or any(code in done for code in pending) else "error"
         if status == "error":
             await _record_quality(
                 db, make_error_report(DATASET, "全部标的分红抓取失败"), today, "error"
@@ -2426,6 +2505,7 @@ async def sync_dividends(
             elapsed_ms=elapsed,
             detail={
                 "task": task,
+                "source": source_tag,
                 "completed": len(done),
                 "skipped_fresh": skipped_fresh,
                 "pending": len(pending),

@@ -583,6 +583,189 @@ def test_dividend_rows_from_frame_precision() -> None:
 
 
 # ============================================================
+# ⑤c 东财批量分红（巨潮 DNS 不可用时主路径）与降级
+# ============================================================
+def _isolate_sync_dividends(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    codes: list[str],
+    bulk: Any,
+    cninfo: Any,
+    checkpoint: dict | None = None,
+) -> dict[str, Any]:
+    """把 sync_dividends 的 DB/网络/任务记录全部替换成内存桩。"""
+    seen: dict[str, Any] = {"cninfo_calls": 0, "quality": [], "finished": [], "rows": 0}
+
+    async def fake_resolve(db: Any) -> list[str]:
+        return codes
+
+    async def fake_updated(db: Any, wanted: Any) -> dict:
+        return {}
+
+    async def fake_checkpoint(db: Any, task: str, dataset: str, params: Any) -> dict:
+        return checkpoint or {}
+
+    async def fake_job_begin(db: Any, task: str, dataset: str, params: Any,
+                             total: int = 0) -> str:
+        return "job-1"
+
+    async def fake_job_update(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def fake_job_finish(db: Any, job_id: str, status: str, **kwargs: Any) -> None:
+        seen["finished"].append((status, kwargs.get("checkpoint") or {}))
+
+    async def fake_record(db: Any, report: Any, trade_date: Any, status: str) -> None:
+        seen["quality"].append(status)
+
+    async def fake_upsert(db: Any, rows: Any, update_columns: Any = None) -> int:
+        seen["rows"] += len(rows)
+        return len(rows)
+
+    async def fake_ak_call(name: str, **kwargs: Any) -> Any:
+        seen["cninfo_calls"] += 1
+        return cninfo
+
+    monkeypatch.setattr(valuation, "_resolve_market_codes", fake_resolve)
+    monkeypatch.setattr(valuation, "_load_dividend_updated", fake_updated)
+    monkeypatch.setattr(valuation, "_load_checkpoint", fake_checkpoint)
+    monkeypatch.setattr(valuation, "_job_begin", fake_job_begin)
+    monkeypatch.setattr(valuation, "_job_update", fake_job_update)
+    monkeypatch.setattr(valuation, "_job_finish", fake_job_finish)
+    monkeypatch.setattr(valuation, "_record_quality", fake_record)
+    monkeypatch.setattr(valuation, "_upsert_dividend_rows", fake_upsert)
+    monkeypatch.setattr(valuation, "_ak_call", fake_ak_call)
+    monkeypatch.setattr(valuation, "_sync_dividends_bulk", bulk)
+    return seen
+
+
+def test_sync_dividends_bulk_per_10_to_per_share_and_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """东财 ``PRETAX_BONUS_RMB``（每 10 股）→ dps（每股），过滤非池内/零分红代码。"""
+    from app.ingest import em_dividends
+
+    captured: list[tuple[list[dict], tuple[str, ...]]] = []
+
+    async def fake_fetch(start: date, end: date | None = None, **kwargs: Any) -> dict:
+        assert start == date(2020, 11, 3) and end == date(2026, 11, 3)
+        return {
+            "600519": [(date(2024, 6, 19), 308.76)],
+            "999999": [(date(2024, 6, 20), 5.0)],   # 不在股票池 → 丢弃
+            "000001": [(date(2024, 6, 21), 0.0)],   # 零现金分红 → 丢弃
+        }
+
+    async def fake_upsert(db: Any, rows: Any, update_columns: Any = None) -> int:
+        captured.append((list(rows), tuple(update_columns or ())))
+        return len(rows)
+
+    monkeypatch.setattr(em_dividends, "fetch_dividends", fake_fetch)
+    monkeypatch.setattr(valuation, "_upsert_dividend_rows", fake_upsert)
+
+    written = asyncio.run(
+        valuation._sync_dividends_bulk(None, ["600519", "000001"], date(2026, 11, 3))
+    )
+    assert written == 1
+    rows, update_columns = captured[0]
+    assert rows == [{
+        "code": "600519", "ex_date": date(2024, 6, 19), "dps": 30.876,
+        "announce_date": None, "report_period": None, "src": "eastmoney",
+    }]
+    # 只更新 dps/src：不覆盖巨潮写入的 announce_date/report_period
+    assert update_columns == ("dps", "src")
+
+
+def test_sync_dividends_bulk_chunks_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """超过单批行数上限必须分批 upsert，不能一次塞爆绑定参数。"""
+    from app.ingest import em_dividends
+
+    batches: list[int] = []
+
+    async def fake_fetch(*args: Any, **kwargs: Any) -> dict:
+        return {"600519": [(date(2024, 6, 19), 10.0), (date(2024, 6, 20), 20.0),
+                           (date(2024, 6, 21), 30.0)]}
+
+    async def fake_upsert(db: Any, rows: Any, update_columns: Any = None) -> int:
+        batches.append(len(rows))
+        return len(rows)
+
+    monkeypatch.setattr(valuation, "DIVIDEND_BULK_CHUNK", 2)
+    monkeypatch.setattr(em_dividends, "fetch_dividends", fake_fetch)
+    monkeypatch.setattr(valuation, "_upsert_dividend_rows", fake_upsert)
+
+    written = asyncio.run(
+        valuation._sync_dividends_bulk(None, ["600519"], date(2026, 11, 3))
+    )
+    assert written == 3
+    assert batches == [2, 1]
+
+
+def test_sync_dividends_prefers_eastmoney_bulk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """东财批量成功 → 不再逐只打巨潮；结果标记 source=eastmoney 且质量 ok。"""
+    async def bulk(db: Any, code_list: Any, today: date) -> int:
+        return 7
+
+    seen = _isolate_sync_dividends(
+        monkeypatch, codes=["600519", "000001"], bulk=bulk, cninfo=None
+    )
+    result = asyncio.run(valuation.sync_dividends(db=None))
+
+    assert seen["cninfo_calls"] == 0
+    assert result.rows == 7
+    assert result.total == 2
+    assert result.detail["source"] == "eastmoney"
+    assert seen["quality"] == ["ok"]
+    status, checkpoint = seen["finished"][0]
+    assert status == "success"
+    assert checkpoint["completed_codes"] == ["000001", "600519"]
+
+
+def test_sync_dividends_bulk_clears_stale_checkpoint_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧断点里的逐只失败不能污染批量成功的结果（否则永远 partial）。"""
+    async def bulk(db: Any, code_list: Any, today: date) -> int:
+        return 3
+
+    seen = _isolate_sync_dividends(
+        monkeypatch, codes=["600519"], bulk=bulk, cninfo=None,
+        checkpoint={"failed_codes": {"600519": "getaddrinfo failed"}},
+    )
+    result = asyncio.run(valuation.sync_dividends(db=None))
+
+    assert result.failed == 0
+    assert result.detail["source"] == "eastmoney"
+    status, checkpoint = seen["finished"][0]
+    assert status == "success"
+    assert checkpoint["failed_codes"] == {}
+
+
+def test_sync_dividends_falls_back_to_cninfo_when_bulk_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """东财批量失败 → 逐只巨潮；即使全市场都不分红（written=0）也判 ok 而不是 error。"""
+    async def bulk(db: Any, code_list: Any, today: date) -> int:
+        raise RuntimeError("eastmoney down")
+
+    seen = _isolate_sync_dividends(
+        monkeypatch, codes=["600519", "000001"], bulk=bulk, cninfo=None
+    )
+    assert seen["rows"] == 0
+    result = asyncio.run(valuation.sync_dividends(db=None))
+
+    assert seen["cninfo_calls"] == 2
+    assert result.rows == 0
+    assert result.failed == 0
+    assert result.detail["source"] == "cninfo"
+    assert seen["quality"] == ["ok"]
+    status, checkpoint = seen["finished"][0]
+    assert status == "success"
+    assert checkpoint["checked_codes"] == ["000001", "600519"]
+
+
+# ============================================================
 # ⑤ dim_stock_financial 行形态 / 阶段 1 落库行
 # ============================================================
 def test_financial_rows_from_frame_announced_date() -> None:
@@ -652,6 +835,52 @@ def test_valuation_update_statement_only_touches_three_columns() -> None:
         assert f"{column}=" not in sql.replace(" ", "")
     # onupdate 被显式压掉（自引用 = 保持原值），只更新那三列
     assert "UPDATED_AT=FACT_STOCK_DAILY.UPDATED_AT" in sql.replace(" ", "")
+
+
+def test_valuation_update_statement_types_all_null_column() -> None:
+    """整列全空时必须带数值 CAST：裸 NULL 会被 PG 推断成 text 而报 DatatypeMismatchError。
+
+    实测 300548 整段没有 BPS（pb 全空），一批 1000 行的 pb 都是裸 NULL，
+    PostgreSQL 把该 VALUES 列当成 text，UPDATE numeric 列直接中断整批。
+    """
+    from sqlalchemy.dialects import postgresql
+
+    statement = valuation._valuation_update_statement(
+        [
+            {"code": "300548", "trade_date": date(2026, 11, 2),
+             "pe_ttm": 12.3, "pb": None, "dv_ttm": None},
+            {"code": "300548", "trade_date": date(2026, 11, 3),
+             "pe_ttm": 12.4, "pb": None, "dv_ttm": None},
+        ]
+    )
+    sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    ).upper()
+
+    # 2 行 × 2 个全空列 = 4 个带类型 NULL；pe_ttm 有值走普通字面量
+    assert sql.count("CAST(NULL AS NUMERIC") == 4
+    # 不能出现任何未带类型的裸 NULL 值（", NULL," 或 ", NULL)"）
+    assert ", NULL," not in sql
+    assert ", NULL)" not in sql
+
+    # 有值/无值混合：None 单元格同样带类型，有值单元格保持普通数值
+    mixed = valuation._valuation_update_statement(
+        [
+            {"code": "600519", "trade_date": date(2026, 11, 2),
+             "pe_ttm": 20.5, "pb": 5.0, "dv_ttm": None},
+            {"code": "600519", "trade_date": date(2026, 11, 3),
+             "pe_ttm": None, "pb": 5.1, "dv_ttm": 2.0},
+        ]
+    )
+    mixed_sql = str(
+        mixed.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    ).upper()
+    assert mixed_sql.count("CAST(NULL AS NUMERIC") == 2
+    assert "20.5" in mixed_sql and "5.0" in mixed_sql
 
 
 def test_latest_knowable_report_period() -> None:
