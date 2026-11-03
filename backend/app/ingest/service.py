@@ -1130,7 +1130,7 @@ async def collect_daily_snapshot(
 
             chain = get_provider_chain()
             fetched = await chain.fetch_daily_snapshot(
-                trade_date, timeout=config.FETCH_TIMEOUT_SEC
+                trade_date, timeout=config.SNAPSHOT_FETCH_TIMEOUT_SEC
             )
             frame = fetched.detail.get("data")
             report = check_snapshot(frame, expected, config)
@@ -1807,7 +1807,7 @@ async def collect_moneyflow(
 
             chain = get_provider_chain()
             fetched = await chain.fetch_moneyflow(
-                trade_date, timeout=config.FETCH_TIMEOUT_SEC
+                trade_date, timeout=config.SNAPSHOT_FETCH_TIMEOUT_SEC
             )
             frame = fetched.detail.get("data")
             rows = _moneyflow_rows(frame, trade_date)
