@@ -2073,10 +2073,6 @@ async def collect_indices(
                     "指数日线部分缺失（%d/%d），按已取到的行落库：%s",
                     len(rows), expected, report.error_text(),
                 )
-                await _record_quality_isolated(
-                    dataset, report, trade_date,
-                    "quality_failed" if not partial_ok else "ok",
-                )
 
             async with _db_scope(db) as session:
                 written = await upsert_rows(
@@ -2095,6 +2091,8 @@ async def collect_indices(
                 elapsed_ms=elapsed,
                 detail={"source": fetched.source,
                         "attempts": fetched.detail.get("attempts")},
+                # 部分缺失时质量记录为 stale；run_task 不能再用 mark_success 洗成 ok
+                quality_status="ok" if report.ok else "stale",
             )
             await job.finish("success" if not fetched.failed else "partial",
                              done=written, failed=fetched.failed, rows_written=written)

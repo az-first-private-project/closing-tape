@@ -2580,8 +2580,19 @@ async def compute_valuation(
             ),
             samples=sorted(set(no_financials))[:5],
         )
+    if coverage < config.QUALITY_MIN_VALUATION_COVERAGE:
+        report.add(
+            "valuation_coverage_below_threshold",
+            count=len(no_financials),
+            severity="error",
+            message=(
+                f"估值覆盖率 {coverage:.2%} < "
+                f"{config.QUALITY_MIN_VALUATION_COVERAGE:.0%}（财报缓存缺失，先补 sync_financials）"
+            ),
+        )
     if covered:
-        await _record_quality(db, report, end_date, "ok")
+        # 覆盖率不达标时记 stale，不能记 ok：否则监控看不到 PE/PB 大面积缺失
+        await _record_quality(db, report, end_date, "ok" if report.ok else "stale")
     else:
         # 一只都没算出来（例如财报缓存是空的）→ 记 error，前端能立刻看到原因
         await _record_quality(
@@ -2607,6 +2618,7 @@ async def compute_valuation(
             "failed_codes": sorted(failed)[:100],
             "range": [start_date.isoformat(), end_date.isoformat()],
         },
+        quality_status="ok" if report.ok else "stale",
     )
 
 
@@ -2675,6 +2687,7 @@ async def backfill_valuation(
             "dividends": dividend_result.summary(),
             "compute": compute_result.summary(),
         },
+        quality_status=compute_result.quality_status,
     )
 
 
@@ -2720,6 +2733,7 @@ async def collect_latest_valuation(
             "dividends": dividend_result.summary(),
             "compute": compute_result.summary(),
         },
+        quality_status=compute_result.quality_status,
     )
 
 

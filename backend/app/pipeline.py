@@ -27,8 +27,8 @@ logger = get_logger(__name__)
 
 DEFAULT_DAILY_STEPS = (
     "calendar", "universe", "index", "sector", "sector_members", "snapshot",
-    "moneyflow", "sector_agg", "margin", "features", "scores", "sector_scores",
-    "temperature", "report", "algos", "signal_perf",
+    "moneyflow", "sector_agg", "margin", "valuation", "features", "scores",
+    "sector_scores", "temperature", "report", "algos", "signal_perf",
 )
 
 # task -> dataset（写新鲜度用）
@@ -171,6 +171,9 @@ def _summary(result: Any) -> dict:
         value = getattr(result, attr, None)
         if value is not None:
             payload[attr] = value
+    quality_status = getattr(result, "quality_status", None)
+    if quality_status and quality_status != "ok":
+        payload["quality_status"] = quality_status
     return payload
 
 
@@ -217,16 +220,25 @@ async def run_task(
         # 返回体可能是 FetchResult（采集层）或 dict（引擎层），统一成可序列化摘要
         stats = _summary(payload)
         rows = stats.get("rows")
+        quality_status = str(stats.get("quality_status") or "ok")
         if task != "calendar":
-            await mark_success(
-                db, dataset, rows=rows,
-                coverage=stats.get("coverage"),
-                anomalies=int(stats.get("anomalies") or 0),
-                trade_date=trade_date,
-                detail=stats.get("detail") if isinstance(stats.get("detail"), dict) else None,
-            )
+            if quality_status == "ok":
+                await mark_success(
+                    db, dataset, rows=rows,
+                    coverage=stats.get("coverage"),
+                    anomalies=int(stats.get("anomalies") or 0),
+                    trade_date=trade_date,
+                    detail=stats.get("detail") if isinstance(stats.get("detail"), dict) else None,
+                )
+            else:
+                # 采集层已写入非 ok 状态（如指数部分缺失）：mark_success 会把 stale
+                # 覆盖成 ok，导致监控看不到缺口。保留采集层记录（事务在下方已 commit）。
+                logger.warning(
+                    "任务 %s 质量状态为 %s，保留采集层质量记录", task, quality_status
+                )
         logger.info("任务完成 rows=%s elapsed_ms=%s", rows, elapsed)
-        return {"task": task, "dataset": dataset, "status": "success",
+        return {"task": task, "dataset": dataset,
+                "status": "partial" if quality_status != "ok" else "success",
                 "elapsed_ms": elapsed, **stats}
 
 

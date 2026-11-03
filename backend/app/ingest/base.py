@@ -85,6 +85,9 @@ class FetchResult:
             - ``source``   : 实际生效的数据源名（akshare / baostock）
             - ``attempts`` : 降级链逐源记录（ProviderChain 写入）
             - ``skipped``  : 跳过原因（非交易日 / 已有数据 / 限频 / DB 锁被占用）
+        quality_status: 采集层的质量结论（``ok`` / ``stale`` …）。非 ``ok`` 时说明
+            采集函数已把精确质量记录写入 ``meta_data_quality``，编排层不得再用
+            成功标记覆盖（否则部分缺失会被洗成绿色）。
     """
 
     rows: int = 0
@@ -92,6 +95,7 @@ class FetchResult:
     failed: int = 0
     elapsed_ms: int = 0
     detail: dict[str, Any] = field(default_factory=dict)
+    quality_status: str = "ok"
 
     @property
     def ok(self) -> bool:
@@ -120,13 +124,16 @@ class FetchResult:
             for key, value in self.detail.items()
             if key not in ("data", "attempts") and _is_json_safe(value)
         }
-        return {
+        payload = {
             "rows": self.rows,
             "total": self.total,
             "failed": self.failed,
             "elapsed_ms": self.elapsed_ms,
             "detail": safe_detail,
         }
+        if self.quality_status != "ok":
+            payload["quality_status"] = self.quality_status
+        return payload
 
 
 def _is_json_safe(value: Any) -> bool:
