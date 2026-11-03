@@ -39,6 +39,8 @@ from app.ingest.valuation import (  # noqa: E402
     latest_knowable_report_period,
     normalize_dividends,
     normalize_financials,
+    ps_ttm_values,
+    revenue_ttm_series,
 )
 
 
@@ -70,7 +72,7 @@ def _fins_from_db(*rows: dict[str, Any]) -> pd.DataFrame:
     """模拟 ``dim_stock_financial`` 的行（stage 2 的真实输入形态）。"""
     columns = [
         "code", "report_date", "announced_date", "eps_ttm", "bps", "payout_ratio",
-        "eps", "roe",
+        "eps", "roe", "revenue",
     ]
     return pd.DataFrame([{column: row.get(column) for column in columns} for row in rows],
                         columns=columns)
@@ -225,6 +227,126 @@ def test_eps_ttm_series_missing_prior_period_is_nan() -> None:
     empty = eps_ttm_series(pd.DataFrame())
     assert empty.empty
     assert list(empty.columns) == ["report_date", "eps_ttm", "eps_ttm_basis"]
+
+
+# ============================================================
+# ②b 营收 TTM 与市销率（ps_ttm）
+# ============================================================
+def _revenue_fins() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "report_date": [
+                date(2023, 3, 31), date(2023, 12, 31),
+                date(2024, 3, 31), date(2024, 6, 30),
+            ],
+            "revenue": [1.0e9, 4.4e9, 1.2e9, 2.4e9],
+        }
+    )
+
+
+def test_revenue_ttm_series_same_formula_as_eps() -> None:
+    """营收 TTM 与 EPS TTM 同一套三期公式：Q1 = 本期 + 上年年报 − 上年同期。"""
+    ttm = revenue_ttm_series(_revenue_fins())
+    by_period = dict(zip(ttm["report_date"], ttm["revenue_ttm"]))
+    assert by_period[date(2023, 12, 31)] == pytest.approx(4.4e9)   # 年报直接是 TTM
+    assert by_period[date(2024, 3, 31)] == pytest.approx(1.2e9 + 4.4e9 - 1.0e9)
+    # 2024-06-30 缺 2023-06-30 同期基数 → NaN（不外推）
+    assert pd.isna(by_period[date(2024, 6, 30)])
+    assert list(ttm.columns) == ["report_date", "revenue_ttm"]
+    assert revenue_ttm_series(pd.DataFrame()).empty
+
+
+def test_ps_ttm_values_market_cap_over_revenue_ttm() -> None:
+    """PS = 当日总市值 / 营收 TTM；市值缺失或营收不是绝对额 → NaN。"""
+    fins = _revenue_fins()
+    prices = pd.DataFrame(
+        {
+            "market_cap": [8.8e9, 9.0e9, 9.2e9],
+        }
+    )
+    valuation = pd.DataFrame(
+        {
+            "report_date": [date(2023, 12, 31), date(2024, 3, 31), None],
+        }
+    )
+    ps = ps_ttm_values(prices, valuation, fins)
+    assert ps.iloc[0] == pytest.approx(8.8e9 / 4.4e9)
+    assert ps.iloc[1] == pytest.approx(9.0e9 / (1.2e9 + 4.4e9 - 1.0e9))
+    assert pd.isna(ps.iloc[2])  # 没有可用报告期
+
+    # 库里混进增长率（15.71）时绝不能算出天文 PS
+    bad = pd.DataFrame(
+        {"report_date": [date(2024, 3, 31)], "revenue": [15.71]}
+    )
+    bad_valuation = pd.DataFrame({"report_date": [date(2024, 3, 31)]})
+    assert pd.isna(ps_ttm_values(pd.DataFrame({"market_cap": [1e10]}), bad_valuation, bad).iloc[0])
+
+
+def test_revenue_rows_from_report_dedupes_and_normalizes() -> None:
+    """东财业绩报表 → 更新行：代码补零、同代码取最后一行、NaN 丢弃。"""
+    raw = pd.DataFrame(
+        {
+            "股票代码": ["600519", "1", "000001", "000001", "bad"],
+            "营业总收入-营业总收入": [1.7e11, 2.0e8, 1.4e11, 1.41e11, None],
+        }
+    )
+    rows = valuation._revenue_rows_from_report(raw, date(2024, 12, 31))
+    by_code = {row["code"]: row for row in rows}
+    assert set(by_code) == {"600519", "000001"}
+    assert by_code["600519"]["revenue"] == pytest.approx(1.7e11)
+    assert by_code["000001"]["revenue"] == pytest.approx(1.41e11)  # 重复取最后一行
+    assert by_code["600519"]["report_date"] == date(2024, 12, 31)
+
+
+def test_sync_revenue_bulk_skips_when_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """已修好的报告期不发任何网络请求（日更常态是零请求）。"""
+    async def no_need(db: Any, periods: Any) -> list:
+        return []
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:  # pragma: no cover - 触发即失败
+        raise AssertionError("营收已新鲜时不该联网")
+
+    monkeypatch.setattr(valuation, "_periods_needing_revenue", no_need)
+    monkeypatch.setattr(valuation, "_ak_call", boom)
+
+    result = asyncio.run(
+        valuation.sync_revenue_bulk([date(2024, 6, 30)], db=None)
+    )
+    assert result.rows == 0
+    assert result.is_skipped
+    assert result.detail["skipped"] == "revenue_fresh"
+
+
+def test_sync_revenue_bulk_updates_needed_periods(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需要修复的报告期：拉一次业绩报表并批量 UPDATE。"""
+    async def need(db: Any, periods: Any) -> list:
+        return list(periods)
+
+    raw = pd.DataFrame(
+        {"股票代码": ["600519", "000001"], "营业总收入-营业总收入": [1.7e11, 1.4e11]}
+    )
+    calls: list[Any] = []
+
+    async def fake_ak(name: str, **kwargs: Any) -> pd.DataFrame:
+        calls.append((name, kwargs))
+        return raw
+
+    async def fake_bulk(db: Any, rows: Any) -> int:
+        calls.append(("update", len(rows)))
+        return len(rows)
+
+    monkeypatch.setattr(valuation, "_periods_needing_revenue", need)
+    monkeypatch.setattr(valuation, "_ak_call", fake_ak)
+    monkeypatch.setattr(valuation, "_bulk_update_revenue", fake_bulk)
+
+    result = asyncio.run(
+        valuation.sync_revenue_bulk([date(2024, 12, 31)], db=None)
+    )
+    assert calls[0] == ("stock_yjbb_em", {"date": "20241231"})
+    assert calls[1] == ("update", 2)
+    assert result.rows == 2
+    assert result.failed == 0
+    assert result.detail["periods"] == ["2024-12-31"]
 
 
 # ============================================================
@@ -794,32 +916,37 @@ def test_financial_rows_from_frame_announced_date() -> None:
 
 
 def test_valuation_update_rows_nan_to_none_and_skip_all_null() -> None:
-    """UPDATE 行：NaN→None、只更新三列、三列全空的行直接跳过。"""
+    """UPDATE 行：NaN→None、四列全空的行直接跳过。"""
     frame = pd.DataFrame(
         {
             "trade_date": [date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)],
             "pe_ttm": [20.0, float("nan"), 30.0],
             "pb": [5.0, float("nan"), float("nan")],
             "dv_ttm": [float("nan"), float("nan"), float("nan")],
+            "ps_ttm": [3.0, float("nan"), float("nan")],
             "report_date": [date(2024, 3, 31)] * 3,
         }
     )
     rows = valuation._valuation_update_rows("600519", frame)
     assert [row["trade_date"] for row in rows] == [date(2024, 7, 1), date(2024, 7, 3)]
     assert rows[0]["pe_ttm"] == pytest.approx(20.0)
+    assert rows[0]["ps_ttm"] == pytest.approx(3.0)
     assert rows[0]["dv_ttm"] is None           # NaN → None（写库写 NULL）
     assert rows[1]["pb"] is None
-    assert set(rows[0]) == {"code", "trade_date", "pe_ttm", "pb", "dv_ttm"}
+    assert rows[1]["ps_ttm"] is None
+    assert set(rows[0]) == {
+        "code", "trade_date", "pe_ttm", "pb", "dv_ttm", "ps_ttm",
+    }
 
 
-def test_valuation_update_statement_only_touches_three_columns() -> None:
-    """UPDATE 语句只 SET 估值三列，绝不 INSERT、不覆盖 close/volume/amount。"""
+def test_valuation_update_statement_only_touches_valuation_columns() -> None:
+    """UPDATE 语句只 SET 估值四列，绝不 INSERT、不覆盖 close/volume/amount。"""
     from sqlalchemy.dialects import postgresql
 
     statement = valuation._valuation_update_statement(
         [
             {"code": "600519", "trade_date": date(2024, 7, 1),
-             "pe_ttm": 20.5, "pb": None, "dv_ttm": 2.0},
+             "pe_ttm": 20.5, "pb": None, "dv_ttm": 2.0, "ps_ttm": 8.5},
         ]
     )
     sql = str(
@@ -829,11 +956,14 @@ def test_valuation_update_statement_only_touches_three_columns() -> None:
     ).upper()
     assert sql.startswith("UPDATE FACT_STOCK_DAILY")
     assert "SET PE_TTM" in sql and "PB=" in sql.replace(" ", "") and "DV_TTM" in sql
+    compact = sql.replace(" ", "")
+    # 原值优先：官方快照 PS 不被保守 PIT 计算值覆盖，只在为空时补算
+    assert "PS_TTM=COALESCE(FACT_STOCK_DAILY.PS_TTM,V.PS_TTM)" in compact
     assert "INSERT" not in sql
     # 不能覆盖行情列（否则一次估值回补就把价格/成交额洗成 NULL）
     for column in ("CLOSE", "VOLUME", "AMOUNT", "OPEN", "HIGH", "LOW", "ADJ_FACTOR"):
         assert f"{column}=" not in sql.replace(" ", "")
-    # onupdate 被显式压掉（自引用 = 保持原值），只更新那三列
+    # onupdate 被显式压掉（自引用 = 保持原值），只更新估值列
     assert "UPDATED_AT=FACT_STOCK_DAILY.UPDATED_AT" in sql.replace(" ", "")
 
 
@@ -848,9 +978,9 @@ def test_valuation_update_statement_types_all_null_column() -> None:
     statement = valuation._valuation_update_statement(
         [
             {"code": "300548", "trade_date": date(2026, 11, 2),
-             "pe_ttm": 12.3, "pb": None, "dv_ttm": None},
+             "pe_ttm": 12.3, "pb": None, "dv_ttm": None, "ps_ttm": None},
             {"code": "300548", "trade_date": date(2026, 11, 3),
-             "pe_ttm": 12.4, "pb": None, "dv_ttm": None},
+             "pe_ttm": 12.4, "pb": None, "dv_ttm": None, "ps_ttm": None},
         ]
     )
     sql = str(
@@ -859,8 +989,8 @@ def test_valuation_update_statement_types_all_null_column() -> None:
         )
     ).upper()
 
-    # 2 行 × 2 个全空列 = 4 个带类型 NULL；pe_ttm 有值走普通字面量
-    assert sql.count("CAST(NULL AS NUMERIC") == 4
+    # 2 行 × 3 个全空列 = 6 个带类型 NULL；pe_ttm 有值走普通字面量
+    assert sql.count("CAST(NULL AS NUMERIC") == 6
     # 不能出现任何未带类型的裸 NULL 值（", NULL," 或 ", NULL)"）
     assert ", NULL," not in sql
     assert ", NULL)" not in sql
@@ -869,9 +999,9 @@ def test_valuation_update_statement_types_all_null_column() -> None:
     mixed = valuation._valuation_update_statement(
         [
             {"code": "600519", "trade_date": date(2026, 11, 2),
-             "pe_ttm": 20.5, "pb": 5.0, "dv_ttm": None},
+             "pe_ttm": 20.5, "pb": 5.0, "dv_ttm": None, "ps_ttm": None},
             {"code": "600519", "trade_date": date(2026, 11, 3),
-             "pe_ttm": None, "pb": 5.1, "dv_ttm": 2.0},
+             "pe_ttm": None, "pb": 5.1, "dv_ttm": 2.0, "ps_ttm": 9.9},
         ]
     )
     mixed_sql = str(
@@ -879,7 +1009,7 @@ def test_valuation_update_statement_types_all_null_column() -> None:
             dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
         )
     ).upper()
-    assert mixed_sql.count("CAST(NULL AS NUMERIC") == 2
+    assert mixed_sql.count("CAST(NULL AS NUMERIC") == 3
     assert "20.5" in mixed_sql and "5.0" in mixed_sql
 
 
@@ -982,8 +1112,11 @@ def test_compute_valuation_makes_no_network_calls(monkeypatch: pytest.MonkeyPatc
     assert result.failed == 0
     assert len(recorded["rows"]) == 5
     for row in recorded["rows"]:
-        assert set(row) == {"code", "trade_date", "pe_ttm", "pb", "dv_ttm"}
+        assert set(row) == {
+            "code", "trade_date", "pe_ttm", "pb", "dv_ttm", "ps_ttm",
+        }
         assert row["pe_ttm"] is not None and row["pe_ttm"] > 0
+        assert row["ps_ttm"] is None  # 行情桩没有 market_cap/营收 → PS 保持 NULL
     # dv_ttm 来自分红明细（0.5/10*100=5.0），证明阶段 2 用的是 dv_ttm_series 而不是 payout
     assert recorded["rows"][0]["dv_ttm"] == pytest.approx(5.0)
     assert recorded["quality"], "阶段 2 必须写 meta_data_quality(dataset='valuation')"

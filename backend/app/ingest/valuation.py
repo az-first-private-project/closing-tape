@@ -11,17 +11,20 @@ A4（高股息）、A3（价值/质量）两个策略出不了信号。本模块
 
 三阶段设计（**重要**）
 ----------------------
-PE = 收盘价 / EPS_TTM，股息率 = 近 12 个月每股分红 / 收盘价：**分子只随财报/分红公告变
-（季度/年度），价格每天变**。如果每天为全市场 5000+ 只股票各打一次接口（合规限频
-≤2 请求/秒），光财报就要 45 分钟，15:36 的盘后流水线根本跑不完。所以拆成三段：
+PE = 收盘价 / EPS_TTM，PS = 总市值 / 营业总收入_TTM，股息率 = 近 12 个月每股分红 / 收盘价：
+**分子只随财报/分红公告变（季度/年度），价格每天变**。如果每天为全市场 5000+ 只股票
+各打一次接口（合规限频 ≤2 请求/秒），光财报就要 45 分钟，15:36 的盘后流水线根本
+跑不完。所以拆成四段：
 
-    阶段 1a sync_financials()  抓财报指标 → ``dim_stock_financial``（慢，有网络，季度跑）
-    阶段 1b sync_dividends()   抓现金分红 → ``dim_stock_dividend``（慢，有网络，月度跑）
-    阶段 2  compute_valuation() 库里的财报/分红 + 库里的收盘价 → 算 PE/PB/股息率写回日线
-            —— **零网络**，全市场单日秒级，可每日/按区间反复跑
+    阶段 1a sync_financials()   抓财报指标 → ``dim_stock_financial``（慢，有网络，季度跑）
+    阶段 1b sync_dividends()    抓现金分红 → ``dim_stock_dividend``（慢，有网络，月度跑）
+    阶段 1c sync_revenue_bulk() 东财业绩报表 → ``dim_stock_financial.revenue``
+            （按报告期批量，一个报告期一次全市场；新浪指标表没有绝对营收）
+    阶段 2  compute_valuation() 库里的财报/分红 + 库里的收盘价/总市值 → 算 PE/PB/PS/股息率
+            写回日线 —— **零网络**，全市场单日秒级，可每日/按区间反复跑
 
 :func:`backfill_valuation` / :func:`collect_latest_valuation` 是给 ``app/pipeline.py``
-用的便捷入口，内部就是「阶段 1a + 1b + 2」。
+用的便捷入口，内部就是「阶段 1a + 1b + 1c + 2」。
 
 口径（写死在这里，全系统唯一）
 ------------------------------
@@ -30,6 +33,8 @@ PE = 收盘价 / EPS_TTM，股息率 = 近 12 个月每股分红 / 收盘价：*
   （详见 :func:`eps_ttm_series` 的注释）；
 - ``pe_ttm = close / eps_ttm``：**允许负值**（亏损股的 PE 为负，由策略层过滤 PE<=0）；
 - ``pb = close / bps``：``bps <= 0``（净资产为负的资不抵债股）→ NULL；
+- ``ps_ttm = market_cap / revenue_ttm``：营收 TTM 与 EPS TTM 同一套三期公式；总市值或
+  营收缺失 → NULL，写库时 ``COALESCE`` 保留已有值（快照/东财回补的 PS 不会被洗掉）；
 - ``dv_ttm(%)``：近 12 个月（``ex_date ∈ (d-365, d]``）每股现金分红合计 / 收盘价 × 100，
   数据源是**巨潮分红明细**（``stock_dividend_cninfo``），按**除权日**做 point-in-time。
   ``payout_ratio``（新浪"股息发放率"）不再用于股息率 —— 它大量为空，且语义是
@@ -203,7 +208,14 @@ FIN_PAYOUT_PATTERNS = (r"股息发放率", r"股利支付率", r"分红率", r"^
 FIN_REVENUE_CANDIDATES = (
     "营业总收入(元)", "营业收入(元)", "主营业务收入(元)", "营业总收入", "营业收入", "revenue",
 )
-FIN_REVENUE_PATTERNS = (r"^(?:营业总收入|营业收入|主营业务收入)", r"^revenue$")
+# 只接受**绝对额**列。新浪指标表里只有「主营业务收入增长率(%)」，旧的前缀正则会把
+# 增长率当营收写进 dim_stock_financial.revenue（实测 600519 年度“营收”= -1.21）。
+FIN_REVENUE_PATTERNS = (
+    r"^(?:营业总收入|营业收入|主营业务收入)(?:\(元\))?$",
+    r"^revenue$",
+)
+#: 绝对营收下限（元）：上市公司 TTM 营收不可能低于 100 万元；增长率/比率都会被这条挡掉
+REVENUE_MIN_YUAN = 1_000_000.0
 
 # ---- 巨潮分红（stock_dividend_cninfo）列名候选 ----
 # 实测列：实施方案公告日期 / 分红类型 / 送股比例 / 转增比例 / 派息比例 / 股权登记日 /
@@ -583,6 +595,70 @@ def eps_ttm_series(fins: pd.DataFrame) -> pd.DataFrame:
     result = pd.DataFrame(records, columns=list(TTM_COLUMNS))
     result["eps_ttm"] = pd.to_numeric(result["eps_ttm"], errors="coerce")
     return result
+
+
+def revenue_ttm_series(fins: pd.DataFrame) -> pd.DataFrame:
+    """由**季度累计**口径的营业总收入组装 TTM（与 :func:`eps_ttm_series` 同一套公式）。
+
+    输入需要 ``report_date`` / ``revenue`` 两列（``dim_stock_financial`` 的营收列）。
+    营收与 EPS 都是"年初至今累计"，所以直接复用 EPS 的三期推导；营收为 NULL/缺列时
+    该报告期返回 NaN，绝不做外推。
+
+    Returns:
+        ``[report_date, revenue_ttm]``，按 ``report_date`` 升序；单位与输入一致（元）。
+    """
+    columns = ["report_date", "revenue_ttm"]
+    if fins is None or len(fins) == 0 or "revenue" not in getattr(fins, "columns", []):
+        return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
+    frame = pd.DataFrame(fins[["report_date", "revenue"]]).rename(
+        columns={"revenue": "eps"}
+    )
+    ttm = eps_ttm_series(frame)
+    result = ttm[["report_date", "eps_ttm"]].rename(columns={"eps_ttm": "revenue_ttm"})
+    result["revenue_ttm"] = pd.to_numeric(result["revenue_ttm"], errors="coerce")
+    return result[columns]
+
+
+def ps_ttm_values(
+    prices: pd.DataFrame,
+    valuation: pd.DataFrame,
+    fins: pd.DataFrame,
+) -> pd.Series:
+    """市销率 = 当日总市值 / 营业总收入 TTM。
+
+    ``prices`` 与 ``valuation`` 必须**同序**（``compute_valuation`` 里两者同源同序）。
+    营收缺失或低于 :data:`REVENUE_MIN_YUAN`（说明库里混进了增长率/比率）→ NaN，
+    写库时由 ``COALESCE`` 保留已有 PS，绝不会用增长率算出天文数字。
+    """
+    if valuation is None or len(valuation) == 0:
+        return pd.Series(dtype="float64")
+    if prices is not None and "market_cap" in prices.columns:
+        market_cap = pd.to_numeric(prices["market_cap"], errors="coerce")
+    else:
+        market_cap = pd.Series(np.nan, index=valuation.index, dtype="float64")
+    market_cap = market_cap.reset_index(drop=True)
+
+    ttm = revenue_ttm_series(fins)
+    revenue_by_period = (
+        dict(zip(ttm["report_date"], ttm["revenue_ttm"])) if len(ttm) else {}
+    )
+    if "report_date" in valuation.columns:
+        revenue = pd.to_numeric(
+            valuation["report_date"].map(revenue_by_period), errors="coerce"
+        )
+    else:
+        revenue = pd.Series(np.nan, index=valuation.index, dtype="float64")
+    revenue = revenue.reset_index(drop=True)
+
+    ps = market_cap / revenue
+    return _finite(
+        ps.where(
+            market_cap.notna()
+            & (market_cap > 0)
+            & revenue.notna()
+            & (revenue >= REVENUE_MIN_YUAN)
+        )
+    )
 
 
 # ============================================================
@@ -1527,8 +1603,12 @@ async def _upsert_financial_rows(
             ["code", "report_date"],
             update_columns=[
                 "announced_date", "eps", "bps", "roe", "payout_ratio",
-                "eps_ttm", "revenue", "src",
+                "eps_ttm", "src",
             ],
+            # 注意：revenue 不在 update_columns 里。新浪指标表没有绝对营收（只有增长率），
+            # 若参与 upsert 更新，每天一次 sync_financials 都会把
+            # sync_revenue_bulk 从东财业绩报表同步来的绝对营收洗成 NULL。
+            # 新插入的行 revenue 可来自财务摘要兜底，之后由 sync_revenue_bulk 校正。
         )
 
 
@@ -1857,7 +1937,7 @@ async def _load_financials_for_codes(
     """
     columns = [
         "code", "report_date", "announced_date", "eps_ttm", "bps", "payout_ratio",
-        "eps", "roe",
+        "eps", "roe", "revenue",
     ]
     empty = pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
     target = _normalize_codes(codes)
@@ -1878,6 +1958,7 @@ async def _load_financials_for_codes(
             DimStockFinancial.payout_ratio,
             DimStockFinancial.eps,
             DimStockFinancial.roe,
+            DimStockFinancial.revenue,
         )
         .where(DimStockFinancial.code.in_(target))
         .order_by(DimStockFinancial.code, DimStockFinancial.report_date)
@@ -1892,8 +1973,8 @@ async def _load_financials_for_codes(
 async def _load_price_rows(
     db: "AsyncSession | None", codes: Sequence[str], start: date, end: date
 ) -> pd.DataFrame:
-    """读一批股票在 ``[start, end]`` 的收盘价（只要 code/trade_date/close 三列）。"""
-    columns = ["code", "trade_date", "close"]
+    """读一批股票在 ``[start, end]`` 的收盘价与总市值（code/trade_date/close/market_cap）。"""
+    columns = ["code", "trade_date", "close", "market_cap"]
     target = _normalize_codes(codes)
     if not target:
         return pd.DataFrame({column: pd.Series(dtype="object") for column in columns})
@@ -1903,7 +1984,12 @@ async def _load_price_rows(
     from app.db.models.fact import FactStockDaily
 
     stmt = (
-        select(FactStockDaily.code, FactStockDaily.trade_date, FactStockDaily.close)
+        select(
+            FactStockDaily.code,
+            FactStockDaily.trade_date,
+            FactStockDaily.close,
+            FactStockDaily.market_cap,
+        )
         .where(
             FactStockDaily.trade_date >= start,
             FactStockDaily.trade_date <= end,
@@ -1919,21 +2005,32 @@ async def _load_price_rows(
 
 
 def _valuation_update_rows(code: str, frame: pd.DataFrame) -> list[dict[str, Any]]:
-    """估值展开表 → UPDATE 用的行（只保留三列全空之外的行）。"""
+    """估值展开表 → UPDATE 用的行（四列全空的行跳过）。"""
     if frame is None or len(frame) == 0:
         return []
     rows: list[dict[str, Any]] = []
-    for record in frame[["trade_date", "pe_ttm", "pb", "dv_ttm"]].to_dict("records"):
+    columns = ["trade_date", "pe_ttm", "pb", "dv_ttm"]
+    if "ps_ttm" in frame.columns:
+        columns.append("ps_ttm")
+    for record in frame[columns].to_dict("records"):
         trade_date = record["trade_date"]
         if not isinstance(trade_date, date):
             continue
         pe = _as_db_value(record.get("pe_ttm"), 4)
         pb = _as_db_value(record.get("pb"), 4)
         dv = _as_db_value(record.get("dv_ttm"), 4)
-        if pe is None and pb is None and dv is None:
+        ps = _as_db_value(record.get("ps_ttm"), 4)
+        if pe is None and pb is None and dv is None and ps is None:
             continue
         rows.append(
-            {"code": code, "trade_date": trade_date, "pe_ttm": pe, "pb": pb, "dv_ttm": dv}
+            {
+                "code": code,
+                "trade_date": trade_date,
+                "pe_ttm": pe,
+                "pb": pb,
+                "dv_ttm": dv,
+                "ps_ttm": ps,
+            }
         )
     return rows
 
@@ -1953,12 +2050,14 @@ def _typed_null(value: Any, type_: Any) -> Any:
 
 
 def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
-    """构造 ``UPDATE fact_stock_daily SET pe_ttm/pb/dv_ttm FROM (VALUES ...)`` 语句。
+    """构造 ``UPDATE fact_stock_daily SET pe_ttm/pb/dv_ttm/ps_ttm FROM (VALUES ...)`` 语句。
 
-    **只更新这三列**：不 INSERT（绝不凭空造出行情行）、不碰 close/volume/amount/adj_factor。
-    用 ``UPDATE ... FROM (VALUES ...)`` 一条语句更新上千行，比逐行 UPDATE 快得多。
+    **只更新这四列**：不 INSERT（绝不凭空造出行情行）、不碰 close/volume/amount/adj_factor。
+    ``ps_ttm`` 用 ``COALESCE(原值, 新值)``：快照/东财已写入的官方 PS 优先保留（它们按
+    当日最新财报计算，比本模块 report_date+90 天的保守 PIT 口径更及时），只有原本为空
+    的回补日才用「总市值 / 营收 TTM」补算 —— 这正好补上快照没跑的日子。
     """
-    from sqlalchemy import Date, Numeric, String, column, update, values
+    from sqlalchemy import Date, Numeric, String, column, func, update, values
 
     from app.db.models.fact import FactStockDaily
 
@@ -1966,6 +2065,7 @@ def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
     pe_type = Numeric(16, 4)
     pb_type = Numeric(16, 4)
     dv_type = Numeric(10, 4)
+    ps_type = Numeric(16, 4)
     value_rows = [
         (
             row["code"],
@@ -1973,6 +2073,7 @@ def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
             _typed_null(row.get("pe_ttm"), pe_type),
             _typed_null(row.get("pb"), pb_type),
             _typed_null(row.get("dv_ttm"), dv_type),
+            _typed_null(row.get("ps_ttm"), ps_type),
         )
         for row in rows
     ]
@@ -1982,6 +2083,7 @@ def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
         column("pe_ttm", pe_type),
         column("pb", pb_type),
         column("dv_ttm", dv_type),
+        column("ps_ttm", ps_type),
         name="v",
     ).data(value_rows)
     return (
@@ -1991,8 +2093,9 @@ def _valuation_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
             pe_ttm=payload.c.pe_ttm,
             pb=payload.c.pb,
             dv_ttm=payload.c.dv_ttm,
+            ps_ttm=func.coalesce(table.c.ps_ttm, payload.c.ps_ttm),
             # 坑：FactStockDaily.updated_at 有 onupdate，SQLAlchemy 会给任何 UPDATE 自动
-            # 补上 SET updated_at = now()。本函数的契约是"只更新估值三列、不动其他列"，
+            # 补上 SET updated_at = now()。本函数的契约是"只更新估值列、不动其他列"，
             # 所以这里显式把它设成自引用（= 保持原值），把 onupdate 的隐式写入压掉。
             updated_at=table.c.updated_at,
         )
@@ -2534,6 +2637,219 @@ async def sync_dividends(
 
 
 # ============================================================
+# 阶段 1c：营业总收入批量同步（东财业绩报表）
+# ============================================================
+#: 默认同步最近多少年的报告期（TTM 需要上年年报 + 上年同期）
+REVENUE_BULK_YEARS = 5
+REVENUE_CODE_CANDIDATES = ("股票代码", "代码", "code")
+REVENUE_VALUE_CANDIDATES = (
+    "营业总收入-营业总收入", "营业总收入", "营业收入", "revenue",
+)
+
+
+def _recent_quarter_ends(today: date, years: int = REVENUE_BULK_YEARS) -> list[date]:
+    """``today`` 之前（含）的最近 ``years*4`` 个季度末，升序。"""
+    count = max(1, int(years)) * 4
+    ends: list[date] = []
+    year = today.year
+    while len(ends) < count and year >= 1990:
+        for month, day in ((12, 31), (9, 30), (6, 30), (3, 31)):
+            period = date(year, month, day)
+            if period <= today:
+                ends.append(period)
+                if len(ends) >= count:
+                    break
+        year -= 1
+    return sorted(ends)
+
+
+def _revenue_rows_from_report(
+    raw: pd.DataFrame | None, period: date
+) -> list[dict[str, Any]]:
+    """东财业绩报表 → ``dim_stock_financial.revenue`` 更新行（绝对额，单位元）。"""
+    if raw is None or len(raw) == 0:
+        return []
+    code_column = _resolve_column(raw.columns, REVENUE_CODE_CANDIDATES, ())
+    value_column = _resolve_column(raw.columns, REVENUE_VALUE_CANDIDATES, ())
+    if code_column is None or value_column is None:
+        logger.warning(
+            "业绩报表缺少代码/营收列（现有：%s），跳过 %s",
+            [str(c) for c in list(raw.columns)[:10]],
+            period,
+        )
+        return []
+    values = _numeric_column(raw, value_column)
+    if values is None:
+        return []
+    rows: dict[str, dict[str, Any]] = {}
+    for code, value in zip(raw[code_column], values):
+        if pd.isna(value):
+            continue
+        normalized = _normalize_code(code)
+        if len(normalized) != 6 or not normalized.isdigit():
+            continue
+        rows[normalized] = {
+            "code": normalized,
+            "report_date": period,
+            "revenue": round(float(value), 2),
+        }
+    return list(rows.values())
+
+
+async def _periods_needing_revenue(
+    db: "AsyncSession | None", periods: Sequence[date]
+) -> list[date]:
+    """筛出 revenue 缺失或明显不是绝对额的报告期（已修好的期不发请求）。"""
+    target = sorted(set(periods))
+    if not target:
+        return []
+    from sqlalchemy import case, func, select
+
+    from app.db.models.dim import DimStockFinancial
+
+    absolute_count = func.coalesce(
+        func.sum(
+            case((DimStockFinancial.revenue >= REVENUE_MIN_YUAN, 1), else_=0)
+        ),
+        0,
+    )
+    stmt = (
+        select(
+            DimStockFinancial.report_date,
+            func.count(),
+            absolute_count,
+        )
+        .where(DimStockFinancial.report_date.in_(target))
+        .group_by(DimStockFinancial.report_date)
+    )
+    async with _db_scope(db) as session:
+        stats = {
+            row[0]: (int(row[1]), int(row[2]))
+            for row in (await session.execute(stmt)).all()
+        }
+    need: list[date] = []
+    for period in target:
+        total, absolute = stats.get(period, (0, 0))
+        if total == 0 or absolute / total < 0.5:
+            need.append(period)
+    return need
+
+
+def _revenue_update_statement(rows: Sequence[dict[str, Any]]) -> Any:
+    """``UPDATE dim_stock_financial SET revenue`` FROM (VALUES ...)，只更新已有行。"""
+    from sqlalchemy import Date, Numeric, String, column, update, values
+
+    from app.db.models.dim import DimStockFinancial
+
+    table = DimStockFinancial.__table__
+    rev_type = Numeric(20, 2)
+    payload = values(
+        column("code", String(6)),
+        column("report_date", Date()),
+        column("revenue", rev_type),
+        name="v",
+    ).data(
+        [(row["code"], row["report_date"], row["revenue"]) for row in rows]
+    )
+    return (
+        update(table)
+        .where(
+            table.c.code == payload.c.code,
+            table.c.report_date == payload.c.report_date,
+        )
+        .values(revenue=payload.c.revenue)
+    )
+
+
+async def _bulk_update_revenue(
+    db: "AsyncSession | None", rows: Sequence[dict[str, Any]]
+) -> int:
+    if not rows:
+        return 0
+    total = 0
+    async with _db_scope(db) as session:
+        for chunk in chunked(list(rows), UPDATE_CHUNK_ROWS):
+            result = await session.execute(_revenue_update_statement(chunk))
+            affected = getattr(result, "rowcount", None)
+            total += int(affected) if affected and affected > 0 else len(chunk)
+    return total
+
+
+async def sync_revenue_bulk(
+    periods: Sequence[date] | None = None,
+    db: "AsyncSession | None" = None,
+    *,
+    years: int = REVENUE_BULK_YEARS,
+    force: bool = False,
+) -> FetchResult:
+    """阶段 1c：东财业绩报表批量同步绝对营业总收入（元）→ ``dim_stock_financial.revenue``。
+
+    为什么需要它：新浪财报指标表**没有**绝对营收（只有「主营业务收入增长率」），
+    而 PS = 总市值 / 营业总收入 TTM。逐只抓财务摘要要 5000+ 请求；业绩报表按报告期
+    返回全市场，一个报告期一次请求（内部约 12 页），成本低两个数量级。
+
+    只 UPDATE 已存在的财报行，不 INSERT。``force=False``（默认）时先检查该报告期已有
+    值是否已是绝对额（``>= REVENUE_MIN_YUAN`` 占比 ≥ 50%），已修好的期直接跳过 ——
+    所以日更通常零请求，季报窗口才真正拉取。
+
+    Args:
+        periods: 指定报告期；``None`` = 最近 ``years`` 年的季度末。
+        db: 外部会话（只 flush）；``None`` 时自建事务。
+        years: 默认报告期窗口（年）。
+        force: 忽略"已是绝对额"检查，强制重拉。
+    """
+    started = time.perf_counter()
+    target = (
+        sorted({_as_date(value) for value in periods})
+        if periods
+        else _recent_quarter_ends(_today_cn(), years)
+    )
+    if not force:
+        target = await _periods_needing_revenue(db, target)
+    if not target:
+        return FetchResult(
+            rows=0,
+            total=0,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"task": "sync_revenue_bulk", "skipped": "revenue_fresh"},
+        )
+
+    written = 0
+    failed: dict[str, str] = {}
+    empty: list[str] = []
+    for period in target:
+        raw = await _ak_call("stock_yjbb_em", date=period.strftime("%Y%m%d"))
+        rows = _revenue_rows_from_report(raw, period)
+        if not rows:
+            empty.append(period.isoformat())
+            continue
+        try:
+            written += await _bulk_update_revenue(db, rows)
+        except Exception as exc:  # noqa: BLE001 —— 单期失败不影响其他报告期
+            failed[period.isoformat()] = f"{type(exc).__name__}: {exc}"
+            logger.warning("营收批量更新失败 period=%s：%s", period, exc)
+
+    elapsed = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "营收批量同步：%d 个报告期，写入 %d 行，空 %d，失败 %d",
+        len(target), written, len(empty), len(failed),
+    )
+    return FetchResult(
+        rows=written,
+        total=len(target),
+        failed=len(failed),
+        elapsed_ms=elapsed,
+        detail={
+            "task": "sync_revenue_bulk",
+            "source": "eastmoney",
+            "periods": [period.isoformat() for period in target],
+            "empty_periods": empty,
+            "failed_periods": failed,
+        },
+    )
+
+
+# ============================================================
 # 阶段 2 入口
 # ============================================================
 async def compute_valuation(
@@ -2621,6 +2937,9 @@ async def compute_valuation(
                 dv_frame = dv_ttm_series(price_frame, code_dividends)
                 valuation = valuation.reset_index(drop=True)
                 valuation["dv_ttm"] = dv_frame["dv_ttm"].to_numpy()
+                valuation["ps_ttm"] = ps_ttm_values(
+                    price_frame, valuation, code_financials
+                ).to_numpy()
                 code_rows = _valuation_update_rows(code, valuation)
             except Exception as exc:  # noqa: BLE001 —— 单只失败不影响整体
                 failed[code] = f"{type(exc).__name__}: {exc}"
@@ -2744,6 +3063,12 @@ async def backfill_valuation(
     dividend_result = await sync_dividends(
         codes=codes, db=db, only_missing=True, resume=resume
     )
+    revenue_result = await sync_revenue_bulk(
+        _recent_quarter_ends(
+            end_date, max(REVENUE_BULK_YEARS, end_date.year - start_year + 1)
+        ),
+        db=db,
+    )
     compute_result = await compute_valuation(
         start_date, end_date, codes, db=db
     )
@@ -2756,7 +3081,10 @@ async def backfill_valuation(
     return FetchResult(
         rows=compute_result.rows,
         total=total,
-        failed=sync_result.failed + dividend_result.failed + compute_result.failed,
+        failed=(
+            sync_result.failed + dividend_result.failed
+            + revenue_result.failed + compute_result.failed
+        ),
         elapsed_ms=elapsed,
         detail={
             "task": "backfill_valuation",
@@ -2765,6 +3093,7 @@ async def backfill_valuation(
             "start_year": start_year,
             "sync": sync_result.summary(),
             "dividends": dividend_result.summary(),
+            "revenue": revenue_result.summary(),
             "compute": compute_result.summary(),
         },
         quality_status=compute_result.quality_status,
@@ -2794,6 +3123,7 @@ async def collect_latest_valuation(
     dividend_result = await sync_dividends(
         codes=None, db=db, only_missing=True, resume=True
     )
+    revenue_result = await sync_revenue_bulk(db=db)
     compute_result = await compute_valuation(target, target, None, db=db)
     elapsed = int((time.perf_counter() - started) * 1000)
     total = (
@@ -2804,13 +3134,17 @@ async def collect_latest_valuation(
     return FetchResult(
         rows=compute_result.rows,
         total=total,
-        failed=sync_result.failed + dividend_result.failed + compute_result.failed,
+        failed=(
+            sync_result.failed + dividend_result.failed
+            + revenue_result.failed + compute_result.failed
+        ),
         elapsed_ms=elapsed,
         detail={
             "task": "collect_latest_valuation",
             "trade_date": target.isoformat(),
             "sync": sync_result.summary(),
             "dividends": dividend_result.summary(),
+            "revenue": revenue_result.summary(),
             "compute": compute_result.summary(),
         },
         quality_status=compute_result.quality_status,
@@ -2828,6 +3162,8 @@ __all__ = [
     "DIVIDEND_COLUMNS",
     "normalize_financials",
     "eps_ttm_series",
+    "revenue_ttm_series",
+    "ps_ttm_values",
     "build_valuation_frame",
     "normalize_dividends",
     "dv_ttm_series",
@@ -2835,6 +3171,7 @@ __all__ = [
     "abstract_eps_frame",
     "fetch_financials",
     "sync_financials",
+    "sync_revenue_bulk",
     "sync_dividends",
     "compute_valuation",
     "backfill_valuation",

@@ -29,12 +29,17 @@ def _patch(monkeypatch, calls: list, *, fail: str | None = None) -> None:
         calls.append(("dividends", kwargs))
         return _FakeResult(2)
 
+    async def fake_revenue(**kwargs):
+        calls.append(("revenue", kwargs))
+        return _FakeResult(4)
+
     async def fake_valuation(start, end, codes):
         calls.append(("valuation", {"start": start, "end": end, "codes": codes}))
         return _FakeResult(3)
 
     monkeypatch.setattr(bv, "sync_financials", fake_financials)
     monkeypatch.setattr(bv, "sync_dividends", fake_dividends)
+    monkeypatch.setattr(bv, "sync_revenue_bulk", fake_revenue)
     monkeypatch.setattr(bv, "compute_valuation", fake_valuation)
 
 
@@ -47,7 +52,9 @@ def test_run_stages_order_and_args(monkeypatch) -> None:
         codes=["600519"], resume=False, only_missing=False,
     ))
 
-    assert [name for name, _ in calls] == ["financials", "dividends", "valuation"]
+    assert [name for name, _ in calls] == [
+        "financials", "dividends", "revenue", "valuation",
+    ]
     assert calls[0][1] == {
         "codes": ["600519"], "start_year": 2020,
         "only_missing": False, "resume": False,
@@ -55,7 +62,8 @@ def test_run_stages_order_and_args(monkeypatch) -> None:
     assert calls[1][1] == {
         "codes": ["600519"], "only_missing": False, "resume": False,
     }
-    assert calls[2][1] == {
+    assert calls[2][1] == {"years": 5, "force": True}
+    assert calls[3][1] == {
         "start": date(2024, 1, 2), "end": date(2024, 2, 1), "codes": ["600519"],
     }
     assert summary["valuation"]["rows"] == 3
@@ -67,7 +75,9 @@ def test_stage_failure_does_not_abort(monkeypatch) -> None:
 
     summary = asyncio.run(bv.run_stages(start=date(2024, 1, 2), end=date(2024, 1, 3)))
 
-    assert [name for name, _ in calls] == ["financials", "dividends", "valuation"]
+    assert [name for name, _ in calls] == [
+        "financials", "dividends", "revenue", "valuation",
+    ]
     assert "boom" in summary["financials"]["error"]
     assert summary["dividends"]["rows"] == 2
 

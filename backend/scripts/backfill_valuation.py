@@ -1,10 +1,11 @@
-"""全市场财报/分红回补 + 历史估值重算（P0-11）。
+"""全市场财报/分红/营收回补 + 历史估值重算（P0-11 / P0-12）。
 
-三个阶段按顺序执行，相互独立（单阶段失败不阻断后续）：
+四个阶段按顺序执行，相互独立（单阶段失败不阻断后续）：
 
   1. ``financials`` —— 新浪财报指标 → ``dim_stock_financial``（有网络、限频、断点续传）；
   2. ``dividends``  —— 巨潮现金分红明细 → ``dim_stock_dividend``（有网络、断点续传）；
-  3. ``valuation``  —— 零网络重算 ``fact_stock_daily.pe_ttm/pb/dv_ttm``。
+  3. ``revenue``    —— 东财业绩报表批量同步绝对营业总收入（按报告期，全市场一次请求）；
+  4. ``valuation``  —— 零网络重算 ``fact_stock_daily.pe_ttm/pb/dv_ttm/ps_ttm``。
 
 用法::
 
@@ -32,12 +33,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import config  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.ingest.valuation import (  # noqa: E402
+    REVENUE_BULK_YEARS,
     compute_valuation,
     sync_dividends,
     sync_financials,
+    sync_revenue_bulk,
 )
 
-STAGES = ("financials", "dividends", "valuation")
+STAGES = ("financials", "dividends", "revenue", "valuation")
 DEFAULT_START_YEAR = 2019
 DEFAULT_VALUATION_START = date(2022, 9, 1)
 
@@ -83,6 +86,14 @@ def _stage_plan(
                 name,
                 lambda: sync_dividends(
                     codes=codes, only_missing=only_missing, resume=resume,
+                ),
+            ))
+        elif name == "revenue":
+            plan.append((
+                name,
+                lambda: sync_revenue_bulk(
+                    years=max(REVENUE_BULK_YEARS, end.year - start_year + 1),
+                    force=not only_missing,
                 ),
             ))
         elif name == "valuation":
