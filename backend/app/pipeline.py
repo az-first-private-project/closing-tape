@@ -311,32 +311,10 @@ async def _dispatch(
         return await collect_indices(resolved, db)
 
     if task == "sector":
+        # 板块日线统一同花顺口径（与 dim_sector_member 成分名单一致）；
+        # 当日历史 K 线缺失时由采集函数内部用实时快照补齐，不再写入东财 BK 行。
         from app.ingest.service import collect_sector_daily
-
-        # 东财板块不可达（本机网络常见）→ 自动降级同花顺，避免热力图/板块评分全空。
-        # 注意：东财失败时**抛 ProviderError 而不是返回 0 行**，所以必须包 try，
-        # 否则永远走不到兜底（实测踩到）。
-        try:
-            result = await collect_sector_daily(resolved, db)
-            rows = getattr(result, "rows", 0) or 0
-        except Exception as exc:                       # noqa: BLE001
-            logger.warning("东财板块采集失败（%s），改走同花顺兜底", exc)
-            result, rows = None, 0
-
-        if rows == 0:
-            logger.info("板块采集无数据，降级同花顺兜底 …")
-            try:
-                from app.ingest.ths_sector import collect_sector_fallback
-                fallback = await collect_sector_fallback(resolved, db)
-                if getattr(fallback, "rows", 0):
-                    return fallback
-                return result if result is not None else fallback
-            except Exception:                          # noqa: BLE001
-                logger.exception("同花顺板块兜底失败")
-                if result is not None:
-                    return result
-                raise
-        return result
+        return await collect_sector_daily(resolved, db)
 
     if task == "sector_members":
         from app.ingest.service import collect_sector_members

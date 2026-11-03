@@ -12,17 +12,23 @@
 """
 from __future__ import annotations
 
+import asyncio
 import io
+import json
+import os
 import re
 import time
-from datetime import date
+from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
+from app.core import config
 from app.core.logging import get_logger
+from app.ingest.base import HISTORY_LIMITER
 
 logger = get_logger(__name__)
 
@@ -76,6 +82,124 @@ def fetch_board_list() -> list[dict[str, str]]:
                 "ths_code": str(row.get("code") or "").strip(),
             })
     return boards
+
+
+# 板块清单缓存（日更复用，避免每天两次列表请求；清单变动极少）
+BOARD_LIST_CACHE = Path(config.BACKEND_DIR) / "var" / "sector_board_list.json"
+_BOARD_LIST_TTL_DAYS = 7
+
+
+def load_board_list(*, refresh: bool = False) -> list[dict[str, str]]:
+    """同花顺板块清单：优先读本地缓存（7 天），过期或缺失时联网刷新。
+
+    刷新失败但存在旧缓存时沿用旧清单并记 warning —— 列表接口抖动不应让整条
+    板块日更链路失败。没有任何缓存且联网失败才抛出异常。
+    """
+    cached: list[dict[str, str]] | None = None
+    age_days: float | None = None
+    if BOARD_LIST_CACHE.exists():
+        try:
+            data = json.loads(BOARD_LIST_CACHE.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                cached = data
+                age_days = (time.time() - BOARD_LIST_CACHE.stat().st_mtime) / 86400
+        except (OSError, ValueError):
+            cached = None
+    if cached is not None and not refresh and age_days is not None \
+            and age_days < _BOARD_LIST_TTL_DAYS:
+        return cached
+
+    try:
+        boards = fetch_board_list()
+    except Exception as exc:  # noqa: BLE001
+        if cached is not None:
+            logger.warning(
+                "板块清单刷新失败，沿用 %.1f 天前缓存：%s", age_days or -1, exc
+            )
+            return cached
+        raise
+
+    try:
+        BOARD_LIST_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = BOARD_LIST_CACHE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(boards, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, BOARD_LIST_CACHE)
+    except OSError as exc:
+        logger.warning("板块清单缓存写入失败（不影响采集）：%s", exc)
+    return boards
+
+
+async def fetch_daily_rows(
+    trade_date: date,
+    *,
+    concurrency: int = 6,
+    attempts: int = 2,
+    timeout_sec: float = config.SECTOR_BOARD_TIMEOUT_SEC,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """拉取指定交易日全部板块日线（同花顺历史接口，含 OHLCV/成交额）。
+
+    - 窗口从 ``trade_date - 10 天`` 开始：``pct_chg`` 需要前一交易日收盘推导；
+    - 每个板块请求前过 ``HISTORY_LIMITER``（≤2 req/s），并发只用于掩盖单次延迟；
+    - 单板块失败/无数据不阻塞整体，失败明细进 detail 供质量报告使用；
+    - 单板块墙钟上限 ``timeout_sec``：akshare 内部无 timeout，挂死必须被切断，
+      否则整条日更链路连同 advisory lock 会一直卡住。
+
+    Returns:
+        ``(rows, detail)``；rows 已按 sector_code 去重排序，detail 含
+        ``source/boards/failed/empty/errors``。
+    """
+    boards = await asyncio.to_thread(load_board_list)
+    start = trade_date - timedelta(days=10)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(board: dict[str, str]) -> tuple[str, list[dict[str, Any]], str | None]:
+        last_exc: Exception | None = None
+        async with semaphore:
+            for attempt in range(max(1, attempts)):
+                await HISTORY_LIMITER.acquire()
+                try:
+                    frame = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            fetch_board_history, board, start, trade_date
+                        ),
+                        timeout=timeout_sec,
+                    )
+                    rows = [
+                        row for row in history_rows(frame, board)
+                        if row["trade_date"] == trade_date
+                    ]
+                    return board["sector_code"], rows, None
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        assert last_exc is not None
+        return board["sector_code"], [], f"{type(last_exc).__name__}: {last_exc}"[:200]
+
+    results = await asyncio.gather(*(_one(board) for board in boards))
+    errors: dict[str, str] = {}
+    empty = 0
+    rows: list[dict[str, Any]] = []
+    for code, part, error in results:
+        if error is not None:
+            errors[code] = error
+        elif not part:
+            empty += 1
+        else:
+            rows.extend(part)
+
+    unique = {row["sector_code"]: row for row in rows}
+    detail = {
+        "source": THS_SRC,
+        "boards": len(boards),
+        "failed": len(errors),
+        "empty": empty,
+        "errors": dict(sorted(errors.items())[:10]),
+    }
+    logger.info(
+        "同花顺板块日线 %s：%d/%d 板块有数据（失败 %d，空 %d）",
+        trade_date, len(unique), len(boards), len(errors), empty,
+    )
+    return sorted(unique.values(), key=lambda item: item["sector_code"]), detail
 
 
 # =====================================================================
@@ -305,6 +429,8 @@ __all__ = [
     "THS_SRC",
     "sector_code",
     "fetch_board_list",
+    "load_board_list",
+    "fetch_daily_rows",
     "fetch_board_history",
     "history_rows",
     "fetch_board_members",

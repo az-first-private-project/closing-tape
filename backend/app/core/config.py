@@ -86,6 +86,9 @@ SNAPSHOT_MIN_INTERVAL_SEC = _env_float("SNAPSHOT_MIN_INTERVAL_SEC", 60.0)
 # 全市场快照/资金流是分页抓取（约 59 页），慢网下单次需 60–120s；
 # 沿用个股请求的 30s 超时会把正常抓取误判为失败（实测 2026-11-02）
 SNAPSHOT_FETCH_TIMEOUT_SEC = _env_float("SNAPSHOT_FETCH_TIMEOUT_SEC", 180.0)
+# 单板块历史拉取的墙钟上限：akshare 内部 requests 没有 timeout，
+# 一次挂死会让整条板块日更（乃至当日流水线）永久阻塞
+SECTOR_BOARD_TIMEOUT_SEC = _env_float("SECTOR_BOARD_TIMEOUT_SEC", 60.0)
 # 历史回补 ≤ 2 请求/秒
 HISTORY_REQUESTS_PER_SEC = _env_float("HISTORY_REQUESTS_PER_SEC", 2.0)
 # 单次 HTTP/接口调用超时与重试

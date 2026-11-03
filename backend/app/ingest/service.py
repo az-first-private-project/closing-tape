@@ -828,42 +828,6 @@ def _history_rows(
     return rows
 
 
-def _sector_daily_rows(
-    frame: pd.DataFrame | None, trade_date: date
-) -> list[dict[str, Any]]:
-    """板块日线 DataFrame → ``fact_sector_daily`` 行。"""
-    rows: list[dict[str, Any]] = []
-    for record in _records(frame):
-        sector_code = record.get("sector_code")
-        sector_name = record.get("sector_name")
-        if not sector_code or not sector_name:
-            continue
-        rows.append(
-            {
-                "sector_code": str(sector_code).strip()[:24],
-                "trade_date": trade_date,
-                "sector_name": str(sector_name).strip()[:64],
-                "sector_type": record.get("sector_type") or "concept",
-                "open": record.get("open"),
-                "high": record.get("high"),
-                "low": record.get("low"),
-                "close": record.get("close"),
-                "pre_close": record.get("pre_close"),
-                "pct_chg": record.get("pct_chg"),
-                "amplitude": record.get("amplitude"),
-                "volume": int(record["volume"]) if record.get("volume") is not None else None,
-                "amount": record.get("amount"),
-                "turnover_rate": record.get("turnover_rate"),
-                "up_count": record.get("up_count"),
-                "down_count": record.get("down_count"),
-                "leading_stock": record.get("leading_stock"),
-                "leading_stock_pct": record.get("leading_stock_pct"),
-                "src": "akshare",
-            }
-        )
-    return rows
-
-
 def _index_rows(frame: pd.DataFrame | None, trade_date: date) -> list[dict[str, Any]]:
     """指数日线 DataFrame → ``market_indices`` 行。"""
     rows: list[dict[str, Any]] = []
@@ -1442,13 +1406,44 @@ async def _resolve_backfill_codes(
 # ============================================================
 # A4 板块日线 / 板块成分（SCD2）
 # ============================================================
+async def _fill_sector_rows_from_live(
+    rows: list[dict[str, Any]], trade_date: date
+) -> int:
+    """用同花顺**实时**板块快照补齐历史接口缺失的板块（仅当日可用）。
+
+    实时快照只有指数点位/涨跌幅/领涨股，没有成交量、成交额与 OHLC —— 这些字段
+    由 ``build_sector_daily_rows`` 如实置空，绝不拿其它字段冒充。返回补齐行数。
+    """
+    from app.ingest.ths_sector import build_sector_daily_rows, fetch_sector_fundflow
+
+    try:
+        industry_df, concept_df = await fetch_sector_fundflow()
+    except Exception as exc:  # noqa: BLE001 —— 补齐失败不阻断已拿到的历史行
+        logger.warning("同花顺实时板块快照补齐失败（%s）：%s", trade_date, exc)
+        return 0
+
+    live_rows = (
+        build_sector_daily_rows(industry_df, {}, trade_date)
+        + build_sector_daily_rows(concept_df, {}, trade_date)
+    )
+    seen = {str(row["sector_code"]) for row in rows}
+    extra: dict[str, dict[str, Any]] = {}
+    for row in live_rows:
+        code = str(row["sector_code"])
+        if code not in seen:
+            extra.setdefault(code, row)
+    rows.extend(extra.values())
+    return len(extra)
+
+
 async def collect_sector_daily(
     trade_date: date, db: AsyncSession | None = None
 ) -> FetchResult:
-    """A4 板块日线（行业 + 概念）。
+    """A4 板块日线（行业 + 概念），统一同花顺口径（``THS_<名称>``）。
 
-    当日用东财板块快照一次拿全（含上涨/下跌家数、领涨股）；
-    历史日期逐板块拉历史日线（限频 2 req/s，约数分钟）。
+    与 ``dim_sector_member`` 成分名单同一口径，东财 BK 代码无法与 THS 成分聚合，
+    因此不再写入 BK 行。当日历史 K 线尚未发布时，用同花顺实时快照补齐缺失板块
+    （成交量/成交额等该源没有的字段如实置空）。
     """
     started = time.perf_counter()
     trade_date = _as_date(trade_date)
@@ -1476,18 +1471,32 @@ async def collect_sector_daily(
                     task, "before_close_ready_time", trade_date=trade_date.isoformat()
                 )
 
-            chain = get_provider_chain()
-            fetched = await chain.fetch_sector_list(trade_date)
-            frame = fetched.detail.get("data")
-            rows = _sector_daily_rows(frame, trade_date)
+            from app.ingest.ths_board import fetch_daily_rows
 
-            previous_rows = await _scalar(
+            previous_day = await _scalar(
                 db,
-                select(func.count())
-                .select_from(FactSectorDaily)
+                select(func.max(FactSectorDaily.trade_date))
                 .where(FactSectorDaily.trade_date < trade_date),
             )
-            expected = max(len(rows), _db_backed_count(previous_rows), _MIN_SECTOR_ROWS)
+            previous_rows = 0
+            if previous_day is not None:
+                previous_rows = await _scalar(
+                    db,
+                    select(func.count())
+                    .select_from(FactSectorDaily)
+                    .where(FactSectorDaily.trade_date == previous_day),
+                )
+            expected = max(_db_backed_count(previous_rows), _MIN_SECTOR_ROWS)
+
+            rows, ths_detail = await fetch_daily_rows(trade_date)
+            source = str(ths_detail.get("source") or "ths_hist")
+            failed_boards = int(ths_detail.get("failed") or 0)
+            live_filled = 0
+            if trade_date == today and len(rows) < expected:
+                live_filled = await _fill_sector_rows_from_live(rows, trade_date)
+                if live_filled:
+                    source = f"{source}+live"
+
             report = QualityReport(
                 dataset=dataset,
                 rows=len(rows),
@@ -1503,16 +1512,28 @@ async def collect_sector_daily(
                     severity="error",
                     message=f"板块日线 {len(rows)} 行 < 阈值 {_MIN_SECTOR_ROWS} 行",
                 )
+            if len(rows) < expected:
+                report.add(
+                    "coverage_below_previous_day", count=len(rows),
+                    severity="warning",
+                    message=f"板块日线 {len(rows)} 行 < 上一交易日 {expected} 行",
+                )
             duplicated = len(rows) - len({row["sector_code"] for row in rows})
             if duplicated:
                 report.add(
                     "duplicate_rows", count=duplicated, severity="error",
                     message=f"{duplicated} 个重复板块代码",
                 )
-            if fetched.failed:
+            if failed_boards:
                 report.add(
-                    "partial_sector_fetch", count=fetched.failed, severity="warning",
-                    message=f"{fetched.failed} 个板块拉取失败",
+                    "partial_sector_fetch", count=failed_boards, severity="warning",
+                    message=f"{failed_boards} 个板块历史拉取失败",
+                )
+            if live_filled:
+                report.add(
+                    "live_snapshot_filled", count=live_filled, severity="warning",
+                    message=f"{live_filled} 个板块当日历史K线缺失，已用实时快照补齐"
+                            "（无成交量/成交额）",
                 )
             if not report.ok:
                 await _record_quality_isolated(dataset, report, trade_date, "quality_failed")
@@ -1530,15 +1551,17 @@ async def collect_sector_daily(
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
                 rows=written,
-                total=fetched.total,
-                failed=fetched.failed,
+                total=len(rows),
+                failed=failed_boards,
                 elapsed_ms=elapsed,
-                detail={"source": fetched.source,
-                        "mode": fetched.detail.get("mode"),
-                        "attempts": fetched.detail.get("attempts")},
+                detail={"source": source,
+                        "mode": "ths_daily",
+                        "boards": ths_detail.get("boards"),
+                        "empty_boards": ths_detail.get("empty"),
+                        "live_filled": live_filled},
             )
-            await job.finish("success" if not fetched.failed else "partial",
-                             done=written, failed=fetched.failed, rows_written=written)
+            await job.finish("success" if not failed_boards else "partial",
+                             done=written, failed=failed_boards, rows_written=written)
             return result
         except Exception as exc:
             if not isinstance(exc, QualityBlockedError):
