@@ -16,6 +16,7 @@ V5 相对 V4 的变化：
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -37,8 +38,8 @@ from sqlalchemy import text  # noqa: E402
 
 from app.api.v1 import api_router  # noqa: E402
 from app.core.config import (  # noqa: E402
-    AUTO_CREATE_TABLES, CORS_ORIGINS, LOG_LEVEL, SCHEDULER_ENABLED, SERVER_HOST,
-    SERVER_PORT,
+    AUTO_CREATE_TABLES, CATCH_UP_ENABLED, CORS_ORIGINS, LOG_LEVEL,
+    SCHEDULER_ENABLED, SERVER_HOST, SERVER_PORT,
 )
 from app.core.errors import AppError  # noqa: E402
 from app.core.logging import bind_run, get_logger, setup_logging  # noqa: E402
@@ -82,11 +83,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("SCHEDULER_ENABLED=0，定时任务未启动")
 
+    catch_up_task: asyncio.Task | None = None
+    if SCHEDULER_ENABLED and CATCH_UP_ENABLED:
+        # 内存作业重启后不会补跑错过的 15:36，启动后单独检查缺口（后台执行）
+        from app.catch_up import run_catch_up_in_background
+        catch_up_task = asyncio.create_task(run_catch_up_in_background())
+
     logger.info("GFNA V5 启动完成 ✅")
     try:
         yield
     finally:
         logger.info("GFNA V5 关闭中 …")
+        if catch_up_task is not None and not catch_up_task.done():
+            catch_up_task.cancel()
         if scheduler is not None:
             from app.worker import stop_scheduler
             stop_scheduler()

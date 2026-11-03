@@ -28,6 +28,12 @@ logger = get_logger("worker")
 _TZ = ZoneInfo(TIMEZONE)
 scheduler: AsyncIOScheduler | None = None
 
+# APScheduler 默认 misfire_grace_time=1s：主机休眠/事件循环卡住稍久，错过的任务会被
+# 直接判为过期（P0-7 整日缺数的直接原因之一）。给日更链路留出当天补跑窗口；
+# 跨天缺口由 app.catch_up 的历史口径补跑处理。
+_DAY_GRACE_SEC = 3 * 3600
+_NIGHT_GRACE_SEC = 6 * 3600
+
 
 # ============================================================
 # 任务体
@@ -132,19 +138,24 @@ def start_scheduler() -> AsyncIOScheduler:
     # 早于该时刻跑会让 snapshot/sector/moneyflow 全部被跳过（见 ingest/base 的 before_close_ready_time）
     scheduler.add_job(_with_lock, CronTrigger(hour=15, minute=36, timezone=_TZ),
                       args=["daily_pipeline", run_daily_pipeline_job],
-                      id="daily_pipeline", name="盘后流水线", replace_existing=True)
+                      id="daily_pipeline", name="盘后流水线", replace_existing=True,
+                      misfire_grace_time=_DAY_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=16, minute=30, timezone=_TZ),
                       args=["algos", run_algo_job],
-                      id="algos", name="策略选股", replace_existing=True)
+                      id="algos", name="策略选股", replace_existing=True,
+                      misfire_grace_time=_DAY_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=10, timezone=_TZ),
                       args=["signal_perf", run_signal_perf_job],
-                      id="signal_perf", name="信号前瞻统计", replace_existing=True)
+                      id="signal_perf", name="信号前瞻统计", replace_existing=True,
+                      misfire_grace_time=_DAY_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=30, timezone=_TZ),
                       args=["paper", run_paper_job],
-                      id="paper", name="纸面组合跟踪", replace_existing=True)
+                      id="paper", name="纸面组合跟踪", replace_existing=True,
+                      misfire_grace_time=_DAY_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=2, minute=0, timezone=_TZ),
                       args=["backfill", run_backfill_job],
-                      id="backfill", name="历史补齐", replace_existing=True)
+                      id="backfill", name="历史补齐", replace_existing=True,
+                      misfire_grace_time=_NIGHT_GRACE_SEC)
     scheduler.add_job(_with_lock, "interval", minutes=CRAWL_INTERVAL_MINUTES,
                       args=["news", run_news_crawl_job],
                       id="news_crawl", name="新闻采集", replace_existing=True)

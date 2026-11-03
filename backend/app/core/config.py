@@ -225,6 +225,10 @@ API_RATE_LIMIT = _env("API_RATE_LIMIT", "60/minute")
 # 自动调度开关：CI/测试置 0，避免后台任务干扰
 SCHEDULER_ENABLED = _env_bool("SCHEDULER_ENABLED", True)
 AUTO_CREATE_TABLES = _env_bool("AUTO_CREATE_TABLES", True)
+# 启动补跑：宿主机休眠/进程未运行导致日更整日跳过时，启动后按历史口径补齐缺口
+CATCH_UP_ENABLED = _env_bool("CATCH_UP_ENABLED", True)
+CATCH_UP_MAX_DAYS = _env_int("CATCH_UP_MAX_DAYS", 5)
+CATCH_UP_DELAY_SEC = _env_float("CATCH_UP_DELAY_SEC", 15.0)
 
 # 允许的 CORS 来源（默认放开给本地开发；生产用环境变量收紧）
 CORS_ORIGINS = [
