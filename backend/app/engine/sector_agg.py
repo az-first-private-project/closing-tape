@@ -7,13 +7,15 @@
 - `main_net_inflow`：成分股 `fact_moneyflow.main_net_t0` 合计（元）
 - `rs_20d`：板块 20 交易日收益 − 沪深300 同窗口收益（百分点）
 - `member_count`：当日名单成分数
+- `up_count` / `down_count`：成分股当日涨跌家数（THS 板块日线不提供，按成分重算）
 
 口径与边界：
 - 名单必须带 SCD2 时间条件（`effective_from <= d AND (effective_to IS NULL OR > d)`），
   不能直接读当前名单，否则历史回看会把后来纳入的股票算进过去。
 - `is_partial=true` 的名单只覆盖 THS 前后各 5 页，只用于龙头，**不参与**市值/资金流/
   家数聚合（member_count 置 NULL），避免用 100 只样本冒充整个板块。
-- 成分数 < 3 时市值/资金流置 NULL（小样本噪声大）；缺失一律 NULL，**不补 0**。
+- 成分数 < 3 时市值/资金流置 NULL（小样本噪声大）；涨跌家数不受此限
+  （小板块的家数依然有意义）。缺失一律 NULL，**不补 0**。
 - `rs_20d` 要求板块与沪深300 在**同一组 21 个交易日**上都有收盘价，否则 NULL。
 - 只 UPDATE 当日已有的板块行，不凭空插入没有行情快照的板块。
 """
@@ -54,6 +56,9 @@ async def _membership_aggregate(session: AsyncSession, trade_date: date) -> list
                sum(s.market_cap) FILTER (WHERE NOT m.is_partial) AS market_cap,
                sum(s.float_cap) FILTER (WHERE NOT m.is_partial) AS float_cap,
                sum(f.main_net_t0) FILTER (WHERE NOT m.is_partial) AS main_net_inflow,
+               count(s.pct_chg) FILTER (WHERE NOT m.is_partial) AS pct_n,
+               count(*) FILTER (WHERE NOT m.is_partial AND s.pct_chg > 0) AS up_count,
+               count(*) FILTER (WHERE NOT m.is_partial AND s.pct_chg < 0) AS down_count,
                bool_or(m.is_partial) AS has_partial
         FROM members m
         LEFT JOIN fact_stock_daily s
@@ -117,6 +122,29 @@ async def _rs_lookup(session: AsyncSession, trade_date: date) -> dict[str, float
     return values
 
 
+def build_sector_metrics(codes: list[str], aggregates: dict[str, dict],
+                         rs_map: dict[str, float]) -> list[dict[str, Any]]:
+    """由成分聚合行拼装当日板块指标（纯变换，便于单测）。"""
+    metrics: list[dict[str, Any]] = []
+    for code in codes:
+        row = aggregates.get(code) or {}
+        has_partial = bool(row.get("has_partial"))
+        member_count = int(row.get("member_count") or 0)
+        enough = not has_partial and member_count >= MIN_MEMBERS
+        has_pct = not has_partial and int(row.get("pct_n") or 0) > 0
+        metrics.append({
+            "sector_code": code,
+            "member_count": None if has_partial else member_count,
+            "market_cap": row.get("market_cap") if enough else None,
+            "float_cap": row.get("float_cap") if enough else None,
+            "main_net_inflow": row.get("main_net_inflow") if enough else None,
+            "up_count": int(row.get("up_count") or 0) if has_pct else None,
+            "down_count": int(row.get("down_count") or 0) if has_pct else None,
+            "rs_20d": rs_map.get(code),
+        })
+    return metrics
+
+
 async def compute_sector_metrics(session: AsyncSession,
                                  trade_date: date) -> list[dict[str, Any]]:
     """计算当日全部板块的聚合指标（不写库）。"""
@@ -130,22 +158,7 @@ async def compute_sector_metrics(session: AsyncSession,
     aggregates = {row["sector_code"]: row
                   for row in await _membership_aggregate(session, trade_date)}
     rs_map = await _rs_lookup(session, trade_date)
-
-    metrics: list[dict[str, Any]] = []
-    for code in codes:
-        row = aggregates.get(code) or {}
-        has_partial = bool(row.get("has_partial"))
-        member_count = int(row.get("member_count") or 0)
-        enough = not has_partial and member_count >= MIN_MEMBERS
-        metrics.append({
-            "sector_code": code,
-            "member_count": None if has_partial else member_count,
-            "market_cap": row.get("market_cap") if enough else None,
-            "float_cap": row.get("float_cap") if enough else None,
-            "main_net_inflow": row.get("main_net_inflow") if enough else None,
-            "rs_20d": rs_map.get(code),
-        })
-    return metrics
+    return build_sector_metrics(codes, aggregates, rs_map)
 
 
 async def save_sector_metrics(session: AsyncSession, trade_date: date,
@@ -161,6 +174,8 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
             "main_net_inflow": to_jsonable(item.get("main_net_inflow")),
             "rs_20d": to_jsonable(item.get("rs_20d")),
             "member_count": item.get("member_count"),
+            "up_count": item.get("up_count"),
+            "down_count": item.get("down_count"),
         }
         for item in metrics
     ]
@@ -172,7 +187,9 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
                 float_cap numeric,
                 main_net_inflow numeric,
                 rs_20d numeric,
-                member_count integer
+                member_count integer,
+                up_count integer,
+                down_count integer
             )
         )
         UPDATE fact_sector_daily f
@@ -180,7 +197,10 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
                float_cap = v.float_cap,
                main_net_inflow = v.main_net_inflow,
                rs_20d = v.rs_20d,
-               member_count = v.member_count
+               member_count = v.member_count,
+               -- 历史东财板块行自带涨跌家数，保留原值，只补 NULL（THS 口径）
+               up_count = COALESCE(f.up_count, v.up_count),
+               down_count = COALESCE(f.down_count, v.down_count)
           FROM v
          WHERE f.trade_date = :d AND f.sector_code = v.sector_code
     """), {"rows": json.dumps(payload, ensure_ascii=False), "d": trade_date})
@@ -197,12 +217,13 @@ async def aggregate_sector_metrics(session: AsyncSession, trade_date: date) -> d
         "with_cap": sum(1 for m in metrics if m["market_cap"] is not None),
         "with_inflow": sum(1 for m in metrics if m["main_net_inflow"] is not None),
         "with_rs": sum(1 for m in metrics if m["rs_20d"] is not None),
+        "with_breadth": sum(1 for m in metrics if m["up_count"] is not None),
         "sectors": len(metrics),
     }
     logger.info(
-        "板块聚合完成 %s: 更新 %d/%d（市值 %d、资金流 %d、rs20 %d）",
+        "板块聚合完成 %s: 更新 %d/%d（市值 %d、资金流 %d、rs20 %d、涨跌家数 %d）",
         trade_date, rows, len(metrics), summary["with_cap"],
-        summary["with_inflow"], summary["with_rs"],
+        summary["with_inflow"], summary["with_rs"], summary["with_breadth"],
     )
     return summary
 
@@ -220,6 +241,7 @@ __all__ = [
     "MIN_MEMBERS",
     "RS_WINDOW",
     "aggregate_sector_metrics",
+    "build_sector_metrics",
     "compute_and_save_sector_metrics",
     "compute_sector_metrics",
     "save_sector_metrics",
