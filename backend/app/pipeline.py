@@ -31,6 +31,11 @@ DEFAULT_DAILY_STEPS = (
     "sector_scores", "temperature", "report", "algos", "signal_perf",
 )
 
+# 支持 codes 定向执行的 task：这些任务的 rows 只是局部代码，不能代表数据集全量状态。
+# 用它的行数/覆盖率覆盖 meta_data_quality 会把"全市场最近一次成功"冲掉
+# （920 定向回补曾把 stock_daily 写成 rows=355、coverage=0.9916）。
+_SCOPED_TASKS = {"backfill", "history_fast", "moneyflow_history", "valuation_fast", "rebuild"}
+
 # task -> dataset（写新鲜度用）
 TASK_DATASET = {
     "calendar": "trade_calendar",
@@ -212,6 +217,8 @@ async def run_task(
 
     started = time.perf_counter()
     dataset = TASK_DATASET.get(task, task)
+    # 定向回补只覆盖部分代码：rows/coverage 不代表数据集全量，写新鲜度会误导监控
+    scoped = bool(codes and codes.strip()) and task in _SCOPED_TASKS
 
     with bind_run(task=task, dataset=dataset):
         logger.info("任务开始")
@@ -221,10 +228,13 @@ async def run_task(
         except Exception as exc:                      # noqa: BLE001 —— 兜底并记录，不吞掉
             logger.exception("任务失败")
             await _reset_session(db)
-            try:
-                await mark_failure(db, dataset, f"{type(exc).__name__}: {exc}")
-            except Exception:                         # noqa: BLE001 —— DB 不可用时只能留日志
-                logger.exception("记录任务失败状态也失败 dataset=%s", dataset)
+            if scoped:
+                logger.warning("定向回补失败，保留数据集 %s 原有新鲜度", dataset)
+            else:
+                try:
+                    await mark_failure(db, dataset, f"{type(exc).__name__}: {exc}")
+                except Exception:                     # noqa: BLE001 —— DB 不可用时只能留日志
+                    logger.exception("记录任务失败状态也失败 dataset=%s", dataset)
             return {
                 "task": task, "dataset": dataset, "status": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
@@ -243,7 +253,9 @@ async def run_task(
         rows = stats.get("rows")
         quality_status = str(stats.get("quality_status") or "ok")
         if task != "calendar":
-            if quality_status == "ok":
+            if scoped:
+                logger.info("定向回补（codes 非空）不更新数据集 %s 的新鲜度", dataset)
+            elif quality_status == "ok":
                 await mark_success(
                     db, dataset, rows=rows,
                     coverage=stats.get("coverage"),

@@ -4,7 +4,8 @@
   ① ``FetchResult.summary`` 仅在非 ok 时携带 ``quality_status``；
   ② ``run_task``：采集层 stale 时不再写成功标记，返回 partial；
   ③ 正常结果仍写成功标记；
-  ④ 日更与启动补跑都包含 valuation（PE/PB 每日刷新）。
+  ④ 定向 codes 回补只覆盖部分代码，不写数据集新鲜度（成功/失败都不写）；
+  ⑤ 日更与启动补跑都包含 valuation（PE/PB 每日刷新）。
 """
 from __future__ import annotations
 
@@ -74,6 +75,71 @@ def test_run_task_writes_success_for_ok(monkeypatch) -> None:
     assert out["status"] == "success"
     assert "quality_status" not in out
     assert written and written[0]["rows"] == 7
+
+
+def test_run_task_scoped_backfill_skips_success_mark(monkeypatch) -> None:
+    """定向回补的行数只是局部代码，不能覆盖全市场数据集的新鲜度。"""
+
+    async def fake_dispatch(task, **kwargs):
+        assert kwargs["codes"] == "920000"
+        return FetchResult(rows=355, total=355)
+
+    written: list[dict] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        written.append(kwargs)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+
+    out = asyncio.run(
+        pipeline.run_task(
+            "history_fast", codes="920000",
+            start=date(2026, 11, 3), end=date(2026, 11, 3), db=_FakeDB(),
+        )
+    )
+    assert out["status"] == "success"
+    assert written == []
+
+
+def test_run_task_scoped_backfill_failure_keeps_freshness(monkeypatch) -> None:
+    """定向回补失败不应把全市场数据集标成 error。"""
+
+    async def fake_dispatch(task, **kwargs):
+        raise RuntimeError("boom")
+
+    recorded: list[str] = []
+
+    async def fake_mark_failure(db, dataset, error, **kwargs) -> None:
+        recorded.append(error)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_failure", fake_mark_failure)
+
+    db = _BrokenDB()
+    out = asyncio.run(pipeline.run_task("valuation_fast", codes="000001", db=db))
+    assert out["status"] == "failed"
+    assert db.rolled_back is True
+    assert recorded == []
+
+
+def test_run_task_full_history_fast_still_marks_success(monkeypatch) -> None:
+    """全市场任务（codes 为空）仍要写新鲜度，守卫不能误伤。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return FetchResult(rows=5590)
+
+    written: list[dict] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        written.append(kwargs)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+
+    out = asyncio.run(pipeline.run_task("history_fast", db=_FakeDB()))
+    assert out["status"] == "success"
+    assert written and written[0]["rows"] == 5590
 
 
 def test_run_task_rolls_back_on_failure(monkeypatch) -> None:
