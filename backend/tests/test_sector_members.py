@@ -89,6 +89,7 @@ def _patch_service(
     sector_count: int,
     *,
     open_members: dict[str, set[str]] | None = None,
+    partial_sectors: set[str] | None = None,
     sector_info: dict[str, dict] | None = None,
 ):
     session = _FakeSession()
@@ -116,6 +117,9 @@ def _patch_service(
     async def fake_open(db):
         return open_members or {}
 
+    async def fake_partial(db):
+        return partial_sectors or set()
+
     async def fake_record_quality(*args, **kwargs) -> None:
         quality_calls.append(args)
 
@@ -127,6 +131,7 @@ def _patch_service(
     monkeypatch.setattr(service, "_is_trade_day", fake_trade_day)
     monkeypatch.setattr(service, "_load_sector_info", fake_sector_info)
     monkeypatch.setattr(service, "_load_open_members", fake_open)
+    monkeypatch.setattr(service, "_load_partial_sectors", fake_partial)
     monkeypatch.setattr(service, "get_provider_chain", lambda: chain)
     monkeypatch.setattr(service, "record_quality", fake_record_quality)
     monkeypatch.setattr(service, "_JobTracker", _FakeJob)
@@ -298,6 +303,37 @@ def test_all_unmatched_does_not_trip_breaker_but_stays_stale(monkeypatch) -> Non
     assert result.failed == 0
     assert result.detail["circuit_open"] is False
     assert result.quality_status == "stale"
+
+
+def test_complete_list_closes_open_partial_intervals(monkeypatch) -> None:
+    """拿到完整名单后，同板块残留的 partial 开区间必须一并结束。"""
+    chain = _ScriptedChain(["ok"])
+    session, _quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=1,
+        open_members={"S00": {"600519"}},
+        partial_sectors={"S00"},
+    )
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert result.failed == 0
+    assert len(session.executed) == 1  # 只有 partial 收尾这一条 UPDATE
+    sql = str(session.executed[0])
+    assert "is_partial" in sql and "effective_to" in sql
+    assert result.quality_status == "ok"
+
+
+def test_boards_without_partial_rows_skip_extra_update(monkeypatch) -> None:
+    """没有 partial 残留的板块不应多执行一条无用 UPDATE。"""
+    chain = _ScriptedChain(["ok", "ok"])
+    session, _quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=2,
+        open_members={"S00": {"600519"}, "S01": {"600519"}},
+    )
+
+    asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert session.executed == []
 
 
 def test_normalize_board_name_variants() -> None:

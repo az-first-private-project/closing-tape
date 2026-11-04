@@ -1594,6 +1594,8 @@ async def collect_sector_members(
         - 移除成分：把已有开区间的 ``effective_to`` 设为 ``trade_date``（区间左闭右开，
           即"从今天起不再是成分"）；
         - **抓取失败的板块保持现状**（不误关区间）；返回空名单也按失败处理；
+        - 成功拿到完整名单时，同时结束该板块所有 partial 开区间（残缺名单被取代），
+          否则历史 partial 行会与完整名单并存，把板块永久标成 partial；
         - 消失的板块：仅当当日板块清单覆盖足够完整时才关闭其全部开区间。
     """
     started = time.perf_counter()
@@ -1627,6 +1629,7 @@ async def collect_sector_members(
                 raise ProviderError("板块清单为空，无法采集成分（请先执行 sector 任务）")
 
             open_members = await _load_open_members(db)
+            partial_sectors = await _load_partial_sectors(db)
             sectors = sorted(sector_info.keys())
             await job.update(total=len(sectors))
 
@@ -1726,6 +1729,7 @@ async def collect_sector_members(
                                 "effective_to": None,
                                 "sector_name": str(info["sector_name"])[:64],
                                 "sector_type": info["sector_type"],
+                                "is_partial": False,
                             }
                             for stock_code in sorted(to_add)
                         ]
@@ -1735,7 +1739,8 @@ async def collect_sector_members(
                             add_rows,
                             ["sector_code", "stock_code", "effective_from"],
                             update_columns=[
-                                "effective_to", "sector_name", "sector_type"
+                                "effective_to", "sector_name", "sector_type",
+                                "is_partial",
                             ],
                         )
                     if to_close:
@@ -1744,6 +1749,19 @@ async def collect_sector_members(
                             .where(
                                 DimSectorMember.sector_code == sector_code,
                                 DimSectorMember.stock_code.in_(sorted(to_close)),
+                                DimSectorMember.effective_to.is_(None),
+                            )
+                            .values(effective_to=trade_date)
+                        )
+                        closed += result.rowcount or 0
+                    if sector_code in partial_sectors:
+                        # 本次拿到完整名单：此前只有前端 5 页的 partial 区间到此结束，
+                        # 否则它会与完整名单并存，把板块永久标成 partial。
+                        result = await session.execute(
+                            update(DimSectorMember)
+                            .where(
+                                DimSectorMember.sector_code == sector_code,
+                                DimSectorMember.is_partial.is_(True),
                                 DimSectorMember.effective_to.is_(None),
                             )
                             .values(effective_to=trade_date)
@@ -1931,6 +1949,24 @@ async def _load_open_members(
     except Exception:  # noqa: BLE001
         logger.warning("读取现有板块成分失败（按空处理）", exc_info=True)
         return {}
+
+
+async def _load_partial_sectors(db: AsyncSession | None) -> set[str]:
+    """读取仍有 partial 开区间的板块（完整名单导入时要顺带结束它们）。"""
+    try:
+        async with _db_scope(db) as session:
+            stmt = (
+                select(DimSectorMember.sector_code)
+                .where(
+                    DimSectorMember.is_partial.is_(True),
+                    DimSectorMember.effective_to.is_(None),
+                )
+                .distinct()
+            )
+            return {row[0] for row in (await session.execute(stmt)).all()}
+    except Exception:  # noqa: BLE001
+        logger.warning("读取 partial 成分板块失败（按空处理）", exc_info=True)
+        return set()
 
 
 # ============================================================

@@ -107,7 +107,7 @@ async def sync_members(
     members: list[dict[str, str]],
     effective_from: date,
     partial: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """SCD2 同步：新增开区间成分，移除者关闭区间（全部 commit 后才返回）。"""
     from sqlalchemy import select, update
 
@@ -117,17 +117,39 @@ async def sync_members(
 
     new_codes = {item["stock_code"] for item in members}
     async with AsyncSessionLocal() as session:
-        current = {
-            row[0]
-            for row in (await session.execute(
-                select(DimSectorMember.stock_code).where(
-                    DimSectorMember.sector_code == sector_code,
-                    DimSectorMember.effective_to.is_(None),
+        open_rows = (await session.execute(
+            select(DimSectorMember.stock_code, DimSectorMember.is_partial).where(
+                DimSectorMember.sector_code == sector_code,
+                DimSectorMember.effective_to.is_(None),
+            )
+        )).all()
+        partial_codes = {row[0] for row in open_rows if row[1]}
+        complete_codes = {row[0] for row in open_rows if not row[1]}
+        if partial and complete_codes:
+            # 已有完整名单时残缺名单不得覆盖，否则会把已关闭的 partial 区间重开
+            return {"added": 0, "closed": 0, "total": len(new_codes), "skipped": True}
+
+        closed = 0
+        if partial:
+            to_add = new_codes - partial_codes
+            to_close = partial_codes - new_codes
+        else:
+            # 完整名单落地：先结束被取代的 partial 区间，再按完整名单做差集，
+            # 否则与完整名单相同的 partial 股票会被误判为"已存在"而无法升级。
+            if partial_codes:
+                result = await session.execute(
+                    update(DimSectorMember)
+                    .where(
+                        DimSectorMember.sector_code == sector_code,
+                        DimSectorMember.is_partial.is_(True),
+                        DimSectorMember.effective_to.is_(None),
+                    )
+                    .values(effective_to=effective_from)
                 )
-            )).all()
-        }
-        to_add = new_codes - current
-        to_close = current - new_codes
+                closed += result.rowcount or 0
+            to_add = new_codes - complete_codes
+            to_close = complete_codes - new_codes
+
         added = 0
         if to_add:
             added = await upsert_rows(
@@ -148,7 +170,6 @@ async def sync_members(
                 ["sector_code", "stock_code", "effective_from"],
                 update_columns=["effective_to", "sector_name", "sector_type", "is_partial"],
             )
-        closed = 0
         if to_close:
             result = await session.execute(
                 update(DimSectorMember)
@@ -159,7 +180,7 @@ async def sync_members(
                 )
                 .values(effective_to=effective_from)
             )
-            closed = result.rowcount or 0
+            closed += result.rowcount or 0
         await session.commit()
     return {"added": added, "closed": closed, "total": len(new_codes)}
 
