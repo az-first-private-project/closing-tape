@@ -44,6 +44,7 @@ from app.core import config
 from app.core.errors import ProviderError
 from app.core.logging import get_logger
 from app.ingest.base import BaseProvider, FetchResult
+from app.ingest.em_board import CONCEPT_ALIASES
 
 # 东财接口 TLS 指纹补丁：必须在调用任何 akshare 东财接口之前生效（见 em_tls_patch.py）
 from app.ingest import em_tls_patch  # noqa: F401  (import 即生效)
@@ -635,6 +636,27 @@ def build_board_code_maps(
     for key in ambiguous:
         normalized.pop(key, None)
     return exact, normalized
+
+
+def resolve_em_board_code(
+    exact: dict[str, str],
+    normalized: dict[str, str],
+    sector_name: str,
+    sector_type: str,
+) -> str | None:
+    """THS 板块名 → 东财 BK 代码：精确 → 归一化 → 概念同义词。
+
+    同义词只对概念板块生效，且只收录语义相同的改名/缩写（见
+    ``em_board.CONCEPT_ALIASES``）；解析不到返回 None，由调用方跳过。
+    """
+    code = exact.get(sector_name) or normalized.get(normalize_board_name(sector_name))
+    if code or sector_type != "concept":
+        return code
+    for alias in CONCEPT_ALIASES.get(sector_name, []):
+        code = exact.get(alias) or normalized.get(normalize_board_name(alias))
+        if code:
+            return code
+    return None
 
 
 def _normalize_sector_members(
@@ -1582,15 +1604,13 @@ class AkshareProvider(BaseProvider):
     ) -> FetchResult:
         """板块成分股。
 
-        THS 板块名先按「精确 → 归一化」解析成东财 BK 代码，再用代码取成分；
+        THS 板块名先按「精确 → 归一化 → 概念同义词」解析成东财 BK 代码，再用代码取成分；
         东财清单里没有的板块返回 ``skip_reason=em_name_not_found`` 的空结果，
         由编排层按"不支持的板块"跳过（不重试、不触发熔断、不动已有区间）。
         """
         started = time.perf_counter()
         exact, normalized = self._em_board_code_maps(sector_type)
-        em_code = exact.get(sector_name) or normalized.get(
-            normalize_board_name(sector_name)
-        )
+        em_code = resolve_em_board_code(exact, normalized, sector_name, sector_type)
         if not em_code:
             elapsed = int((time.perf_counter() - started) * 1000)
             frame = _empty_frame(SECTOR_MEMBER_COLUMNS)
@@ -2051,4 +2071,7 @@ __all__ = [
     "_normalize_index",
     "_normalize_us_index",
     "_normalize_calendar",
+    "build_board_code_maps",
+    "normalize_board_name",
+    "resolve_em_board_code",
 ]

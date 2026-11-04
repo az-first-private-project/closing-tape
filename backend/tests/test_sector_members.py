@@ -89,8 +89,9 @@ def _patch_service(
     sector_count: int,
     *,
     open_members: dict[str, set[str]] | None = None,
-    partial_sectors: set[str] | None = None,
+    partial_members: dict[str, set[str]] | None = None,
     sector_info: dict[str, dict] | None = None,
+    upserted: list[dict] | None = None,
 ):
     session = _FakeSession()
     quality_calls: list[tuple] = []
@@ -118,12 +119,14 @@ def _patch_service(
         return open_members or {}
 
     async def fake_partial(db):
-        return partial_sectors or set()
+        return partial_members or {}
 
     async def fake_record_quality(*args, **kwargs) -> None:
         quality_calls.append(args)
 
     async def fake_upsert(session, model, rows, keys, **kwargs) -> int:
+        if upserted is not None:
+            upserted.extend(rows)
         return len(rows)
 
     monkeypatch.setattr(service, "_advisory_lock", fake_lock)
@@ -131,7 +134,7 @@ def _patch_service(
     monkeypatch.setattr(service, "_is_trade_day", fake_trade_day)
     monkeypatch.setattr(service, "_load_sector_info", fake_sector_info)
     monkeypatch.setattr(service, "_load_open_members", fake_open)
-    monkeypatch.setattr(service, "_load_partial_sectors", fake_partial)
+    monkeypatch.setattr(service, "_load_partial_members", fake_partial)
     monkeypatch.setattr(service, "get_provider_chain", lambda: chain)
     monkeypatch.setattr(service, "record_quality", fake_record_quality)
     monkeypatch.setattr(service, "_JobTracker", _FakeJob)
@@ -311,7 +314,7 @@ def test_complete_list_closes_open_partial_intervals(monkeypatch) -> None:
     session, _quality_calls = _patch_service(
         monkeypatch, chain, sector_count=1,
         open_members={"S00": {"600519"}},
-        partial_sectors={"S00"},
+        partial_members={"S00": {"600519"}},
     )
 
     result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
@@ -321,6 +324,53 @@ def test_complete_list_closes_open_partial_intervals(monkeypatch) -> None:
     sql = str(session.executed[0])
     assert "is_partial" in sql and "effective_to" in sql
     assert result.quality_status == "ok"
+
+
+def test_complete_list_replaces_partial_without_losing_overlap(monkeypatch) -> None:
+    """完整名单取代 partial：重叠成分必须重新落完整开区间，partial 独有成分不补。"""
+    chain = _ScriptedChain(["ok"])
+    upserted: list[dict] = []
+    session, _quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=1,
+        open_members={"S00": {"600519", "000001"}},
+        partial_members={"S00": {"600519", "000001"}},
+        upserted=upserted,
+    )
+
+    asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    # 源只返回 600519：它必须作为完整成分重新插入（否则 partial 关闭后消失）；
+    # 000001 只在 partial 名单里且不在完整名单中，不能补成完整成分。
+    assert [row["stock_code"] for row in upserted] == ["600519"]
+    assert upserted[0]["is_partial"] is False
+    assert len(session.executed) == 1  # partial 区间关闭
+
+
+def test_complete_list_keeps_complete_rows_not_in_partial(monkeypatch) -> None:
+    """partial 与完整区间并存时：完整区间的退出成分关闭，未变的完整成分不重插。"""
+    chain = _ScriptedChain(["ok"])
+    upserted: list[dict] = []
+    session, _quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=1,
+        open_members={"S00": {"600519", "000001", "300750"}},
+        partial_members={"S00": {"300750"}},
+        upserted=upserted,
+    )
+
+    asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert upserted == []  # 600519 仍在名单里，无需重插
+    assert len(session.executed) == 2
+    close_params: set = set()
+    for value in session.executed[0].compile().params.values():
+        if isinstance(value, (list, tuple, set)):
+            close_params.update(value)
+        else:
+            close_params.add(value)
+    assert "000001" in close_params
+    assert "600519" not in close_params
+    assert "300750" not in close_params  # partial 行由第二条 UPDATE 负责
+    assert "is_partial" in str(session.executed[1])
 
 
 def test_boards_without_partial_rows_skip_extra_update(monkeypatch) -> None:
@@ -367,3 +417,32 @@ def test_build_board_code_maps_drops_ambiguous_normalized_names() -> None:
     assert normalized["MR"] == "BK1090"
     assert normalized["银行"] == "BK0475"
     assert akshare_provider.build_board_code_maps(None) == ({}, {})
+
+
+def test_resolve_em_board_code_by_concept_alias() -> None:
+    exact = {"新能源车": "BK0900"}
+    normalized = {akshare_provider.normalize_board_name("新能源车"): "BK0900"}
+
+    assert akshare_provider.resolve_em_board_code(
+        exact, normalized, "新能源汽车", "concept"
+    ) == "BK0900"
+
+
+def test_resolve_em_board_code_prefers_exact_and_skips_alias_for_industry() -> None:
+    exact = {"新能源汽车": "BK9999", "新能源车": "BK0900"}
+    normalized = {
+        akshare_provider.normalize_board_name("新能源车"): "BK0900",
+    }
+
+    assert akshare_provider.resolve_em_board_code(
+        exact, normalized, "新能源汽车", "concept"
+    ) == "BK9999"  # 精确名优先
+    assert akshare_provider.resolve_em_board_code(
+        exact, normalized, "新能源汽车", "industry"
+    ) == "BK9999"  # 行业只走精确/归一化
+    assert akshare_provider.resolve_em_board_code(
+        {"新能源车": "BK0900"}, {}, "新能源汽车", "industry"
+    ) is None  # 同义词不用于行业
+    assert akshare_provider.resolve_em_board_code(
+        {}, {}, "不存在的概念", "concept"
+    ) is None

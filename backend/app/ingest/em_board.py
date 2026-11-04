@@ -19,6 +19,25 @@ CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 _UT = "bd1d9ddb04089700cf9c27f6f7426281"
 _BOARD_FS = {"industry": "m:90+t:2", "concept": "m:90+t:3"}
 
+# THS 概念名与东财概念名的同义差异项（语义相同，仅措辞不同）。
+# 只收录两个源指向同一概念的改名/缩写；口径不同（如「上海国企改革」vs
+# 「央国企改革」）或一方范围更宽（如「细胞免疫治疗」vs「免疫治疗」）的不收录，
+# 否则会把不同范围的成分写进同一板块。
+CONCEPT_ALIASES: dict[str, list[str]] = {
+    "新能源汽车": ["新能源车"],
+    "上海自贸区": ["上海自贸"],
+    "中字头股票": ["中字头"],
+    "装配式建筑": ["装配建筑"],
+    "人民币贬值受益": ["贬值受益"],
+    "央企国企改革": ["央国企改革"],
+    "知识产权保护": ["知识产权"],
+    "水利": ["水利建设"],
+    "京津冀一体化": ["京津冀"],
+    "阿里巴巴概念": ["阿里概念"],
+    "PPP概念": ["PPP模式"],
+    "摘帽": ["近期摘帽"],
+}
+
 # THS 行业名与东财行业/二级行业名的差异项（东财更细，一个 THS 板块可能对应多个）
 INDUSTRY_ALIASES: dict[str, list[str]] = {
     "港口航运": ["航运港口"],
@@ -135,7 +154,7 @@ def normalize_name(name: str) -> str:
 
 
 def build_em_mapping(ths_boards: Iterable[dict[str, str]]) -> dict[str, dict]:
-    """THS 板块 → 东财板块映射（同名精确匹配 + 行业别名）。"""
+    """THS 板块 → 东财板块映射（同名归一化优先 + 行业/概念别名）。"""
     em_industry = fetch_board_list("industry")
     em_concept = fetch_board_list("concept")
 
@@ -158,6 +177,9 @@ def build_em_mapping(ths_boards: Iterable[dict[str, str]]) -> dict[str, dict]:
                 hits.extend(by_type["industry"].get(normalize_name(alias), []))
         if not hits:
             hits = by_type.get(sector_type, {}).get(normalize_name(name), [])
+        if not hits and sector_type == "concept":
+            for alias in CONCEPT_ALIASES.get(name, []):
+                hits.extend(by_type["concept"].get(normalize_name(alias), []))
         hits = [hit for hit in hits if hit["em_code"]]
 
         if hits:
@@ -178,6 +200,7 @@ def build_em_mapping(ths_boards: Iterable[dict[str, str]]) -> dict[str, dict]:
 
 
 __all__ = [
+    "CONCEPT_ALIASES",
     "INDUSTRY_ALIASES",
     "fetch_board_list",
     "fetch_board_members",

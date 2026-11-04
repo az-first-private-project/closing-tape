@@ -1629,7 +1629,7 @@ async def collect_sector_members(
                 raise ProviderError("板块清单为空，无法采集成分（请先执行 sector 任务）")
 
             open_members = await _load_open_members(db)
-            partial_sectors = await _load_partial_sectors(db)
+            partial_members = await _load_partial_members(db)
             sectors = sorted(sector_info.keys())
             await job.update(total=len(sectors))
 
@@ -1718,8 +1718,11 @@ async def collect_sector_members(
                         continue  # 抓取失败：绝不基于空集合做差集
                     info = sector_info[sector_code]
                     current = open_members.get(sector_code, set())
-                    to_add = member_codes - current
-                    to_close = current - member_codes
+                    # partial 区间马上会被下面的 UPDATE 关闭：重叠成分必须按完整
+                    # 名单重新落一条开区间，否则关闭后该股票在板块里彻底消失。
+                    complete_current = current - partial_members.get(sector_code, set())
+                    to_add = member_codes - complete_current
+                    to_close = complete_current - member_codes
                     if to_add:
                         add_rows = [
                             {
@@ -1754,7 +1757,7 @@ async def collect_sector_members(
                             .values(effective_to=trade_date)
                         )
                         closed += result.rowcount or 0
-                    if sector_code in partial_sectors:
+                    if sector_code in partial_members:
                         # 本次拿到完整名单：此前只有前端 5 页的 partial 区间到此结束，
                         # 否则它会与完整名单并存，把板块永久标成 partial。
                         result = await session.execute(
@@ -1951,22 +1954,25 @@ async def _load_open_members(
         return {}
 
 
-async def _load_partial_sectors(db: AsyncSession | None) -> set[str]:
-    """读取仍有 partial 开区间的板块（完整名单导入时要顺带结束它们）。"""
+async def _load_partial_members(
+    db: AsyncSession | None,
+) -> dict[str, set[str]]:
+    """读取仍有 partial 开区间的板块及其成分（完整名单取代时要用）。"""
     try:
         async with _db_scope(db) as session:
-            stmt = (
-                select(DimSectorMember.sector_code)
-                .where(
-                    DimSectorMember.is_partial.is_(True),
-                    DimSectorMember.effective_to.is_(None),
-                )
-                .distinct()
+            stmt = select(
+                DimSectorMember.sector_code, DimSectorMember.stock_code
+            ).where(
+                DimSectorMember.is_partial.is_(True),
+                DimSectorMember.effective_to.is_(None),
             )
-            return {row[0] for row in (await session.execute(stmt)).all()}
+            result: dict[str, set[str]] = {}
+            for sector_code, stock_code in (await session.execute(stmt)).all():
+                result.setdefault(sector_code, set()).add(stock_code)
+            return result
     except Exception:  # noqa: BLE001
-        logger.warning("读取 partial 成分板块失败（按空处理）", exc_info=True)
-        return set()
+        logger.warning("读取 partial 成分失败（按空处理）", exc_info=True)
+        return {}
 
 
 # ============================================================
