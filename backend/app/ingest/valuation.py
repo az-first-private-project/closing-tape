@@ -60,17 +60,17 @@ EPS / BPS 的取值优先级（踩过坑，务必别改回去）
 -----------------------------
 财报与分红都有**披露/实施滞后**，不能用"未来才公开的信息"算"过去的估值"：
 
-- 阶段 1a 落库时写入 ``announced_date = report_date + REPORT_LAG_DAYS``，阶段 2 只用
+- 阶段 1a 落库时写入 ``announced_date = report_date + 报告类型对应滞后``，阶段 2 只用
   ``announced_date <= 交易日`` 的最新报告期（``build_valuation_frame`` 的
   ``merge_asof(direction="backward")`` 做的就是这个）；
 - 分红用**除权日**（``ex_date``）作为市场可知日：``d >= ex_date`` 才计入当天的近 12 个月
   分红（见 :func:`dv_ttm_series`）。
 
-``REPORT_LAG_DAYS = 90`` 的理由（法定披露期限）：年报 4 个月内（次年 4/30 前）、
-半年报 2 个月内（8/31 前）、一季报/三季报 1 个月内（4/30、10/31 前）。取 90 天是
-折中：对季报/半年报**偏保守**（法定 30/62 天，我们等 90 天，绝不会提前用），
-对年报则略早于法定 120 天（年报实际披露集中在 2–4 月，90 天基本落在真实披露窗口内）。
-需要最严格口径时可以显式传 ``lag_days=120``（各函数都支持）。
+滞后按法定披露期限取值（自然日）：一季报/三季报 30 天（4/30、10/31 前）、半年报
+62 天（8/31 前）、年报 120 天（次年 4/30 前），见 :data:`REPORT_LAG_DAYS_BY_MONTH`。
+统一取 90 天会让三季报晚可用两个月（10/30 → 12/29）：快照抓取失败时，零网络兜底
+只能用半年报甚至更早的数据算估值，PS 会因营收 TTM 为负/缺失而留空；按报告类型取
+法定上限既不会提前使用，也与市场实际可见时间一致。
 
 注意：新浪财报接口 ``start_year=2019`` 时实测**最多只返回最近 14–15 期**（约 3.5 年），
 拿不到更早的年度就如实留空，**绝不做线性外推**（外推出来的 PE 没有可信度）。
@@ -120,8 +120,10 @@ logger = get_logger(__name__)
 # ============================================================
 # 常量
 # ============================================================
-#: 财报"可被市场获知"的保守滞后（自然日）。理由见模块 docstring。
-REPORT_LAG_DAYS = 90
+#: 报告期所在月 → 法定披露滞后（自然日）。取法定上限，绝不提前使用。
+REPORT_LAG_DAYS_BY_MONTH: dict[int, int] = {3: 30, 6: 62, 9: 30, 12: 120}
+#: 无法识别报告类型时的兜底滞后（用最保守的年报口径）
+REPORT_LAG_FALLBACK_DAYS = 120
 
 #: meta_data_quality / pipeline.TASK_DATASET 里的数据集名
 DATASET = "valuation"
@@ -627,8 +629,10 @@ def ps_ttm_values(
     """市销率 = 当日总市值 / 营业总收入 TTM。
 
     ``prices`` 与 ``valuation`` 必须**同序**（``compute_valuation`` 里两者同源同序）。
-    营收缺失或低于 :data:`REVENUE_MIN_YUAN`（说明库里混进了增长率/比率）→ NaN，
-    写库时由 ``COALESCE`` 保留已有 PS，绝不会用增长率算出天文数字。
+    营收缺失、为 0 或绝对值低于 :data:`REVENUE_MIN_YUAN`（说明库里混进了增长率/比率）→
+    NaN，写库时由 ``COALESCE`` 保留已有 PS，绝不会用增长率算出天文数字。营收 TTM 为
+    **负**是合法情形（亏损公司收入冲回/重述），此时 PS 为负，与东财口径一致；仅用
+    绝对值门槛把"15.71 这种增长率"挡掉。
     """
     if valuation is None or len(valuation) == 0:
         return pd.Series(dtype="float64")
@@ -656,7 +660,7 @@ def ps_ttm_values(
             market_cap.notna()
             & (market_cap > 0)
             & revenue.notna()
-            & (revenue >= REVENUE_MIN_YUAN)
+            & (revenue.abs() >= REVENUE_MIN_YUAN)
         )
     )
 
@@ -664,7 +668,7 @@ def ps_ttm_values(
 # ============================================================
 # 纯函数 3：按报告期 → 按交易日展开（point-in-time）
 # ============================================================
-def _prepare_financials(fins: pd.DataFrame | None, lag_days: int) -> pd.DataFrame:
+def _prepare_financials(fins: pd.DataFrame | None, lag_days: int | None = None) -> pd.DataFrame:
     """把财报表整理成"可用日期"维度，供 ``merge_asof`` 使用。
 
     输入兼容两种形态：
@@ -672,11 +676,14 @@ def _prepare_financials(fins: pd.DataFrame | None, lag_days: int) -> pd.DataFram
         2. ``dim_stock_financial`` 的行（列：code/report_date/announced_date/eps_ttm/bps/payout_ratio）。
 
     point-in-time 可用日期 ``available_date`` 的取值：
-        - 有 ``announced_date`` → 用它（阶段 1 落库时算好的 报告期+滞后）；
-        - 没有（NaN/None）→ ``report_date + lag_days``（本模块内部推导的兜底口径）。
+        - 有 ``announced_date`` → 用它（阶段 1 落库时算好的 报告期+法定滞后）；
+        - 没有（NaN/None）→ ``report_date + 报告类型对应滞后``（本模块内部推导的兜底口径）。
 
     防御：``announced_date`` 早于 ``report_date`` 属于脏数据（会让"未来财报"提前可用），
-    这种行回落到 ``report_date + lag_days``。
+    这种行回落到 ``report_date + 报告类型对应滞后``。
+
+    Args:
+        lag_days: 显式覆盖兜底滞后（自然日）；``None`` = 按报告类型取法定披露期限。
 
     Returns:
         ``[report_date, eps_ttm, bps, payout_ratio, available_date]``，按 ``available_date`` 升序。
@@ -719,10 +726,18 @@ def _prepare_financials(fins: pd.DataFrame | None, lag_days: int) -> pd.DataFram
 
     # --- point-in-time 可用日期 ---
     period_dt = pd.to_datetime(frame["report_date"])
-    fallback = period_dt + pd.Timedelta(days=int(lag_days))
+    if lag_days is None:
+        lag = (
+            period_dt.dt.month.map(REPORT_LAG_DAYS_BY_MONTH)
+            .fillna(REPORT_LAG_FALLBACK_DAYS)
+            .astype(int)
+        )
+        fallback = period_dt + pd.to_timedelta(lag, unit="D")
+    else:
+        fallback = period_dt + pd.Timedelta(days=int(lag_days))
     if "announced_date" in frame.columns:
         announced = pd.to_datetime(frame["announced_date"].astype(object), errors="coerce")
-        # 缺失（NULL）→ 回落到 report_date + lag；脏数据（早于报告期）也不可信，同样回落
+        # 缺失（NULL）→ 回落到报告类型滞后；脏数据（早于报告期）也不可信，同样回落
         available = announced.fillna(fallback)
         invalid = announced.notna() & (announced < period_dt)
         available = available.where(~invalid, fallback)
@@ -739,7 +754,7 @@ def _prepare_financials(fins: pd.DataFrame | None, lag_days: int) -> pd.DataFram
 def build_valuation_frame(
     prices: pd.DataFrame,
     fins: pd.DataFrame,
-    lag_days: int = REPORT_LAG_DAYS,
+    lag_days: int | None = None,
 ) -> pd.DataFrame:
     """把"按报告期"的估值因子展开到"按交易日"（point-in-time，禁止未来函数）。
 
@@ -762,7 +777,8 @@ def build_valuation_frame(
         prices: ``[trade_date, close]``（升序；可多一列 ``code`` 见下）。``trade_date``
             可以是 date / Timestamp / 字符串。
         fins: 见 :func:`_prepare_financials` 的两种输入形态；多报告期、乱序都可以。
-        lag_days: 没有 ``announced_date`` 时的披露滞后（自然日），默认 90。
+        lag_days: 没有 ``announced_date`` 时的披露滞后（自然日）；``None`` = 按报告类型取
+            法定披露期限（一季报/三季报 30 天、半年报 62 天、年报 120 天）。
 
     Returns:
         ``[trade_date, pe_ttm, pb, dv_ttm, report_date]``，**行序与 ``prices`` 一致**
@@ -1355,8 +1371,9 @@ async def fetch_financials(code: str, start_year: int = DEFAULT_START_YEAR) -> p
     数据源与降级：
         1. 主源 ``ak.stock_financial_analysis_indicator(symbol, start_year)`` ——
            每个报告期一行，含 EPS/BPS/ROE/股息发放率；
-        2. 兜底 ``ak.stock_financial_abstract(symbol)`` —— 当主源缺 EPS 时，
-           用「归母净利润 / 股本」反推 EPS（见 :func:`abstract_eps_frame` 的局限性说明）。
+        2. 兜底 ``ak.stock_financial_abstract(symbol)`` —— **仅在主源有数据但缺 EPS 时**，
+           用「归母净利润 / 股本」反推 EPS（见 :func:`abstract_eps_frame` 的局限性说明）；
+           主源整体为空（网络/接口失败）时直接返回空表，不做兜底覆盖。
         3. 股本兜底 ``ak.stock_zh_a_daily`` 的 ``outstanding_share``（流通股本近似）。
 
     明确**不用**的接口（2026-10 实测不可用）：``stock_a_indicator_lg``（akshare 1.19.1
@@ -1380,7 +1397,16 @@ async def fetch_financials(code: str, start_year: int = DEFAULT_START_YEAR) -> p
     fins = normalize_financials(raw)
     revenue_map = _extract_revenue_map(raw)
 
-    if fins.empty or fins["eps"].isna().all():
+    if fins.empty:
+        # 主源整体不可用（DNS/限频/接口失败）时**不能**走摘要兜底：摘要是
+        # 「归母净利润 / 股本」的近似口径，且没有 BPS。实测 688836（宇树科技-W）
+        # 一次 DNS 抖动就把库里拆股前 495.08 的 BPS 洗成 NULL、PB 全空，
+        # 同时用不同股本基期重算了 EPS。失败就返回空表，由 sync_financials
+        # 记为 failed 并留待下次重试，绝不用降级源覆盖已入库数据。
+        logger.warning("财报指标表主源为空（网络/接口失败），跳过摘要兜底 code=%s", normalized)
+        return _empty_financials_ttm()
+
+    if fins["eps"].isna().all():
         logger.info("财报指标表缺 EPS，尝试财务摘要兜底 code=%s", normalized)
         metrics_raw = await _ak_call("stock_financial_abstract", symbol=normalized)
         metrics = normalize_abstract_metrics(metrics_raw)
@@ -1475,21 +1501,27 @@ def _normalize_codes(codes: Iterable[Any] | None) -> list[str]:
     return list(cleaned)
 
 
-def _announced_date(report_date: date, lag_days: int = REPORT_LAG_DAYS) -> date:
+def report_lag_days(report_date: date) -> int:
+    """报告期 → 法定披露滞后（自然日）；未知报告期用最保守口径。"""
+    return REPORT_LAG_DAYS_BY_MONTH.get(report_date.month, REPORT_LAG_FALLBACK_DAYS)
+
+
+def _announced_date(report_date: date, lag_days: int | None = None) -> date:
     """报告期 → 市场可知日期（point-in-time 的时间锚）。"""
-    return report_date + timedelta(days=int(lag_days))
+    days = report_lag_days(report_date) if lag_days is None else int(lag_days)
+    return report_date + timedelta(days=days)
 
 
 _QUARTER_END_DAYS = {12: 31, 9: 30, 6: 30, 3: 31}
 
 
 def latest_knowable_report_period(
-    today: date, lag_days: int = REPORT_LAG_DAYS
+    today: date, lag_days: int | None = None
 ) -> date | None:
-    """按"报告期 + 滞后"的保守口径，算出今天**最多**能知道到哪个报告期。
+    """按"报告期 + 法定披露滞后"的保守口径，算出今天**最多**能知道到哪个报告期。
 
-    例：``today=2026-10-22``、``lag_days=90`` →
-        2026-09-30 + 90d = 2026-12-29（还不可知）→ 回退到 2026-06-30（2026-09-28 可知）。
+    例：``today=2026-10-22`` → 2026-09-30 + 30d = 2026-10-30（还不可知）→
+        回退到 2026-06-30（2026-08-31 可知）。
 
     用途：``sync_financials(only_missing=True)`` 用它判断"这只股票的财报已经是最新可得的
     了吗"，是的话跳过网络请求 —— 这就是"每日增量几乎零请求"的关键。
@@ -1527,8 +1559,10 @@ def _financial_rows_from_frame(
 ) -> list[dict[str, Any]]:
     """``fetch_financials`` 的返回表 → ``dim_stock_financial`` 行（精度按模型列定义）。
 
-    跳过"只有报告期、没有任何财务数"的行：那种行对估值没有任何贡献，写进去只会
-    让 only_missing 判断误以为"已有报告"。
+    只丢弃"报告期存在、所有财务字段全空"的占位行（只留报告期写进去只会让
+    only_missing 误以为"已有报告"）。仅有 ROE 的行必须保留：688836 的 2025 年报
+    在指标表里只有 ROE、没有 EPS/BPS，丢掉它会让营收 TTM 缺少上年基数（PS 全空）。
+    这类行的 ``revenue`` 先为空，随后由 :func:`sync_revenue_bulk` 从东财业绩报表补齐。
     """
     if frame is None or len(frame) == 0:
         return []
@@ -1540,7 +1574,17 @@ def _financial_rows_from_frame(
         eps = _as_db_value(record.get("eps"), 6)
         bps = _as_db_value(record.get("bps"), 6)
         eps_ttm = _as_db_value(record.get("eps_ttm"), 6)
-        if eps is None and bps is None and eps_ttm is None:
+        roe = _as_db_value(record.get("roe"), 4)
+        payout_ratio = _as_db_value(record.get("payout_ratio"), 4)
+        revenue = _as_db_value(record.get("revenue"), 2)
+        if (
+            eps is None
+            and bps is None
+            and eps_ttm is None
+            and roe is None
+            and payout_ratio is None
+            and revenue is None
+        ):
             continue
         rows.append(
             {
@@ -1549,10 +1593,10 @@ def _financial_rows_from_frame(
                 "announced_date": _announced_date(report_date),
                 "eps": eps,
                 "bps": bps,
-                "roe": _as_db_value(record.get("roe"), 4),
-                "payout_ratio": _as_db_value(record.get("payout_ratio"), 4),
+                "roe": roe,
+                "payout_ratio": payout_ratio,
                 "eps_ttm": eps_ttm,
-                "revenue": _as_db_value(record.get("revenue"), 2),
+                "revenue": revenue,
                 "src": src,
             }
         )
@@ -2152,8 +2196,8 @@ async def sync_financials(
         ``failed`` = 抓取失败的股票数。``detail`` 里带 ``pending``/``skipped_fresh``/
         ``failed_codes`` 等排查信息。
 
-    口径说明：``announced_date = report_date + REPORT_LAG_DAYS``（point-in-time 的时间锚），
-    由 :func:`_financial_rows_from_frame` 统一写入。
+    口径说明：``announced_date = report_date + 报告类型对应的法定披露滞后``（point-in-time
+    的时间锚），由 :func:`_financial_rows_from_frame` 统一写入。
     """
     started = time.perf_counter()
     task = "sync_financials"
@@ -3155,7 +3199,9 @@ async def collect_latest_valuation(
 
 
 __all__ = [
-    "REPORT_LAG_DAYS",
+    "REPORT_LAG_DAYS_BY_MONTH",
+    "REPORT_LAG_FALLBACK_DAYS",
+    "report_lag_days",
     "DIVIDEND_REFRESH_DAYS",
     "DV_WINDOW_DAYS",
     "DATASET",

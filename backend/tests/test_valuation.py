@@ -30,7 +30,6 @@ pd = pytest.importorskip("pandas")
 
 from app.ingest import valuation  # noqa: E402
 from app.ingest.valuation import (  # noqa: E402
-    REPORT_LAG_DAYS,
     build_valuation_frame,
     compute_valuation,
     dv_ttm_series,
@@ -40,6 +39,7 @@ from app.ingest.valuation import (  # noqa: E402
     normalize_dividends,
     normalize_financials,
     ps_ttm_values,
+    report_lag_days,
     revenue_ttm_series,
 )
 
@@ -282,6 +282,20 @@ def test_ps_ttm_values_market_cap_over_revenue_ttm() -> None:
     assert pd.isna(ps_ttm_values(pd.DataFrame({"market_cap": [1e10]}), bad_valuation, bad).iloc[0])
 
 
+def test_ps_ttm_values_allows_negative_ttm_revenue() -> None:
+    """营收 TTM 为负（亏损/收入冲回）→ PS 为负，与东财口径一致；不能被门槛误杀。"""
+    fins = pd.DataFrame(
+        {
+            "report_date": [date(2023, 12, 31), date(2024, 3, 31), date(2023, 3, 31)],
+            "revenue": [-2.0e9, 1.0e8, 1.0e8],
+        }
+    )
+    # 2024-03-31 TTM = 1e8 + (-2e9) - 1e8 = -2e9
+    valuation = pd.DataFrame({"report_date": [date(2024, 3, 31)]})
+    ps = ps_ttm_values(pd.DataFrame({"market_cap": [1.0e10]}), valuation, fins)
+    assert ps.iloc[0] == pytest.approx(-5.0)
+
+
 def test_revenue_rows_from_report_dedupes_and_normalizes() -> None:
     """东财业绩报表 → 更新行：代码补零、同代码取最后一行、NaN 丢弃。"""
     raw = pd.DataFrame(
@@ -353,7 +367,7 @@ def test_sync_revenue_bulk_updates_needed_periods(monkeypatch: pytest.MonkeyPatc
 # ③ build_valuation_frame：未来函数防线（重点）
 # ============================================================
 def test_build_valuation_frame_blocks_future_report() -> None:
-    """报告期 2024-03-31 + lag=90 → 2024-06-29 起才可用；2024-06-01 必须 NaN。
+    """报告期 2024-03-31（一季报）+30 → 2024-04-30 起才可用；之前必须 NaN。
 
     这是整个模块最关键的测试：如果这条挂了，历史上每一天的 PE 都会用到"未来的财报"，
     A1/A4 回测会直接失真。
@@ -367,41 +381,42 @@ def test_build_valuation_frame_blocks_future_report() -> None:
         }
     )
     prices = _prices(
-        (date(2024, 6, 1), 100.0),   # 报告期 + 62 天：还不可知
-        (date(2024, 6, 28), 100.0),  # + 89 天：还不可知
-        (date(2024, 6, 29), 100.0),  # + 90 天：正好可知（allow_exact_matches）
-        (date(2024, 7, 1), 100.0),
+        (date(2024, 4, 1), 100.0),   # 报告期 + 1 天：还不可知
+        (date(2024, 4, 29), 100.0),  # + 29 天：还不可知
+        (date(2024, 4, 30), 100.0),  # + 30 天：正好可知（allow_exact_matches）
+        (date(2024, 5, 1), 100.0),
     )
     frame = build_valuation_frame(prices, fins)
     by_date = {row.trade_date: row for row in frame.itertuples(index=False)}
 
-    # 反向断言：算一下 lag 的边界，防止偷偷改常量
-    assert date(2024, 3, 31) + timedelta(days=REPORT_LAG_DAYS) == date(2024, 6, 29)
+    # 反向断言：一季报按法定 30 天口径
+    assert report_lag_days(date(2024, 3, 31)) == 30
+    assert date(2024, 3, 31) + timedelta(days=30) == date(2024, 4, 30)
 
-    assert pd.isna(by_date[date(2024, 6, 1)].pe_ttm)
-    assert pd.isna(by_date[date(2024, 6, 28)].pe_ttm)
-    assert by_date[date(2024, 6, 1)].report_date is None
-    assert by_date[date(2024, 6, 28)].report_date is None
+    assert pd.isna(by_date[date(2024, 4, 1)].pe_ttm)
+    assert pd.isna(by_date[date(2024, 4, 29)].pe_ttm)
+    assert by_date[date(2024, 4, 1)].report_date is None
+    assert by_date[date(2024, 4, 29)].report_date is None
 
-    assert by_date[date(2024, 6, 29)].pe_ttm == pytest.approx(50.0)  # 100 / 2.0
-    assert by_date[date(2024, 7, 1)].pe_ttm == pytest.approx(50.0)
-    assert by_date[date(2024, 7, 1)].report_date == date(2024, 3, 31)
+    assert by_date[date(2024, 4, 30)].pe_ttm == pytest.approx(50.0)  # 100 / 2.0
+    assert by_date[date(2024, 5, 1)].pe_ttm == pytest.approx(50.0)
+    assert by_date[date(2024, 5, 1)].report_date == date(2024, 3, 31)
 
 
 def test_build_valuation_frame_uses_announced_date_when_present() -> None:
     """point-in-time 用 ``announced_date``：显式披露日晚于 report+lag 时以披露日为准。
 
-    同时验证：``announced_date`` 为 NULL → 回落到 ``report_date + lag``；
+    同时验证：``announced_date`` 为 NULL → 回落到按报告类型的法定滞后（年报 120 天）；
     脏数据（披露日早于报告期）也不能让"未来财报"提前可用。
     """
     fins = _fins_from_db(
-        # 8/30 才披露（远晚于 3/31+90=6/29）→ 8/29 之前不能有 PE
+        # 8/30 才披露（远晚于 3/31+30=4/30）→ 8/29 之前不能有 PE
         {
             "report_date": date(2024, 3, 31),
             "announced_date": date(2024, 8, 30),
             "eps_ttm": 5.0, "bps": 20.0, "payout_ratio": 40.0,
         },
-        # 无 announced_date → 回落到 2023-12-31 + 90 = 2024-03-30
+        # 无 announced_date → 回落到 2023-12-31 + 120（年报）= 2024-04-29
         {
             "report_date": date(2023, 12, 31),
             "announced_date": None,
@@ -409,19 +424,19 @@ def test_build_valuation_frame_uses_announced_date_when_present() -> None:
         },
     )
     prices = _prices(
-        (date(2024, 3, 29), 100.0),
-        (date(2024, 4, 1), 100.0),
+        (date(2024, 4, 28), 100.0),
+        (date(2024, 4, 29), 100.0),
         (date(2024, 8, 29), 100.0),
         (date(2024, 8, 30), 100.0),
     )
     frame = build_valuation_frame(prices, fins).set_index("trade_date")
 
-    # 3/29：两个报告期都还不可知
-    assert pd.isna(frame.loc[date(2024, 3, 29), "pe_ttm"])
-    # 4/1：2023 年报（回落 3/30 可知）生效
-    assert frame.loc[date(2024, 4, 1), "report_date"] == date(2023, 12, 31)
-    assert frame.loc[date(2024, 4, 1), "pe_ttm"] == pytest.approx(25.0)  # 100 / 4
-    # 8/29：2024 一季报还没披露（虽然 6/29 已过 report+lag）
+    # 4/28：两个报告期都还不可知
+    assert pd.isna(frame.loc[date(2024, 4, 28), "pe_ttm"])
+    # 4/29：2023 年报（回落 4/29 可知）生效
+    assert frame.loc[date(2024, 4, 29), "report_date"] == date(2023, 12, 31)
+    assert frame.loc[date(2024, 4, 29), "pe_ttm"] == pytest.approx(25.0)  # 100 / 4
+    # 8/29：2024 一季报还没披露（虽然 4/30 已过 report+lag）
     assert frame.loc[date(2024, 8, 29), "report_date"] == date(2023, 12, 31)
     # 8/30：一季报生效
     assert frame.loc[date(2024, 8, 30), "report_date"] == date(2024, 3, 31)
@@ -430,7 +445,7 @@ def test_build_valuation_frame_uses_announced_date_when_present() -> None:
 
 
 def test_build_valuation_frame_dirty_announced_date_falls_back() -> None:
-    """announced_date 早于 report_date（脏数据）→ 回落到 report_date + lag，不提前可用。"""
+    """announced_date 早于 report_date（脏数据）→ 回落到法定滞后，不提前可用。"""
     fins = _fins_from_db(
         {
             "report_date": date(2024, 3, 31),
@@ -438,10 +453,10 @@ def test_build_valuation_frame_dirty_announced_date_falls_back() -> None:
             "eps_ttm": 2.0, "bps": 10.0, "payout_ratio": 30.0,
         }
     )
-    prices = _prices((date(2024, 5, 1), 100.0), (date(2024, 7, 1), 100.0))
+    prices = _prices((date(2024, 4, 1), 100.0), (date(2024, 5, 1), 100.0))
     frame = build_valuation_frame(prices, fins).set_index("trade_date")
-    assert pd.isna(frame.loc[date(2024, 5, 1), "pe_ttm"])
-    assert frame.loc[date(2024, 7, 1), "pe_ttm"] == pytest.approx(50.0)
+    assert pd.isna(frame.loc[date(2024, 4, 1), "pe_ttm"])
+    assert frame.loc[date(2024, 5, 1), "pe_ttm"] == pytest.approx(50.0)
 
 
 def test_build_valuation_frame_picks_latest_known_period() -> None:
@@ -453,18 +468,20 @@ def test_build_valuation_frame_picks_latest_known_period() -> None:
          "payout_ratio": 30.0},
     )
     prices = _prices(
-        (date(2024, 3, 29), 120.0),  # 只有 2023 年报可用（2024-03-30 才可知）
-        (date(2024, 4, 1), 120.0),   # 2023 年报
-        (date(2024, 6, 28), 120.0),  # Q1 还不可知（6/29）
-        (date(2024, 7, 1), 120.0),   # Q1 生效
+        (date(2024, 4, 15), 120.0),  # 两个报告期都还不可知（年报 4/29、一季报 4/30）
+        (date(2024, 4, 29), 120.0),  # 2023 年报
+        (date(2024, 4, 30), 120.0),  # 一季报生效
+        (date(2024, 6, 28), 120.0),
     )
     frame = build_valuation_frame(prices, fins).set_index("trade_date")
 
-    assert frame.loc[date(2024, 4, 1), "report_date"] == date(2023, 12, 31)
-    assert frame.loc[date(2024, 4, 1), "pe_ttm"] == pytest.approx(60.0)   # 120 / 2
-    assert frame.loc[date(2024, 6, 28), "report_date"] == date(2023, 12, 31)
-    assert frame.loc[date(2024, 7, 1), "report_date"] == date(2024, 3, 31)
-    assert frame.loc[date(2024, 7, 1), "pe_ttm"] == pytest.approx(40.0)   # 120 / 3
+    assert pd.isna(frame.loc[date(2024, 4, 15), "pe_ttm"])
+    assert frame.loc[date(2024, 4, 29), "report_date"] == date(2023, 12, 31)
+    assert frame.loc[date(2024, 4, 29), "pe_ttm"] == pytest.approx(60.0)   # 120 / 2
+    assert frame.loc[date(2024, 4, 30), "report_date"] == date(2024, 3, 31)
+    assert frame.loc[date(2024, 4, 30), "pe_ttm"] == pytest.approx(40.0)   # 120 / 3
+    assert frame.loc[date(2024, 6, 28), "report_date"] == date(2024, 3, 31)
+    assert frame.loc[date(2024, 6, 28), "pe_ttm"] == pytest.approx(40.0)
 
 
 def test_build_valuation_frame_custom_lag() -> None:
@@ -516,7 +533,7 @@ def test_build_valuation_frame_edge_cases(
             "payout_ratio": payout_ratio,
         }
     )
-    frame = build_valuation_frame(_prices((date(2024, 4, 1), close)), fins)
+    frame = build_valuation_frame(_prices((date(2024, 4, 29), close)), fins)
     row = frame.iloc[0]
     if expect_pe is None:
         assert pd.isna(row["pe_ttm"])
@@ -887,32 +904,54 @@ def test_sync_dividends_falls_back_to_cninfo_when_bulk_fails(
     assert checkpoint["checked_codes"] == ["000001", "600519"]
 
 
+def test_fetch_financials_primary_empty_skips_abstract_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主源整体失败时直接返回空表：降级摘要会用错股本口径覆盖已入库 BPS/EPS。"""
+    calls: list[str] = []
+
+    async def fake_ak(name: str, **kwargs: Any) -> Any:
+        calls.append(name)
+        return None
+
+    monkeypatch.setattr(valuation, "_ak_call", fake_ak)
+    frame = asyncio.run(valuation.fetch_financials("688836"))
+    assert frame.empty
+    assert calls == ["stock_financial_analysis_indicator"]
+
+
 # ============================================================
 # ⑤ dim_stock_financial 行形态 / 阶段 1 落库行
 # ============================================================
 def test_financial_rows_from_frame_announced_date() -> None:
-    """阶段 1 的行构造：announced_date = report_date + 90，精度按模型列定义。"""
+    """阶段 1 的行构造：announced_date = report_date + 法定披露滞后，精度按模型列定义。"""
     frame = pd.DataFrame(
         {
-            "report_date": [date(2024, 3, 31), date(2024, 6, 30)],
-            "eps": [0.41234567, None],
-            "bps": [11.0, None],
-            "roe": [3.51, None],
-            "payout_ratio": [None, None],
-            "eps_ttm": [1.31, None],
-            "eps_ttm_basis": ["x", None],
-            "revenue": [1.0e9, None],
+            "report_date": [date(2024, 3, 31), date(2024, 6, 30), date(2025, 12, 31)],
+            "eps": [0.41234567, None, None],
+            "bps": [11.0, None, None],
+            "roe": [3.51, None, 11.0],
+            "payout_ratio": [None, None, None],
+            "eps_ttm": [1.31, None, None],
+            "eps_ttm_basis": ["x", None, "2025-12-31(annual)"],
+            "revenue": [1.0e9, None, None],
         }
     )
     rows = valuation._financial_rows_from_frame("600519", frame)
-    assert len(rows) == 1  # 第二行只有报告期、没有任何财务数 → 丢弃
+    assert len(rows) == 2  # 第二行只有报告期、没有任何财务数 → 丢弃
     row = rows[0]
     assert row["code"] == "600519"
     assert row["report_date"] == date(2024, 3, 31)
-    assert row["announced_date"] == date(2024, 3, 31) + timedelta(days=REPORT_LAG_DAYS)
+    assert row["announced_date"] == date(2024, 4, 30)  # 一季报 +30
     assert row["eps"] == pytest.approx(0.412346)   # Numeric(14,6)
     assert row["roe"] == pytest.approx(3.51)
     assert row["src"] == "sina"
+    # 只有 ROE 的年报行必须保留（营收 TTM 的上年基数，营收随后由 bulk 同步补齐）
+    annual = rows[1]
+    assert annual["report_date"] == date(2025, 12, 31)
+    assert annual["announced_date"] == date(2026, 4, 30)  # 年报 +120
+    assert annual["roe"] == pytest.approx(11.0)
+    assert annual["eps_ttm"] is None and annual["revenue"] is None
 
 
 def test_valuation_update_rows_nan_to_none_and_skip_all_null() -> None:
@@ -1014,10 +1053,14 @@ def test_valuation_update_statement_types_all_null_column() -> None:
 
 
 def test_latest_knowable_report_period() -> None:
-    """only_missing 的判据：今天最多能知道到哪个报告期（报告期 + 90 天）。"""
+    """only_missing 的判据：今天最多能知道到哪个报告期（按法定披露滞后）。"""
     assert latest_knowable_report_period(date(2026, 10, 22)) == date(2026, 6, 30)
     assert latest_knowable_report_period(date(2026, 1, 5)) == date(2025, 9, 30)
-    assert latest_knowable_report_period(date(2026, 4, 1)) == date(2025, 12, 31)
+    # 年报 4/30 才可知：4/1 时最新可知的仍为三季报
+    assert latest_knowable_report_period(date(2026, 4, 1)) == date(2025, 9, 30)
+    # 三季报 2026-09-30 + 30d = 2026-10-30 可知，早一天不行
+    assert latest_knowable_report_period(date(2026, 10, 29)) == date(2026, 6, 30)
+    assert latest_knowable_report_period(date(2026, 10, 30)) == date(2026, 9, 30)
     # lag=0 时就是"最近一个已结束的季度末"
     assert latest_knowable_report_period(date(2026, 10, 22), lag_days=0) == date(
         2026, 9, 30
