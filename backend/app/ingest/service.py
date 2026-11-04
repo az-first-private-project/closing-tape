@@ -82,6 +82,7 @@ from app.db.views import ensure_partition_for
 from app.ingest import calendar as cal
 from app.ingest.akshare_provider import AkshareProvider
 from app.ingest.baostock_provider import BaostockProvider
+from app.ingest.sina_provider import SinaProvider
 from app.ingest.base import (
     HISTORY_LIMITER,
     SNAPSHOT_LIMITER,
@@ -141,6 +142,9 @@ def build_provider_chain() -> ProviderChain:
         providers.append(provider_class())
     if not providers:
         providers = [AkshareProvider(), BaostockProvider()]
+    # 新浪只兜底概念板块成分（精确同名），其余能力抛 NotImplementedError 由链跳过
+    if not any(getattr(p, "name", "") == "sina" for p in providers):
+        providers.append(SinaProvider())
     return ProviderChain(providers, name="gfna")
 
 
@@ -1798,7 +1802,7 @@ async def collect_sector_members(
                         count=unmatched,
                         severity="warning",
                         message=(
-                            f"{unmatched} 个板块名称不在东财清单（口径差异，"
+                            f"{unmatched} 个板块名称不在东财/新浪清单（口径差异，"
                             "保持已有成分区间不变）"
                         ),
                         samples=sorted(unmatched_sectors)[:10],
