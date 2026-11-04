@@ -8,13 +8,17 @@
 - `rs_20d`：板块 20 交易日收益 − 沪深300 同窗口收益（百分点）
 - `member_count`：当日名单成分数
 - `up_count` / `down_count`：成分股当日涨跌家数（THS 板块日线不提供，按成分重算）
+- `leading_stock` / `leading_stock_pct`：成分股当日涨幅第一（THS 板块日线不提供；
+  名称取 `dim_stock.name`，关联不到时退回股票代码）
 
 口径与边界：
 - 名单必须带 SCD2 时间条件（`effective_from <= d AND (effective_to IS NULL OR > d)`），
   不能直接读当前名单，否则历史回看会把后来纳入的股票算进过去。
-- `is_partial=true` 的名单只覆盖 THS 前后各 5 页，只用于龙头，**不参与**市值/资金流/
-  家数聚合（member_count 置 NULL），避免用 100 只样本冒充整个板块。
-- 成分数 < 3 时市值/资金流置 NULL（小样本噪声大）；涨跌家数不受此限
+- `is_partial=true` 的名单只覆盖 THS 前后各 5 页，**不参与**市值/资金流/
+  家数/领涨股聚合；只有「没有任何完整成分」的纯 partial 板块才整体置空
+  （member_count 置 NULL），避免用 100 只样本冒充整个板块。混有历史 partial
+  残留区间与完整名单时，以完整名单为准聚合（残缺名单的「涨幅第一」不算龙头）。
+- 成分数 < 3 时市值/资金流置 NULL（小样本噪声大）；涨跌家数与领涨股不受此限
   （小板块的家数依然有意义）。缺失一律 NULL，**不补 0**。
 - `rs_20d` 要求板块与沪深300 在**同一组 21 个交易日**上都有收盘价，否则 NULL。
 - 只 UPDATE 当日已有的板块行，不凭空插入没有行情快照的板块。
@@ -42,13 +46,23 @@ RS_WINDOW = 21
 
 
 async def _membership_aggregate(session: AsyncSession, trade_date: date) -> list[dict]:
-    """按 SCD2 名单聚合成分股市值与资金流。"""
+    """按 SCD2 名单聚合成分股市值、资金流、涨跌家数与领涨股。"""
     result = await session.execute(text("""
         WITH members AS (
             SELECT DISTINCT m.sector_code, m.stock_code, m.is_partial
             FROM dim_sector_member m
             WHERE m.effective_from <= :d
               AND (m.effective_to IS NULL OR m.effective_to > :d)
+        ),
+        leader AS (
+            -- 每个板块取当日涨幅最高的**完整名单**成分股（partial 不参与）
+            SELECT DISTINCT ON (m.sector_code)
+                   m.sector_code, m.stock_code, s.pct_chg
+            FROM members m
+            JOIN fact_stock_daily s
+              ON s.code = m.stock_code AND s.trade_date = :d
+            WHERE NOT m.is_partial AND s.pct_chg IS NOT NULL
+            ORDER BY m.sector_code, s.pct_chg DESC, m.stock_code
         )
         SELECT m.sector_code,
                count(*) FILTER (WHERE NOT m.is_partial) AS member_count,
@@ -59,13 +73,18 @@ async def _membership_aggregate(session: AsyncSession, trade_date: date) -> list
                count(s.pct_chg) FILTER (WHERE NOT m.is_partial) AS pct_n,
                count(*) FILTER (WHERE NOT m.is_partial AND s.pct_chg > 0) AS up_count,
                count(*) FILTER (WHERE NOT m.is_partial AND s.pct_chg < 0) AS down_count,
+               l.stock_code AS leader_code,
+               COALESCE(ds.name, l.stock_code) AS leader_name,
+               l.pct_chg AS leader_pct,
                bool_or(m.is_partial) AS has_partial
         FROM members m
         LEFT JOIN fact_stock_daily s
                ON s.code = m.stock_code AND s.trade_date = :d
         LEFT JOIN fact_moneyflow f
                ON f.code = m.stock_code AND f.trade_date = :d
-        GROUP BY m.sector_code
+        LEFT JOIN leader l ON l.sector_code = m.sector_code
+        LEFT JOIN dim_stock ds ON ds.code = l.stock_code
+        GROUP BY m.sector_code, l.stock_code, ds.name, l.pct_chg
     """), {"d": trade_date})
     return [dict(row) for row in result.mappings().all()]
 
@@ -130,16 +149,22 @@ def build_sector_metrics(codes: list[str], aggregates: dict[str, dict],
         row = aggregates.get(code) or {}
         has_partial = bool(row.get("has_partial"))
         member_count = int(row.get("member_count") or 0)
-        enough = not has_partial and member_count >= MIN_MEMBERS
-        has_pct = not has_partial and int(row.get("pct_n") or 0) > 0
+        # 完整名单为准：PARTIAL 行只是历史残留，不能因为它的存在否定完整名单；
+        # 只有「没有任何完整成分」的纯 partial 板块才整体置空。
+        has_full = member_count > 0
+        enough = has_full and member_count >= MIN_MEMBERS
+        has_pct = has_full and int(row.get("pct_n") or 0) > 0
+        has_leader = has_full and bool(row.get("leader_code"))
         metrics.append({
             "sector_code": code,
-            "member_count": None if has_partial else member_count,
+            "member_count": member_count if has_full else (None if has_partial else 0),
             "market_cap": row.get("market_cap") if enough else None,
             "float_cap": row.get("float_cap") if enough else None,
             "main_net_inflow": row.get("main_net_inflow") if enough else None,
             "up_count": int(row.get("up_count") or 0) if has_pct else None,
             "down_count": int(row.get("down_count") or 0) if has_pct else None,
+            "leading_stock": row.get("leader_name") if has_leader else None,
+            "leading_stock_pct": row.get("leader_pct") if has_leader else None,
             "rs_20d": rs_map.get(code),
         })
     return metrics
@@ -176,6 +201,8 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
             "member_count": item.get("member_count"),
             "up_count": item.get("up_count"),
             "down_count": item.get("down_count"),
+            "leading_stock": item.get("leading_stock"),
+            "leading_stock_pct": to_jsonable(item.get("leading_stock_pct")),
         }
         for item in metrics
     ]
@@ -189,7 +216,9 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
                 rs_20d numeric,
                 member_count integer,
                 up_count integer,
-                down_count integer
+                down_count integer,
+                leading_stock text,
+                leading_stock_pct numeric
             )
         )
         UPDATE fact_sector_daily f
@@ -198,9 +227,11 @@ async def save_sector_metrics(session: AsyncSession, trade_date: date,
                main_net_inflow = v.main_net_inflow,
                rs_20d = v.rs_20d,
                member_count = v.member_count,
-               -- 历史东财板块行自带涨跌家数，保留原值，只补 NULL（THS 口径）
+               -- 历史东财板块行自带涨跌家数/领涨股，保留原值，只补 NULL（THS 口径）
                up_count = COALESCE(f.up_count, v.up_count),
-               down_count = COALESCE(f.down_count, v.down_count)
+               down_count = COALESCE(f.down_count, v.down_count),
+               leading_stock = COALESCE(f.leading_stock, v.leading_stock),
+               leading_stock_pct = COALESCE(f.leading_stock_pct, v.leading_stock_pct)
           FROM v
          WHERE f.trade_date = :d AND f.sector_code = v.sector_code
     """), {"rows": json.dumps(payload, ensure_ascii=False), "d": trade_date})
@@ -218,12 +249,14 @@ async def aggregate_sector_metrics(session: AsyncSession, trade_date: date) -> d
         "with_inflow": sum(1 for m in metrics if m["main_net_inflow"] is not None),
         "with_rs": sum(1 for m in metrics if m["rs_20d"] is not None),
         "with_breadth": sum(1 for m in metrics if m["up_count"] is not None),
+        "with_leader": sum(1 for m in metrics if m["leading_stock"] is not None),
         "sectors": len(metrics),
     }
     logger.info(
-        "板块聚合完成 %s: 更新 %d/%d（市值 %d、资金流 %d、rs20 %d、涨跌家数 %d）",
+        "板块聚合完成 %s: 更新 %d/%d（市值 %d、资金流 %d、rs20 %d、涨跌家数 %d、领涨股 %d）",
         trade_date, rows, len(metrics), summary["with_cap"],
         summary["with_inflow"], summary["with_rs"], summary["with_breadth"],
+        summary["with_leader"],
     )
     return summary
 

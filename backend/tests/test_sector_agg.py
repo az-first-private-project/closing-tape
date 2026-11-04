@@ -27,13 +27,31 @@ def test_breadth_counts_computed_from_members() -> None:
 
 
 def test_partial_members_do_not_produce_breadth() -> None:
+    """纯 partial 板块（没有任何完整成分）整体置空。"""
     metrics = build_sector_metrics(
-        ["BK1"], {"BK1": _agg(has_partial=True)}, {}
+        ["BK1"],
+        {"BK1": _agg(has_partial=True, member_count=0, pct_n=0,
+                     up_count=0, down_count=0)},
+        {},
     )
 
     assert metrics[0]["member_count"] is None
     assert metrics[0]["up_count"] is None
     assert metrics[0]["down_count"] is None
+
+
+def test_mixed_membership_uses_complete_list() -> None:
+    """历史 partial 残留 + 完整名单：以完整名单为准，不能整块置空。"""
+    metrics = build_sector_metrics(
+        ["BK1"],
+        {"BK1": _agg(has_partial=True, leader_code="600000",
+                     leader_name="浦发银行", leader_pct=9.9)},
+        {},
+    )
+
+    assert metrics[0]["member_count"] == 5
+    assert metrics[0]["up_count"] == 3
+    assert metrics[0]["leading_stock"] == "浦发银行"
 
 
 def test_missing_daily_rows_do_not_fake_zero_breadth() -> None:
@@ -67,3 +85,47 @@ def test_board_without_membership_stays_empty() -> None:
     assert metrics[0]["member_count"] == 0
     assert metrics[0]["up_count"] is None
     assert metrics[0]["rs_20d"] == 1.5
+
+
+def test_leader_taken_from_top_gaining_member() -> None:
+    metrics = build_sector_metrics(
+        ["BK1"],
+        {"BK1": _agg(leader_code="600000", leader_name="浦发银行",
+                     leader_pct=9.981)},
+        {},
+    )
+
+    assert metrics[0]["leading_stock"] == "浦发银行"
+    assert metrics[0]["leading_stock_pct"] == 9.981
+
+
+def test_leader_falls_back_to_code_when_dim_stock_missing() -> None:
+    """dim_stock 关联不到名称时 SQL 已退回代码，拼装层原样输出。"""
+    metrics = build_sector_metrics(
+        ["BK1"], {"BK1": _agg(leader_code="920680", leader_name="920680",
+                              leader_pct=3.2)}, {}
+    )
+
+    assert metrics[0]["leading_stock"] == "920680"
+    assert metrics[0]["leading_stock_pct"] == 3.2
+
+
+def test_pure_partial_board_does_not_produce_leader() -> None:
+    """残缺名单的涨幅第一不是板块真龙头，纯 partial 板块必须置空。"""
+    metrics = build_sector_metrics(
+        ["BK1"],
+        {"BK1": _agg(has_partial=True, member_count=0, pct_n=0,
+                     leader_code="600000", leader_name="浦发银行",
+                     leader_pct=9.98)},
+        {},
+    )
+
+    assert metrics[0]["leading_stock"] is None
+    assert metrics[0]["leading_stock_pct"] is None
+
+
+def test_board_without_pct_data_keeps_leader_null() -> None:
+    metrics = build_sector_metrics(["BK1"], {"BK1": _agg()}, {})
+
+    assert metrics[0]["leading_stock"] is None
+    assert metrics[0]["leading_stock_pct"] is None
