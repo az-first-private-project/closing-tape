@@ -252,16 +252,22 @@ async def run_task(
         stats = _summary(payload)
         rows = stats.get("rows")
         quality_status = str(stats.get("quality_status") or "ok")
+        detail = stats.get("detail") if isinstance(stats.get("detail"), dict) else None
+        # FetchResult 没有 coverage 字段，采集层把覆盖率放在 detail 里；
+        # 不取出来会把 record_quality 刚写入的精确覆盖率覆盖成 NULL。
+        coverage = stats.get("coverage")
+        if coverage is None and detail is not None:
+            coverage = detail.get("coverage")
         if task != "calendar":
             if scoped:
                 logger.info("定向回补（codes 非空）不更新数据集 %s 的新鲜度", dataset)
             elif quality_status == "ok":
                 await mark_success(
                     db, dataset, rows=rows,
-                    coverage=stats.get("coverage"),
+                    coverage=coverage,
                     anomalies=int(stats.get("anomalies") or 0),
                     trade_date=trade_date,
-                    detail=stats.get("detail") if isinstance(stats.get("detail"), dict) else None,
+                    detail=detail,
                 )
             else:
                 # 采集层已写入非 ok 状态（如指数部分缺失）：mark_success 会把 stale

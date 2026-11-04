@@ -153,6 +153,24 @@ def _missing_ratio(df: pd.DataFrame, column: str) -> float:
     return float(df[column].isna().mean())
 
 
+def _traded_mask(df: pd.DataFrame) -> pd.Series:
+    """当日有成交痕迹（成交量>0 或成交额>0）的行。
+
+    东财快照榜单会混入停牌/退市整理标的：它们有昨收、但最新价/成交量/成交额全空。
+    这类行不属于"数据缺失"，必须与"有成交却缺价格"的源故障区分开。
+    """
+    volume = _num_series(df, "volume")
+    amount = _num_series(df, "amount")
+    if volume is None and amount is None:
+        return pd.Series(False, index=df.index)
+    traded = pd.Series(False, index=df.index)
+    if volume is not None:
+        traded |= volume.fillna(0) > 0
+    if amount is not None:
+        traded |= amount.fillna(0) > 0
+    return traded
+
+
 def _suspended_mask(df: pd.DataFrame) -> pd.Series:
     """停牌判定：优先用 is_suspended 列；否则用 volume<=0 兜底。
 
@@ -193,9 +211,11 @@ def check_snapshot(
     """全市场当日快照质量校验（方案 A9）。
 
     检查项：
-        1. 行数是否达到 ``QUALITY_MIN_SNAPSHOT_ROWS``；
-        2. 覆盖率 ``rows / expected`` 是否达到 ``QUALITY_MIN_COVERAGE``；
+        1. 有效行数（有收盘价）是否达到 ``QUALITY_MIN_SNAPSHOT_ROWS``；
+        2. 覆盖率 ``有效行 / expected`` 是否达到 ``QUALITY_MIN_COVERAGE``；
+           停牌/退市整理行（无最新价且无成交）不计入有效行；
         3. 关键列（code/close/pre_close）缺失率是否超过 ``QUALITY_MAX_MISSING_RATIO``；
+           缺失率只统计"有成交"的行，"有成交却缺价格"才算源故障；
         4. ``|pct_chg|`` 是否超过 ``QUALITY_MAX_ABS_PCT_CHG``（北交所 30% 涨跌停）；
            个股上市首日无涨跌停限制，属于**真实数据**，因此记为 warning 不阻断；
         5. 价格跳变：``|close/pre_close - 1| > QUALITY_PRICE_JUMP_RATIO`` 且非停牌（warning，
@@ -209,8 +229,24 @@ def check_snapshot(
     max_pct = float(getattr(cfg, "QUALITY_MAX_ABS_PCT_CHG", 30.0))
     jump_ratio = float(getattr(cfg, "QUALITY_PRICE_JUMP_RATIO", 0.5))
 
-    rows = 0 if df is None else int(len(df))
     expected = max(int(expect_rows or 0), min_rows)
+
+    if df is None or df.empty:
+        report = QualityReport(
+            dataset="stock_daily", rows=0, expected=expected, coverage=0.0
+        )
+        report.add("empty_frame", severity="error", message="全市场快照为空")
+        return report
+
+    # 覆盖率只统计"有当日收盘价"的有效行：停牌/退市整理标的没有当日行情，
+    # 若按原始行数计覆盖率，源混入的退市股越多反而越"达标"。
+    close_series = _num_series(df, "close")
+    usable_mask = (
+        close_series.notna() if close_series is not None
+        else pd.Series(True, index=df.index)
+    )
+    traded_mask = _traded_mask(df)
+    rows = int(usable_mask.sum())
     coverage = min(rows / expected, 1.0) if expected > 0 else 0.0
     report = QualityReport(
         dataset="stock_daily",
@@ -219,16 +255,12 @@ def check_snapshot(
         coverage=round(coverage, 4),
     )
 
-    if df is None or df.empty:
-        report.add("empty_frame", severity="error", message="全市场快照为空")
-        return report
-
     if rows < min_rows:
         report.add(
             "row_count_below_threshold",
             count=rows,
             severity="error",
-            message=f"快照 {rows} 行 < 阈值 {min_rows} 行",
+            message=f"快照有效行 {rows} < 阈值 {min_rows} 行",
         )
     if coverage < min_coverage:
         report.add(
@@ -236,6 +268,15 @@ def check_snapshot(
             count=rows,
             severity="error",
             message=f"覆盖率 {coverage:.2%} < 阈值 {min_coverage:.0%}（期望 {expected} 行）",
+        )
+    suspended_count = int((~traded_mask).sum())
+    if suspended_count:
+        report.add(
+            "suspended_rows",
+            count=suspended_count,
+            severity="warning",
+            message=f"{suspended_count} 行无成交（停牌/退市整理），不计入覆盖率与缺失率",
+            samples=_samples(df, ~traded_mask),
         )
 
     # 3. 关键列缺失率；主键列缺失直接 error
@@ -262,13 +303,21 @@ def check_snapshot(
             )
 
     for column in ("close", "pre_close"):
-        ratio = _missing_ratio(df, column)
+        # 缺失率只在"确有成交"的行里统计：停牌/退市整理行的空值是正常表现，
+        # 而有成交却缺价格才是需要阻断的源故障。
+        if column not in df.columns:
+            ratio, missing = 1.0, int(traded_mask.sum())
+        elif bool(traded_mask.any()):
+            ratio = float(df.loc[traded_mask, column].isna().mean())
+            missing = int(df.loc[traded_mask, column].isna().sum())
+        else:
+            ratio, missing = 1.0, 0
         if ratio > max_missing:
             report.add(
                 "missing_ratio_exceeded",
-                count=int(round(ratio * rows)),
+                count=missing,
                 severity="error",
-                message=f"列 {column} 缺失率 {ratio:.2%} > 阈值 {max_missing:.0%}",
+                message=f"有成交行 {column} 缺失率 {ratio:.2%} > 阈值 {max_missing:.0%}",
             )
 
     # 4. 涨跌幅越界
@@ -305,7 +354,7 @@ def check_snapshot(
 
     # 非正价格（停牌/异常数据）
     if close is not None:
-        non_positive = int((close.fillna(0) <= 0).sum())
+        non_positive = int((close.notna() & (close <= 0)).sum())
         if non_positive:
             report.add(
                 "non_positive_price",

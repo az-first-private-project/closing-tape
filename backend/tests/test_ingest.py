@@ -270,6 +270,65 @@ def test_quality_snapshot_empty() -> None:
     assert report.anomalies[0]["type"] == "empty_frame"
 
 
+def _suspended_frame(rows: int) -> pd.DataFrame:
+    """构造停牌/退市整理行：有昨收，但最新价/成交量/成交额全空。"""
+    return pd.DataFrame(
+        {
+            "code": [f"9{index:05d}" for index in range(rows)],
+            "name": [f"退市{index}" for index in range(rows)],
+            "close": [None] * rows,
+            "pre_close": [1.0] * rows,
+            "pct_chg": [None] * rows,
+            "volume": [None] * rows,
+            "amount": [None] * rows,
+        }
+    )
+
+
+def test_quality_snapshot_ignores_suspended_rows() -> None:
+    """停牌/退市行不计入覆盖率与缺失率（东财榜单会混入 ~350 只）。"""
+    frame = pd.concat(
+        [_snapshot_frame(4000), _suspended_frame(300)], ignore_index=True
+    )
+    report = check_snapshot(frame, expect_rows=4000)
+    assert report.ok is True
+    assert report.rows == 4000
+    assert report.coverage == 1.0
+    assert any(item["type"] == "suspended_rows" for item in report.anomalies)
+
+
+def test_quality_snapshot_blocks_missing_close_on_traded_rows() -> None:
+    """有成交却缺收盘价仍要拦截：区别于停牌，属于数据源故障。"""
+    broken = _snapshot_frame(300)
+    broken["code"] = [f"8{index:05d}" for index in range(300)]
+    broken["close"] = None
+    frame = pd.concat([_snapshot_frame(4000), broken], ignore_index=True)
+    report = check_snapshot(frame, expect_rows=4000)
+    types = {item["type"] for item in report.anomalies}
+    assert "missing_ratio_exceeded" in types
+    assert report.ok is False
+
+
+def test_snapshot_rows_skip_suspended_stock() -> None:
+    """停牌/退市行不写入当日行情，与历史回补口径一致。"""
+    from app.ingest.service import _snapshot_rows
+
+    frame = pd.DataFrame(
+        [
+            {
+                "code": "600519", "name": "贵州茅台", "close": 1500.0,
+                "pre_close": 1490.0, "volume": 1000, "amount": 1_500_000.0,
+            },
+            {
+                "code": "920680", "name": "广道退", "close": None,
+                "pre_close": 0.86, "volume": None, "amount": None,
+            },
+        ]
+    )
+    rows = _snapshot_rows(frame, date(2026, 11, 4))
+    assert [row["code"] for row in rows] == ["600519"]
+
+
 def _daily_frame(dates: list[date]) -> pd.DataFrame:
     records = []
     price = 10.0

@@ -170,3 +170,16 @@ def test_empty_market_total_zero_is_allowed(monkeypatch) -> None:
     assert frame.empty
     assert stats["total"] == 0
     assert fake.calls == [1]
+
+
+def test_em_moneyflow_fs_covers_bse() -> None:
+    """东财资金流榜单必须包含北交所（m:0+t:81+s:2048）。
+
+    缺这一段时，日更资金流永远少 ~360 只北交所标的，
+    95% 覆盖率门槛必然误伤整条日更链路（2026-11-04 事故）。
+    """
+    segments = provider_module._EM_MF_FS.split(",")
+    assert "m:0+t:81+s:2048+f:!2" in segments
+    # B 股不在股票池内，写进资金流只会污染数据
+    assert "m:0+t:7+f:!2" not in segments
+    assert "m:1+t:3+f:!2" not in segments

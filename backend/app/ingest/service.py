@@ -753,7 +753,7 @@ def _snapshot_rows(frame: pd.DataFrame | None, trade_date: date) -> list[dict[st
     """全市场快照 → ``fact_stock_daily`` 行（A2）。
 
     - ``adj_factor=1.0``：快照对应"最新交易日"，后复权因子在该日恒为 1；
-    - 停牌判定：成交量缺失/为 0 或收盘价缺失；
+    - 停牌判定：成交量缺失/为 0；收盘价缺失（停牌/退市整理）的行直接跳过；
     - 涨跌停：用前收盘 + 板块涨幅规则精确计算，不能只看 pct_chg 阈值。
     """
     rows: list[dict[str, Any]] = []
@@ -766,10 +766,14 @@ def _snapshot_rows(frame: pd.DataFrame | None, trade_date: date) -> list[dict[st
         close = record.get("close")
         pre_close = record.get("pre_close")
         volume = record.get("volume")
+        # 停牌/退市整理标的没有当日行情（东财榜单仍会列出），
+        # 与历史回补口径一致：不落库，否则当日行情会多出大量空值行。
+        if close is None or float(close) <= 0:
+            continue
         is_limit_up, is_limit_down = _limit_flags(
             code, pre_close, close, record.get("name")
         )
-        suspended = close is None or volume is None or float(volume) <= 0
+        suspended = volume is None or float(volume) <= 0
         rows.append(
             {
                 "code": code,
