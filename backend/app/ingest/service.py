@@ -1630,6 +1630,8 @@ async def collect_sector_members(
             fetched_sets: dict[str, set[str] | None] = {}
             failed = 0
             skipped = 0
+            unmatched = 0
+            unmatched_sectors: list[str] = []
             circuit_open = False
             budget_exceeded = False
             consecutive_failures = 0
@@ -1654,20 +1656,27 @@ async def collect_sector_members(
                             info["sector_type"],
                             timeout=config.FETCH_TIMEOUT_SEC,
                         )
-                        member_codes = {
-                            str(record.get("stock_code")).zfill(6)
-                            for record in _records(fetched.detail.get("data"))
-                            if record.get("stock_code")
-                        }
-                        if not member_codes and open_members.get(sector_code):
-                            # 源返回空表而不是抛异常：空集合做差集会关掉全部区间
-                            raise ProviderError(
-                                f"返回空名单但该板块已有 "
-                                f"{len(open_members[sector_code])} 个开区间成分，"
-                                "按抓取失败处理（防止误关全部区间）"
-                            )
-                        fetched_sets[sector_code] = member_codes
-                        consecutive_failures = 0
+                        if fetched.detail.get("skip_reason"):
+                            # 源清单里没有这个板块（名称口径不一致）：不是可用性
+                            # 故障，不计失败、不触发熔断，保持已有成分区间不变。
+                            unmatched += 1
+                            unmatched_sectors.append(str(info["sector_name"]))
+                            fetched_sets[sector_code] = None
+                        else:
+                            member_codes = {
+                                str(record.get("stock_code")).zfill(6)
+                                for record in _records(fetched.detail.get("data"))
+                                if record.get("stock_code")
+                            }
+                            if not member_codes and open_members.get(sector_code):
+                                # 源返回空表而不是抛异常：空集合做差集会关掉全部区间
+                                raise ProviderError(
+                                    f"返回空名单但该板块已有 "
+                                    f"{len(open_members[sector_code])} 个开区间成分，"
+                                    "按抓取失败处理（防止误关全部区间）"
+                                )
+                            fetched_sets[sector_code] = member_codes
+                            consecutive_failures = 0
                     except Exception as exc:  # noqa: BLE001 —— 单板块失败保持现状
                         failed += 1
                         fetched_sets[sector_code] = None
@@ -1683,15 +1692,15 @@ async def collect_sector_members(
 
                 if index % _BACKFILL_CHECKPOINT_EVERY == 0 or index == len(sectors):
                     logger.info(
-                        "板块成分进度 %d/%d（失败 %d，跳过 %d）",
-                        index, len(sectors), failed, skipped,
+                        "板块成分进度 %d/%d（失败 %d，未匹配 %d，跳过 %d）",
+                        index, len(sectors), failed, unmatched, skipped,
                     )
                     await job.update(
                         done=index,
                         failed=failed,
                         checkpoint={"trade_date": trade_date.isoformat(),
                                     "done": index, "failed": failed,
-                                    "skipped": skipped},
+                                    "unmatched": unmatched, "skipped": skipped},
                     )
 
             added = 0
@@ -1774,12 +1783,26 @@ async def collect_sector_members(
                 success_count = sum(
                     1 for value in fetched_sets.values() if value is not None
                 )
+                # 未匹配板块在源清单里不存在，永远抓不到；覆盖率按"可抓板块"算，
+                # 否则会被固定缺口长期压在阈值以下。
+                attempted = max(len(sectors) - unmatched, 0)
                 report = QualityReport(
                     dataset=dataset,
                     rows=added + closed,
-                    expected=len(sectors),
-                    coverage=round(success_count / len(sectors), 4) if sectors else 0.0,
+                    expected=attempted,
+                    coverage=round(success_count / attempted, 4) if attempted else 0.0,
                 )
+                if unmatched:
+                    report.add(
+                        "sector_name_unmatched",
+                        count=unmatched,
+                        severity="warning",
+                        message=(
+                            f"{unmatched} 个板块名称不在东财清单（口径差异，"
+                            "保持已有成分区间不变）"
+                        ),
+                        samples=sorted(unmatched_sectors)[:10],
+                    )
                 if failed:
                     report.add(
                         "partial_sector_fetch",
@@ -1840,6 +1863,8 @@ async def collect_sector_members(
                     "added": added,
                     "closed": closed,
                     "sectors": len(sectors),
+                    "unmatched": unmatched,
+                    "unmatched_sectors": sorted(unmatched_sectors)[:10],
                     "skipped": skipped,
                     "circuit_open": circuit_open,
                     "budget_exceeded": budget_exceeded,

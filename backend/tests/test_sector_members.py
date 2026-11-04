@@ -16,7 +16,7 @@ from datetime import date
 
 import pandas as pd
 
-from app.ingest import service
+from app.ingest import akshare_provider, service
 from app.ingest.base import FetchResult
 
 
@@ -40,7 +40,7 @@ class _FastLimiter:
 
 
 class _ScriptedChain:
-    """按预设序列返回成功/失败/空名单，用于驱动熔断与防误关逻辑。"""
+    """按预设序列返回成功/失败/空名单/未匹配，用于驱动熔断与防误关逻辑。"""
 
     def __init__(self, outcomes: list[bool | str]) -> None:
         self.outcomes = outcomes
@@ -52,6 +52,15 @@ class _ScriptedChain:
         self.calls += 1
         if outcome is False or outcome == "fail":
             raise ConnectionError("connection reset by peer")
+        if outcome == "skip":
+            return FetchResult(
+                rows=0,
+                total=0,
+                detail={
+                    "data": pd.DataFrame(columns=["stock_code"]),
+                    "skip_reason": "em_name_not_found",
+                },
+            )
         if outcome == "empty":
             frame = pd.DataFrame(columns=["stock_code"])
         else:
@@ -245,3 +254,80 @@ def test_complete_sector_list_closes_truly_missing_sector(monkeypatch) -> None:
     assert result.detail["missing_sectors_skipped"] == 0
     assert len(session.executed) == 1  # 恰好一条关闭缺失板块的 UPDATE
     assert result.quality_status == "ok"
+
+
+def test_unmatched_sector_names_skipped_without_breaker(monkeypatch) -> None:
+    """名称不在东财清单的板块：跳过、不计失败、不熔断、不动区间、质量仍 ok。"""
+    open_members = {f"S{index:02d}": {"600519"} for index in range(6)}
+    sector_info = {
+        f"S{index:02d}": {"sector_name": f"板块{index}", "sector_type": "concept"}
+        for index in range(6)
+    }
+    chain = _ScriptedChain(["skip", "ok", "skip", "ok", "skip", "ok"])
+    session, quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=6,
+        open_members=open_members, sector_info=sector_info,
+    )
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert chain.calls == 6  # 未匹配板块不会触发熔断中断
+    assert result.failed == 0
+    assert result.detail["unmatched"] == 3
+    assert result.detail["skipped"] == 0
+    assert result.detail["circuit_open"] is False
+    assert session.executed == []  # 未匹配板块不会被当作空名单关闭区间
+    assert result.quality_status == "ok"
+    report = quality_calls[-1][2]
+    assert report.ok is True
+    assert report.expected == 3  # 覆盖率只按可抓板块计算
+    assert report.coverage == 1.0
+    types = {item["type"] for item in report.anomalies}
+    assert "sector_name_unmatched" in types
+
+
+def test_all_unmatched_does_not_trip_breaker_but_stays_stale(monkeypatch) -> None:
+    """整批板块名都无法匹配：不熔断、不误报失败；但零抓取仍须标 stale。"""
+    chain = _ScriptedChain(["skip"] * 4)
+    _patch_service(monkeypatch, chain, sector_count=4)
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert chain.calls == 4
+    assert result.detail["unmatched"] == 4
+    assert result.failed == 0
+    assert result.detail["circuit_open"] is False
+    assert result.quality_status == "stale"
+
+
+def test_normalize_board_name_variants() -> None:
+    cases = {
+        "MR(混合现实)": "MR",
+        "证券Ⅱ": "证券",
+        "半导体 概念": "半导体",
+        "银行行业": "银行",
+        "新能源": "新能源",
+        "  ": "",
+    }
+    for raw, expected in cases.items():
+        assert akshare_provider.normalize_board_name(raw) == expected
+
+
+def test_build_board_code_maps_drops_ambiguous_normalized_names() -> None:
+    frame = pd.DataFrame(
+        [
+            {"板块名称": "证券Ⅱ", "板块代码": "BK0473"},
+            {"板块名称": "证券", "板块代码": "BK0999"},
+            {"板块名称": "MR(混合现实)", "板块代码": "BK1090"},
+            {"板块名称": "银行行业", "板块代码": "BK0475"},
+        ]
+    )
+
+    exact, normalized = akshare_provider.build_board_code_maps(frame)
+
+    assert exact["证券Ⅱ"] == "BK0473"
+    assert exact["证券"] == "BK0999"
+    assert "证券" not in normalized  # 归一化后一对多，必须剔除
+    assert normalized["MR"] == "BK1090"
+    assert normalized["银行"] == "BK0475"
+    assert akshare_provider.build_board_code_maps(None) == ({}, {})

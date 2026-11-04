@@ -27,6 +27,7 @@ akshare 未安装时本模块仍可 import（``ak = None``），``available()`` 
 from __future__ import annotations
 
 import math
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Sequence
@@ -112,6 +113,10 @@ _EM_MF_PAGE_SIZE = 100
 # 全市场资金流允许的缺行容差（榜单在翻页期间会有少量增删，不能因此判失败）
 _EM_MF_TOLERANCE_RATIO = 0.005
 _EM_MF_MIN_TOLERANCE = 5
+# 板块成分分页：东财 clist 的 pz 上限为 100；成分残缺会误关 SCD2 区间，
+# 因此零容差——短页一律重试，重试后仍不完整则整板失败（不改动已有区间）。
+_EM_BOARD_CONS_PAGE_SIZE = 100
+_EM_BOARD_CONS_RETRIES = 4
 
 
 def _prune_mf_cache(date_key: str) -> None:
@@ -580,6 +585,56 @@ def _normalize_sector_hist(
 
 
 SECTOR_MEMBER_COLUMNS = ("sector_code", "sector_name", "sector_type", "stock_code", "stock_name")
+
+
+# 东财板块清单缓存：{"industry"|"concept": (缓存日期, 精确名→BK代码, 归一化名→BK代码)}
+_EM_BOARD_CODE_CACHE: dict[str, tuple[date, dict[str, str], dict[str, str]]] = {}
+
+
+def normalize_board_name(name: str) -> str:
+    """板块名归一化：去括号注释/空格/罗马数字后缀/通用尾缀，再忽略大小写。
+
+    THS 与东财的板块命名并不一致（如 ``MR(混合现实)`` vs ``MR``、
+    ``证券Ⅱ`` vs ``证券``），精确匹配会漏掉大量实际存在的板块。
+    """
+    text = str(name or "").strip()
+    text = re.sub(r"[（(].*?[）)]", "", text).replace(" ", "").replace("　", "")
+    text = re.sub(r"[ⅡⅢⅣ]$", "", text)
+    for suffix in ("概念", "行业", "板块", "指数"):
+        if text.endswith(suffix) and len(text) > len(suffix):
+            text = text[: -len(suffix)]
+            break
+    return text.upper()
+
+
+def build_board_code_maps(
+    frame: pd.DataFrame | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """东财板块清单 → (精确名→BK代码, 归一化名→BK代码)。
+
+    归一化后出现一对多歧义时直接剔除该键，避免把不同板块的成分串到一起。
+    """
+    exact: dict[str, str] = {}
+    normalized: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    if frame is None or frame.empty:
+        return exact, normalized
+    if "板块名称" not in frame.columns or "板块代码" not in frame.columns:
+        return exact, normalized
+    for raw_name, raw_code in zip(frame["板块名称"], frame["板块代码"]):
+        name = str(raw_name or "").strip()
+        code = str(raw_code or "").strip()
+        if not name or not code:
+            continue
+        exact[name] = code
+        key = normalize_board_name(name)
+        if key in normalized and normalized[key] != code:
+            ambiguous.add(key)
+        else:
+            normalized[key] = code
+    for key in ambiguous:
+        normalized.pop(key, None)
+    return exact, normalized
 
 
 def _normalize_sector_members(
@@ -1381,22 +1436,178 @@ class AkshareProvider(BaseProvider):
             return _empty_frame(columns)
         return pd.DataFrame(records, columns=list(columns))
 
+    def _em_board_code_maps(
+        self, sector_type: str
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """东财板块名→BK 代码映射，按天缓存。
+
+        akshare 的 cons 接口按名称调用时每次都会重拉整张板块清单再精确匹配，
+        名称不存在时直接 ``IndexError``。预先解析成 BK 代码后：
+        ① 每个板块只剩 1 次请求；② 未匹配的板块可以快速跳过而不是重试。
+        清单刷新失败时沿用上一次成功的映射（BK 代码很稳定），避免单次
+        DNS/网络抖动让全部板块在本轮都不可抓。
+        """
+        key = "industry" if sector_type == "industry" else "concept"
+        cached = _EM_BOARD_CODE_CACHE.get(key)
+        today = date.today()
+        if cached is not None and cached[0] == today:
+            return cached[1], cached[2]
+        try:
+            raw = self._em_board_list_df(key)
+            exact, normalized = build_board_code_maps(raw)
+            if not exact:
+                raise ProviderError(f"东财{key}板块清单为空")
+        except ProviderError:
+            if cached is None:
+                raise
+            logger.warning(
+                "东财 %s 板块清单刷新失败，沿用 %s 的缓存映射（%d 个板块）",
+                key, cached[0], len(cached[1]),
+            )
+            return cached[1], cached[2]
+        _EM_BOARD_CODE_CACHE[key] = (today, exact, normalized)
+        return exact, normalized
+
+    def _em_clist_page(
+        self, fs: str, fields: str, page: int, rows_so_far: int, what: str
+    ) -> tuple[list[dict], int]:
+        """抓取东财 clist 的一页并校验完整性（残页重试同一页，绝不返回半份）。
+
+        akshare 的板块接口每页固定 100 行、翻页间 sleep 0.5~1.5s，480 个板块
+        一轮要 20 分钟以上，直接顶穿采集预算；这里直连 clist，按 ≤2 请求/秒
+        自己翻页，并对每一页做 total 自洽校验。
+        """
+        from curl_cffi import requests as _cffi_req
+
+        params = {
+            "fid": "f12", "po": "1", "pz": str(_EM_BOARD_CONS_PAGE_SIZE),
+            "pn": str(page), "np": "1", "fltt": "2", "invt": "2", "ut": _EM_UT,
+            "fs": fs, "fields": fields,
+        }
+        last_error: Exception | None = None
+        for attempt in range(_EM_BOARD_CONS_RETRIES):
+            try:
+                response = _cffi_req.get(
+                    _EM_CLIST_URL, params=params, impersonate="chrome", timeout=15
+                )
+                response.raise_for_status()
+                data = (response.json() or {}).get("data")
+                if not isinstance(data, dict):
+                    raise ProviderError("响应缺少 data（可能被风控）")
+                if data.get("total") is None:
+                    raise ProviderError("响应缺少 total")
+                total = int(data["total"])
+                diff = data.get("diff")
+                if diff is None and total == 0:
+                    diff = []
+                if isinstance(diff, dict):
+                    diff = list(diff.values())
+                if not isinstance(diff, list):
+                    raise ProviderError("响应缺少 diff")
+                rows = [
+                    item for item in diff
+                    if isinstance(item, dict) and str(item.get("f12") or "").strip()
+                ]
+                if (
+                    len(rows) < _EM_BOARD_CONS_PAGE_SIZE
+                    and rows_so_far + len(rows) < total
+                ):
+                    raise ProviderError(
+                        f"疑似截断：本页 {len(rows)} 行 < {_EM_BOARD_CONS_PAGE_SIZE}，"
+                        f"累计 {rows_so_far + len(rows)}/{total}"
+                    )
+                return rows, total
+            except Exception as exc:  # noqa: BLE001 —— 单页内自愈，不污染外层
+                last_error = exc
+                if attempt < _EM_BOARD_CONS_RETRIES - 1:
+                    time.sleep(min(1.5 * (attempt + 1), 5.0))
+        raise ProviderError(
+            f"东财 {what} 第 {page} 页连续 {_EM_BOARD_CONS_RETRIES} 次失败或返回残页："
+            f"{last_error}",
+            detail={"provider": self.name, "what": what, "page": page},
+        )
+
+    def _em_clist_rows(self, fs: str, fields: str, what: str) -> list[dict]:
+        """按 fs 条件抓取东财 clist 全部行（严格完整性，零容差）。"""
+        rows: list[dict] = []
+        seen: set[str] = set()
+        total = 0
+        page = 1
+        while True:
+            page_rows, total = self._em_clist_page(fs, fields, page, len(rows), what)
+            for item in page_rows:
+                code = str(item.get("f12") or "").strip()
+                if code and code not in seen:
+                    seen.add(code)
+                    rows.append(item)
+            if len(rows) >= total or not page_rows:
+                break
+            page += 1
+            self._throttle()
+        if len(rows) < total:
+            # 去重后仍少于 total：榜单在翻页期间变动或分页不自洽。宁可整批失败，
+            # 也不能把残缺名单交给 SCD2 去关闭区间。
+            raise ProviderError(
+                f"东财 {what} 不完整：total={total}，实际 {len(rows)}",
+                detail={"provider": self.name, "what": what,
+                        "total": total, "fetched": len(rows)},
+            )
+        return rows
+
+    def _em_board_list_df(self, sector_type: str) -> pd.DataFrame:
+        """直连东财抓板块清单（行业/概念），返回 板块名称/板块代码 两列。"""
+        fs = "m:90 t:2 f:!50" if sector_type == "industry" else "m:90 t:3 f:!50"
+        rows = self._em_clist_rows(fs, "f12,f14", f"{sector_type}_board_list")
+        return pd.DataFrame(
+            {
+                "板块名称": [item.get("f14") for item in rows],
+                "板块代码": [str(item.get("f12")) for item in rows],
+            }
+        )
+
+    def _em_board_cons_df(self, em_code: str) -> pd.DataFrame:
+        """直连东财抓取板块全部成分（严格完整性，零容差）。"""
+        rows = self._em_clist_rows(
+            f"b:{em_code} f:!50", "f12,f14", f"板块成分[{em_code}]"
+        )
+        return pd.DataFrame(
+            {
+                "代码": [str(item.get("f12")) for item in rows],
+                "名称": [item.get("f14") for item in rows],
+            }
+        )
+
     def fetch_sector_members(
         self, sector_code: str, sector_name: str, sector_type: str
     ) -> FetchResult:
         """板块成分股。
 
-        注意：``stock_board_industry_cons_em`` / ``stock_board_concept_cons_em``
-        的参数是**板块名称**（如"半导体"），不是 BK 代码 —— 这是历史脚本踩过的坑。
+        THS 板块名先按「精确 → 归一化」解析成东财 BK 代码，再用代码取成分；
+        东财清单里没有的板块返回 ``skip_reason=em_name_not_found`` 的空结果，
+        由编排层按"不支持的板块"跳过（不重试、不触发熔断、不动已有区间）。
         """
         started = time.perf_counter()
-        if sector_type == "industry":
-            func = ak.stock_board_industry_cons_em
-            func_name = "stock_board_industry_cons_em"
-        else:
-            func = ak.stock_board_concept_cons_em
-            func_name = "stock_board_concept_cons_em"
-        raw = self._fetch_one(func, f"{func_name}[{sector_name}]", symbol=sector_name)
+        exact, normalized = self._em_board_code_maps(sector_type)
+        em_code = exact.get(sector_name) or normalized.get(
+            normalize_board_name(sector_name)
+        )
+        if not em_code:
+            elapsed = int((time.perf_counter() - started) * 1000)
+            frame = _empty_frame(SECTOR_MEMBER_COLUMNS)
+            return FetchResult(
+                rows=0,
+                total=0,
+                elapsed_ms=elapsed,
+                detail={
+                    "data": frame,
+                    "source": self.name,
+                    "sector_code": sector_code,
+                    "sector_name": sector_name,
+                    "sector_type": sector_type,
+                    "skip_reason": "em_name_not_found",
+                },
+            )
+        raw = self._em_board_cons_df(em_code)
         frame = _normalize_sector_members(raw, sector_code, sector_name, sector_type)
         elapsed = int((time.perf_counter() - started) * 1000)
         return FetchResult(
