@@ -148,14 +148,18 @@ TEMP_INDEX_VOL_DAYS = 20
 
 # ==================== 函数 ====================
 def exchange_of(code: str) -> str:
-    """6 位代码 → 交易所。"""
+    """6 位代码 → 交易所。
+
+    920xxx 是北交所代码段，必须先于"9 开头 = 沪市（900 B 股）"判断，
+    否则北交所标的会被映射成 sh920xxx，腾讯/新浪/baostock 全部取不到数据。
+    """
     code = str(code).zfill(6)
+    if code.startswith(("4", "8", "920")):
+        return EXCHANGE_BJ
     if code.startswith(("6", "9")):
         return EXCHANGE_SH
     if code.startswith(("0", "2", "3")):
         return EXCHANGE_SZ
-    if code.startswith(("4", "8", "920")):
-        return EXCHANGE_BJ
     # 兜底：按首位粗略判断，避免 None
     return EXCHANGE_SZ
 

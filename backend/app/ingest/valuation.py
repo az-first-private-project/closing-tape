@@ -1155,14 +1155,17 @@ def _normalize_code(code: Any) -> str:
 
 
 def _sina_symbol(code: str) -> str:
-    """6 位代码 → 新浪接口的带交易所前缀代码（sh600519 / sz000001 / bj830799）。"""
+    """6 位代码 → 新浪接口的带交易所前缀代码（sh600519 / sz000001 / bj830799 / bj920000）。
+
+    920xxx 是北交所，必须先于"9 开头 = 沪市"判断。
+    """
     digits = _normalize_code(code)
+    if digits.startswith(("4", "8", "920")):
+        return f"bj{digits}"
     if digits.startswith(("6", "9")):
         return f"sh{digits}"
     if digits.startswith(("0", "2", "3")):
         return f"sz{digits}"
-    if digits.startswith(("4", "8")):
-        return f"bj{digits}"
     return f"sh{digits}"
 
 
