@@ -105,6 +105,11 @@ _MIN_SECTOR_ROWS = 50
 # 历史回补每写库/写检查点的批次大小
 _BACKFILL_BATCH = 20
 _BACKFILL_CHECKPOINT_EVERY = 50
+# 板块成分逐个板块抓取：东财整体不可用时连续失败即熔断，避免 480 个板块 × 重试
+# 把日更拖住一小时（2026-11-03 实测 58 分钟，进而拖死共享连接）。
+# 熔断/超时跳过的板块保持已有成分区间不变，宁可当天不更新也不误关区间。
+_SECTOR_MEMBERS_MAX_CONSECUTIVE_FAILURES = 5
+_SECTOR_MEMBERS_BUDGET_SEC = 600.0
 
 
 # ============================================================
@@ -1619,36 +1624,62 @@ async def collect_sector_members(
             chain = get_provider_chain()
             fetched_sets: dict[str, set[str] | None] = {}
             failed = 0
+            skipped = 0
+            circuit_open = False
+            budget_exceeded = False
+            consecutive_failures = 0
+            deadline = started + _SECTOR_MEMBERS_BUDGET_SEC
             for index, sector_code in enumerate(sectors, start=1):
-                info = sector_info[sector_code]
-                try:
-                    await HISTORY_LIMITER.acquire()
-                    fetched = await chain.fetch_sector_members(
-                        sector_code,
-                        info["sector_name"],
-                        info["sector_type"],
-                        timeout=config.FETCH_TIMEOUT_SEC,
-                    )
-                    member_codes = {
-                        str(record.get("stock_code")).zfill(6)
-                        for record in _records(fetched.detail.get("data"))
-                        if record.get("stock_code")
-                    }
-                    fetched_sets[sector_code] = member_codes
-                except Exception as exc:  # noqa: BLE001 —— 单板块失败保持现状
-                    failed += 1
+                if circuit_open or budget_exceeded or time.perf_counter() >= deadline:
+                    if not circuit_open and not budget_exceeded:
+                        budget_exceeded = True
+                        logger.error(
+                            "板块成分抓取超过 %.0fs 预算，剩余 %d 个板块本次跳过",
+                            _SECTOR_MEMBERS_BUDGET_SEC, len(sectors) - index + 1,
+                        )
+                    skipped += 1
                     fetched_sets[sector_code] = None
-                    logger.warning("板块成分获取失败 sector=%s：%s", sector_code, exc)
+                else:
+                    info = sector_info[sector_code]
+                    try:
+                        await HISTORY_LIMITER.acquire()
+                        fetched = await chain.fetch_sector_members(
+                            sector_code,
+                            info["sector_name"],
+                            info["sector_type"],
+                            timeout=config.FETCH_TIMEOUT_SEC,
+                        )
+                        member_codes = {
+                            str(record.get("stock_code")).zfill(6)
+                            for record in _records(fetched.detail.get("data"))
+                            if record.get("stock_code")
+                        }
+                        fetched_sets[sector_code] = member_codes
+                        consecutive_failures = 0
+                    except Exception as exc:  # noqa: BLE001 —— 单板块失败保持现状
+                        failed += 1
+                        fetched_sets[sector_code] = None
+                        consecutive_failures += 1
+                        logger.warning("板块成分获取失败 sector=%s：%s", sector_code, exc)
+                        if consecutive_failures >= _SECTOR_MEMBERS_MAX_CONSECUTIVE_FAILURES:
+                            circuit_open = True
+                            logger.error(
+                                "板块成分连续 %d 个抓取失败，熔断：剩余 %d 个板块本次跳过"
+                                "（已有成分保持不变）",
+                                consecutive_failures, len(sectors) - index,
+                            )
 
                 if index % _BACKFILL_CHECKPOINT_EVERY == 0 or index == len(sectors):
                     logger.info(
-                        "板块成分进度 %d/%d（失败 %d）", index, len(sectors), failed
+                        "板块成分进度 %d/%d（失败 %d，跳过 %d）",
+                        index, len(sectors), failed, skipped,
                     )
                     await job.update(
                         done=index,
                         failed=failed,
                         checkpoint={"trade_date": trade_date.isoformat(),
-                                    "done": index, "failed": failed},
+                                    "done": index, "failed": failed,
+                                    "skipped": skipped},
                     )
 
             added = 0
@@ -1722,6 +1753,28 @@ async def collect_sector_members(
                         severity="warning",
                         message=f"{failed} 个板块成分抓取失败（未改动其区间）",
                     )
+                if skipped:
+                    report.add(
+                        "sector_members_skipped",
+                        count=skipped,
+                        severity="warning",
+                        message=(
+                            f"{skipped} 个板块成分因熔断/超时本次跳过"
+                            "（未改动其区间，重跑可补）"
+                        ),
+                    )
+                if circuit_open or budget_exceeded:
+                    # 结构性中止（源整体不可用/超预算）：即使有部分板块成功，
+                    # 本次也只更新了一小部分，必须标为不合格，不能让新鲜度显示 ok。
+                    report.add(
+                        "sector_members_breaker",
+                        count=skipped,
+                        severity="error",
+                        message=(
+                            "板块成分抓取因连续失败/超预算提前中止，本次仅更新部分板块"
+                            "（已有成分未动，重跑可补）"
+                        ),
+                    )
                 if success_count == 0:
                     report.add(
                         "no_sector_fetched", severity="error",
@@ -1742,9 +1795,14 @@ async def collect_sector_members(
                     "added": added,
                     "closed": closed,
                     "sectors": len(sectors),
+                    "skipped": skipped,
+                    "circuit_open": circuit_open,
+                    "budget_exceeded": budget_exceeded,
                     "no_change": (added + closed) == 0,
                     "attempts": getattr(chain, "last_attempts", None),
                 },
+                # 全部失败时质量记录是 quality_failed，不能被 run_task 的 mark_success 洗成 ok
+                quality_status="ok" if report.ok else "stale",
             )
             await job.finish(
                 "success" if not failed else "partial",

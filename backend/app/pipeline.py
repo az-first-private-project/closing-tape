@@ -181,6 +181,19 @@ def _summary(result: Any) -> dict:
 # 单任务执行
 # ============================================================
 
+async def _reset_session(db: AsyncSession) -> None:
+    """失败/断连后回滚共享会话，让下一步能重新取连接。
+
+    日更全链路共用同一个 session：某一步因连接断开失败后，若不清掉失效事务，
+    后续每一步都会复用同一个已关闭连接并瞬间失败（2026-11-03 sector_members
+    重试风暴后的 10 余步 InterfaceError 即此原因）。
+    """
+    try:
+        await db.rollback()
+    except Exception:                                 # noqa: BLE001
+        logger.warning("会话回滚失败（连接可能已断开），下一步将重新取连接", exc_info=True)
+
+
 async def run_task(
     task: str,
     *,
@@ -207,7 +220,11 @@ async def run_task(
                                       end=end, codes=codes, db=db)
         except Exception as exc:                      # noqa: BLE001 —— 兜底并记录，不吞掉
             logger.exception("任务失败")
-            await mark_failure(db, dataset, f"{type(exc).__name__}: {exc}")
+            await _reset_session(db)
+            try:
+                await mark_failure(db, dataset, f"{type(exc).__name__}: {exc}")
+            except Exception:                         # noqa: BLE001 —— DB 不可用时只能留日志
+                logger.exception("记录任务失败状态也失败 dataset=%s", dataset)
             return {
                 "task": task, "dataset": dataset, "status": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
@@ -216,7 +233,11 @@ async def run_task(
 
         elapsed = int((time.perf_counter() - started) * 1000)
         # 显式提交：引擎/策略函数在外部 session 下只 flush，事务所有权在编排层
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            await _reset_session(db)
+            raise
         # 返回体可能是 FetchResult（采集层）或 dict（引擎层），统一成可序列化摘要
         stats = _summary(payload)
         rows = stats.get("rows")
