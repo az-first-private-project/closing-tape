@@ -103,8 +103,23 @@ _EM_MF_SPEC = {
     "5日": ("f164", "f12,f14,f164", "f164", "5日主力净流入-净额"),
 }
 # 当日页缓存：provider 级重试时复用已成功页，只重抓失败页
-# （key=(indicator, page)，数据为"今日榜"口径，跨日由日期 key 兜底）
+# （key=(indicator, 日期, 页码)，只缓存"整页且与 total 自洽"的页）
 _EM_MF_PAGE_CACHE: dict[tuple[str, str, int], list[dict]] = {}
+# 总行数缓存 key=(indicator, 日期)：缓存命中时必须同时拿到 total，
+# 否则下一次调用只在第 1 页就结束、只写回 ~100 行（2026-11 残页事故根因）
+_EM_MF_TOTAL_CACHE: dict[tuple[str, str], int] = {}
+_EM_MF_PAGE_SIZE = 100
+# 全市场资金流允许的缺行容差（榜单在翻页期间会有少量增删，不能因此判失败）
+_EM_MF_TOLERANCE_RATIO = 0.005
+_EM_MF_MIN_TOLERANCE = 5
+
+
+def _prune_mf_cache(date_key: str) -> None:
+    """丢弃非当日缓存，避免常驻进程按天累积（每天约 1 万个 dict）。"""
+    for cache in (_EM_MF_PAGE_CACHE, _EM_MF_TOTAL_CACHE):
+        stale = [key for key in cache if key[1] != date_key]
+        for key in stale:
+            cache.pop(key, None)
 
 
 def _parse_cn_amount(value: Any) -> float | None:
@@ -1394,61 +1409,127 @@ class AkshareProvider(BaseProvider):
         )
 
     # ---------- A5 资金流与两融 ----------
-    def _em_moneyflow_df(self, indicator: str) -> pd.DataFrame:
-        """直连东财 clist 分页抓个股资金流（每页独立重试）。
+    def _em_moneyflow_page(
+        self, indicator: str, pn: int, page_size: int, rows_so_far: int,
+        total: int | None,
+    ) -> tuple[list[dict], int]:
+        """抓取并校验东财资金流的一页（截断页重试同页，绝不返回残页）。
+
+        东财在风控/链路抖动时会返回 HTTP 200 但 ``diff`` 被截短（少于 page_size
+        且 total 仍更大），也可能 ``data`` 直接为 null。若把这种页当成功缓存，
+        残页会在当日所有重试里永久生效，全市场资金流就永远缺行。
+        """
+        from curl_cffi import requests as _cffi_req
+
+        fid, field_csv, _raw_field, _col_name = _EM_MF_SPEC[indicator]
+        params = {"fid": fid, "po": "1", "pz": str(page_size), "pn": str(pn),
+                  "np": "1", "fltt": "2", "invt": "2", "ut": _EM_UT,
+                  "fs": _EM_MF_FS, "fields": field_csv}
+        last_error: Exception | None = None
+        for attempt in range(6):
+            try:
+                response = _cffi_req.get(
+                    _EM_CLIST_URL, params=params, impersonate="chrome", timeout=15
+                )
+                response.raise_for_status()
+                data = (response.json() or {}).get("data")
+                if not isinstance(data, dict):
+                    raise ProviderError("响应缺少 data（可能被风控）")
+                diff = data.get("diff")
+                if isinstance(diff, dict):
+                    diff = list(diff.values())
+                if not isinstance(diff, list):
+                    raise ProviderError("响应缺少 diff")
+                if data.get("total") is None:
+                    raise ProviderError("响应缺少 total")
+                page_total = int(data["total"])
+                page_rows = [
+                    item for item in diff
+                    if isinstance(item, dict) and str(item.get("f12") or "").strip()
+                ]
+                if (
+                    len(page_rows) < page_size
+                    and rows_so_far + len(page_rows) < page_total
+                ):
+                    raise ProviderError(
+                        f"疑似截断：本页 {len(page_rows)} 行 < {page_size}，"
+                        f"累计 {rows_so_far + len(page_rows)}/{page_total}"
+                    )
+                return page_rows, page_total
+            except Exception as exc:  # noqa: BLE001 —— 单页内自愈，不污染外层
+                last_error = exc
+                if attempt < 5:
+                    time.sleep(min(2.0 * (attempt + 1), 8.0))
+        raise ProviderError(
+            f"东财资金流第 {pn} 页连续 6 次失败或返回残页：{last_error}",
+            detail={"provider": self.name, "page": pn, "indicator": indicator},
+        )
+
+    def _em_moneyflow_df(self, indicator: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """直连东财 clist 分页抓个股资金流（每页独立重试 + 完整性校验）。
 
         为什么不用 ak.stock_individual_fund_flow_rank：该函数要连续翻 ~54 页，
         东财按连接**突发性**重置（实测坏窗口内 0.2s 即被掐断，坏窗口持续数秒~数分钟），
         任何一页失败则整个函数作废，外层重试又在同一风暴里翻页，几乎必败。
-        这里改为：curl_cffi(chrome) TLS 指纹直连 + 每页独立重试 4 次。
-        """
-        from curl_cffi import requests as _cffi_req
+        这里改为：curl_cffi(chrome) TLS 指纹直连 + 每页独立重试 6 次。
 
-        fid, field_csv, raw_field, col_name = _EM_MF_SPEC[indicator]
+        返回 ``(frame, stats)``；只有与 ``total`` 自洽（容差内）的结果才会返回并
+        写入页缓存，否则抛 ``ProviderError`` 让降级链换源，绝不落半份数据。
+        """
+        fid, _field_csv, raw_field, col_name = _EM_MF_SPEC[indicator]
         date_key = time.strftime("%Y%m%d")
+        _prune_mf_cache(date_key)
+        total_key = (indicator, date_key)
+        total = _EM_MF_TOTAL_CACHE.get(total_key)
         rows: list[dict] = []
-        pn, page_size, total = 1, 100, None
+        seen: set[str] = set()
+        pages_hit = pages_fetched = 0
+        pn = 1
         while True:
             cache_key = (indicator, date_key, pn)
-            if cache_key in _EM_MF_PAGE_CACHE:
-                page_rows = _EM_MF_PAGE_CACHE[cache_key]
-            else:
-                params = {"fid": fid, "po": "1", "pz": str(page_size), "pn": str(pn),
-                          "np": "1", "fltt": "2", "invt": "2", "ut": _EM_UT,
-                          "fs": _EM_MF_FS, "fields": field_csv}
-                page_rows = None
-                last_exc: Exception | None = None
-                for attempt in range(6):
-                    try:
-                        r = _cffi_req.get(_EM_CLIST_URL, params=params,
-                                          impersonate="chrome", timeout=15)
-                        r.raise_for_status()
-                        data = (r.json() or {}).get("data") or {}
-                        diff = data.get("diff")
-                        if isinstance(diff, dict):
-                            diff = list(diff.values())
-                        page_rows = diff or []
-                        total = data.get("total")
-                        break
-                    except Exception as exc:  # noqa: BLE001
-                        last_exc = exc
-                        time.sleep(min(2.0 * (attempt + 1), 8.0))
-                if page_rows is None:
-                    raise ProviderError(
-                        f"东财资金流第 {pn} 页连续 6 次失败：{last_exc}",
-                        detail={"provider": self.name, "page": pn, "indicator": indicator},
-                    )
+            page_rows = _EM_MF_PAGE_CACHE.get(cache_key)
+            if page_rows is None:
+                if pn > 1:
+                    time.sleep(0.3)
+                page_rows, page_total = self._em_moneyflow_page(
+                    indicator, pn, _EM_MF_PAGE_SIZE, len(rows), total
+                )
+                total = page_total if total is None else max(total, page_total)
                 _EM_MF_PAGE_CACHE[cache_key] = page_rows
-            rows.extend(page_rows)
-            if total is None or len(rows) >= int(total) or not page_rows:
+                _EM_MF_TOTAL_CACHE[total_key] = total
+                pages_fetched += 1
+            else:
+                pages_hit += 1
+            for item in page_rows:
+                code = str(item.get("f12") or "").strip()
+                if code and code not in seen:
+                    seen.add(code)
+                    rows.append(item)
+            if total is None or len(rows) >= total or not page_rows:
                 break
             pn += 1
-            time.sleep(0.3)
-        return pd.DataFrame({
+
+        if total is not None:
+            shortfall = total - len(rows)
+            tolerance = max(_EM_MF_MIN_TOLERANCE, math.ceil(total * _EM_MF_TOLERANCE_RATIO))
+            if shortfall > tolerance:
+                raise ProviderError(
+                    f"东财资金流分页不完整：total={total}，实际 {len(rows)} 行",
+                    detail={"provider": self.name, "indicator": indicator,
+                            "total": total, "fetched": len(rows)},
+                )
+            if shortfall > 0:
+                logger.warning("东财资金流 %s 少量缺行：total=%d，实际 %d",
+                               indicator, total, len(rows))
+
+        frame = pd.DataFrame({
             "代码": [str(item.get("f12", "")) for item in rows],
             "名称": [item.get("f14") for item in rows],
             col_name: [item.get(raw_field) for item in rows],
         })
+        stats = {"total": total, "fetched": len(rows), "pages": pn,
+                 "pages_hit": pages_hit, "pages_fetched": pages_fetched}
+        return frame, stats
 
     def _ths_moneyflow_df(self, symbol: str, out_col: str) -> pd.DataFrame:
         """同花顺个股资金流兜底（东财被风控时的降级源）。
@@ -1488,12 +1569,14 @@ class AkshareProvider(BaseProvider):
         """
         started = time.perf_counter()
         source_tag = "akshare"
+        today_stats: dict[str, Any] = {}
+        five_stats: dict[str, Any] = {}
         five_day_df = None
         try:
-            today_df = self._em_moneyflow_df("今日")
+            today_df, today_stats = self._em_moneyflow_df("今日")
             self._throttle()
             try:
-                five_day_df = self._em_moneyflow_df("5日")
+                five_day_df, five_stats = self._em_moneyflow_df("5日")
             except ProviderError as exc:
                 logger.warning("资金流 5 日榜获取失败（降级为仅今日）：%s", exc)
         except ProviderError as em_exc:
@@ -1515,7 +1598,8 @@ class AkshareProvider(BaseProvider):
             elapsed_ms=elapsed,
             detail={"data": frame, "source": self.name, "source_tag": source_tag,
                     "trade_date": trade_date.isoformat(),
-                    "five_day_available": five_day_df is not None},
+                    "five_day_available": five_day_df is not None,
+                    "page_checks": {"today": today_stats, "five_day": five_stats}},
         )
 
     def fetch_margin(self, trade_date: date) -> FetchResult:
