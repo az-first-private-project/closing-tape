@@ -40,45 +40,75 @@ class _FastLimiter:
 
 
 class _ScriptedChain:
-    """按预设序列返回成功/失败，用于驱动熔断逻辑。"""
+    """按预设序列返回成功/失败/空名单，用于驱动熔断与防误关逻辑。"""
 
-    def __init__(self, outcomes: list[bool]) -> None:
+    def __init__(self, outcomes: list[bool | str]) -> None:
         self.outcomes = outcomes
         self.calls = 0
         self.last_attempts: list[dict] = []
 
     async def fetch_sector_members(self, *args, **kwargs) -> FetchResult:
-        ok = self.outcomes[self.calls]
+        outcome = self.outcomes[self.calls]
         self.calls += 1
-        if not ok:
+        if outcome is False or outcome == "fail":
             raise ConnectionError("connection reset by peer")
-        frame = pd.DataFrame([{"stock_code": "600519"}])
-        return FetchResult(rows=1, total=1, detail={"data": frame})
+        if outcome == "empty":
+            frame = pd.DataFrame(columns=["stock_code"])
+        else:
+            frame = pd.DataFrame([{"stock_code": "600519"}])
+        return FetchResult(rows=len(frame), total=len(frame), detail={"data": frame})
 
 
-def _patch_service(monkeypatch, chain: _ScriptedChain, sector_count: int) -> None:
+class _FakeSession:
+    """记录 execute 调用，用于断言"没有执行关闭区间的 UPDATE"。"""
+
+    def __init__(self) -> None:
+        self.executed: list[object] = []
+
+    async def execute(self, statement):
+        self.executed.append(statement)
+        return _FakeResult()
+
+
+class _FakeResult:
+    rowcount = 0
+
+
+def _patch_service(
+    monkeypatch,
+    chain: _ScriptedChain,
+    sector_count: int,
+    *,
+    open_members: dict[str, set[str]] | None = None,
+    sector_info: dict[str, dict] | None = None,
+):
+    session = _FakeSession()
+    quality_calls: list[tuple] = []
+
     @asynccontextmanager
     async def fake_lock(task):
         yield True
 
     @asynccontextmanager
     async def fake_scope(db):
-        yield object()
+        yield session
 
     async def fake_trade_day(db, day):
         return True
 
     async def fake_sector_info(db, day):
+        if sector_info is not None:
+            return sector_info
         return {
             f"S{index:02d}": {"sector_name": f"板块{index}", "sector_type": "concept"}
             for index in range(sector_count)
         }
 
     async def fake_open(db):
-        return {}
+        return open_members or {}
 
     async def fake_record_quality(*args, **kwargs) -> None:
-        return None
+        quality_calls.append(args)
 
     async def fake_upsert(session, model, rows, keys, **kwargs) -> int:
         return len(rows)
@@ -93,6 +123,7 @@ def _patch_service(monkeypatch, chain: _ScriptedChain, sector_count: int) -> Non
     monkeypatch.setattr(service, "_JobTracker", _FakeJob)
     monkeypatch.setattr(service, "HISTORY_LIMITER", _FastLimiter())
     monkeypatch.setattr(service, "upsert_rows", fake_upsert)
+    return session, quality_calls
 
 
 def test_circuit_breaker_stops_after_consecutive_failures(monkeypatch) -> None:
@@ -148,3 +179,69 @@ def test_budget_exceeded_skips_remaining_without_fetching(monkeypatch) -> None:
     assert result.detail["skipped"] == 3
     assert result.detail["budget_exceeded"] is True
     assert result.quality_status == "stale"
+
+
+def test_empty_member_list_keeps_existing_intervals(monkeypatch) -> None:
+    """源返回空名单（不是异常）时按抓取失败处理，不能拿空集合关掉全部区间。"""
+    chain = _ScriptedChain(["empty"])
+    session, quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=1,
+        open_members={"S00": {"600519", "000001"}},
+    )
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert chain.calls == 1
+    assert result.failed == 1
+    assert result.detail["closed"] == 0
+    assert session.executed == []  # 没有执行任何关闭 UPDATE
+    assert result.quality_status == "stale"
+    report = quality_calls[-1][2]
+    types = {item["type"] for item in report.anomalies}
+    assert "partial_sector_fetch" in types
+
+
+def test_incomplete_sector_list_does_not_close_missing_sectors(monkeypatch) -> None:
+    """当日板块清单只覆盖 2/3 已有板块：缺失板块不关闭，并标质量不合格。"""
+    open_members = {f"S{index:02d}": {"600519"} for index in range(30)}
+    sector_info = {
+        f"S{index:02d}": {"sector_name": f"板块{index}", "sector_type": "concept"}
+        for index in range(20)
+    }
+    chain = _ScriptedChain(["ok"] * len(sector_info))
+    session, quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=len(sector_info),
+        open_members=open_members, sector_info=sector_info,
+    )
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert chain.calls == 20
+    assert result.detail["closed"] == 0
+    assert result.detail["missing_sectors_skipped"] == 10
+    assert session.executed == []  # 没有任何板块被当作"消失"关闭
+    assert result.quality_status == "stale"
+    report = quality_calls[-1][2]
+    types = {item["type"] for item in report.anomalies}
+    assert "sector_list_incomplete" in types
+    assert report.ok is False
+
+
+def test_complete_sector_list_closes_truly_missing_sector(monkeypatch) -> None:
+    """清单覆盖 99%（>=98%）时，真正消失的板块仍按原逻辑关闭。"""
+    open_members = {f"S{index:03d}": {"600519"} for index in range(100)}
+    sector_info = {
+        f"S{index:03d}": {"sector_name": f"板块{index}", "sector_type": "concept"}
+        for index in range(99)
+    }
+    chain = _ScriptedChain(["ok"] * len(sector_info))
+    session, _quality_calls = _patch_service(
+        monkeypatch, chain, sector_count=len(sector_info),
+        open_members=open_members, sector_info=sector_info,
+    )
+
+    result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
+
+    assert result.detail["missing_sectors_skipped"] == 0
+    assert len(session.executed) == 1  # 恰好一条关闭缺失板块的 UPDATE
+    assert result.quality_status == "ok"

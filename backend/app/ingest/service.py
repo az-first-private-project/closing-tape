@@ -110,6 +110,11 @@ _BACKFILL_CHECKPOINT_EVERY = 50
 # 熔断/超时跳过的板块保持已有成分区间不变，宁可当天不更新也不误关区间。
 _SECTOR_MEMBERS_MAX_CONSECUTIVE_FAILURES = 5
 _SECTOR_MEMBERS_BUDGET_SEC = 600.0
+# "消失板块"关闭门槛：当日板块清单必须覆盖已有成分板块的 98%，
+# 否则视为清单不完整（sector_daily 部分成功仍可能过质量门），
+# 跳过关闭并把本次成分更新标为不合格，防止一次残缺清单清空大量仍存在的板块。
+_SECTOR_LIST_MIN_COVERAGE = 0.98
+_SECTOR_LIST_MIN_SECTORS = 20
 
 
 # ============================================================
@@ -1584,8 +1589,8 @@ async def collect_sector_members(
         - 新成分：插入 ``effective_from=trade_date, effective_to=NULL``；
         - 移除成分：把已有开区间的 ``effective_to`` 设为 ``trade_date``（区间左闭右开，
           即"从今天起不再是成分"）；
-        - **抓取失败的板块保持现状**（不误关区间）；
-        - 消失的板块：关闭其全部开区间。
+        - **抓取失败的板块保持现状**（不误关区间）；返回空名单也按失败处理；
+        - 消失的板块：仅当当日板块清单覆盖足够完整时才关闭其全部开区间。
     """
     started = time.perf_counter()
     trade_date = _as_date(trade_date)
@@ -1654,6 +1659,13 @@ async def collect_sector_members(
                             for record in _records(fetched.detail.get("data"))
                             if record.get("stock_code")
                         }
+                        if not member_codes and open_members.get(sector_code):
+                            # 源返回空表而不是抛异常：空集合做差集会关掉全部区间
+                            raise ProviderError(
+                                f"返回空名单但该板块已有 "
+                                f"{len(open_members[sector_code])} 个开区间成分，"
+                                "按抓取失败处理（防止误关全部区间）"
+                            )
                         fetched_sets[sector_code] = member_codes
                         consecutive_failures = 0
                     except Exception as exc:  # noqa: BLE001 —— 单板块失败保持现状
@@ -1725,17 +1737,39 @@ async def collect_sector_members(
                         )
                         closed += result.rowcount or 0
 
-                # 板块整体消失：关闭其全部开区间
-                for sector_code in set(open_members) - set(sector_info):
-                    result = await session.execute(
-                        update(DimSectorMember)
-                        .where(
-                            DimSectorMember.sector_code == sector_code,
-                            DimSectorMember.effective_to.is_(None),
+                # 板块整体消失：仅在当日板块清单完整时关闭其全部开区间。
+                # sector_daily 部分成功（例如只拿到行业板块）仍可能通过质量门，
+                # 直接按"消失"关闭会误伤大量仍存在的板块。
+                open_sector_codes = set(open_members)
+                current_sector_codes = set(sector_info)
+                missing_sectors = open_sector_codes - current_sector_codes
+                sector_list_coverage = (
+                    len(open_sector_codes & current_sector_codes) / len(open_sector_codes)
+                    if open_sector_codes else 1.0
+                )
+                sector_list_incomplete = (
+                    len(open_sector_codes) >= _SECTOR_LIST_MIN_SECTORS
+                    and sector_list_coverage < _SECTOR_LIST_MIN_COVERAGE
+                )
+                if missing_sectors and not sector_list_incomplete:
+                    for sector_code in missing_sectors:
+                        result = await session.execute(
+                            update(DimSectorMember)
+                            .where(
+                                DimSectorMember.sector_code == sector_code,
+                                DimSectorMember.effective_to.is_(None),
+                            )
+                            .values(effective_to=trade_date)
                         )
-                        .values(effective_to=trade_date)
+                        closed += result.rowcount or 0
+                if sector_list_incomplete:
+                    logger.error(
+                        "当日板块清单仅覆盖 %d/%d 个已有成分板块（%.1f%%），"
+                        "%d 个缺失板块本次不关闭成分区间",
+                        len(open_sector_codes & current_sector_codes),
+                        len(open_sector_codes), sector_list_coverage * 100,
+                        len(missing_sectors),
                     )
-                    closed += result.rowcount or 0
 
                 success_count = sum(
                     1 for value in fetched_sets.values() if value is not None
@@ -1780,6 +1814,17 @@ async def collect_sector_members(
                         "no_sector_fetched", severity="error",
                         message="所有板块成分抓取失败",
                     )
+                if sector_list_incomplete:
+                    report.add(
+                        "sector_list_incomplete",
+                        count=len(missing_sectors),
+                        severity="error",
+                        message=(
+                            f"当日板块清单仅覆盖已有成分板块的 "
+                            f"{sector_list_coverage:.1%}，{len(missing_sectors)} 个缺失板块"
+                            "本次不关闭成分区间（防止清单不完整误关）"
+                        ),
+                    )
                 await record_quality(
                     session, dataset, report, trade_date,
                     "ok" if report.ok else "quality_failed",
@@ -1798,6 +1843,9 @@ async def collect_sector_members(
                     "skipped": skipped,
                     "circuit_open": circuit_open,
                     "budget_exceeded": budget_exceeded,
+                    "missing_sectors_skipped": (
+                        len(missing_sectors) if sector_list_incomplete else 0
+                    ),
                     "no_change": (added + closed) == 0,
                     "attempts": getattr(chain, "last_attempts", None),
                 },
