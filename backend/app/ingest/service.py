@@ -69,6 +69,7 @@ from app.core.errors import (
 )
 from app.core.logging import get_logger
 from app.core.soe import classify_ownership
+from app.core.status import QualityStatus
 from app.db.models.dim import DimSectorMember, DimStock
 from app.db.models.fact import (
     FactMoneyflow,
@@ -552,7 +553,7 @@ async def _record_error(
     try:
         async with session_scope() as session:
             payload = report or make_error_report(dataset, error)
-            await record_quality(session, dataset, payload, trade_date, "error")
+            await record_quality(session, dataset, payload, trade_date, QualityStatus.ERROR)
     except Exception:  # noqa: BLE001 —— 记录失败不能覆盖原始异常
         logger.exception("记录质量失败状态失败 dataset=%s", dataset)
 
@@ -990,7 +991,9 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
             )
             report = check_universe(frame, active_before)
             if not report.ok:
-                await _record_quality_isolated(dataset, report, None, "quality_failed")
+                await _record_quality_isolated(
+                    dataset, report, None, QualityStatus.QUALITY_FAILED
+                )
                 raise QualityBlockedError(
                     f"股票池质量不合格：{report.error_text()}",
                     detail=report.to_detail(),
@@ -1013,7 +1016,9 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
                         "股票池停用存量非 A 股标的 %d 个：%s",
                         len(stale_non_stock), ",".join(stale_non_stock[:10]),
                     )
-                await record_quality(session, dataset, report, _today_cn(), "ok")
+                await record_quality(
+                    session, dataset, report, _today_cn(), QualityStatus.OK
+                )
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -1152,7 +1157,9 @@ async def collect_daily_snapshot(
             frame = fetched.detail.get("data")
             report = check_snapshot(frame, expected, config)
             if not report.ok:
-                await _record_quality_isolated(dataset, report, trade_date, "quality_failed")
+                await _record_quality_isolated(
+                    dataset, report, trade_date, QualityStatus.QUALITY_FAILED
+                )
                 raise QualityBlockedError(
                     f"快照质量不合格：{report.error_text()}",
                     detail=report.to_detail(),
@@ -1170,7 +1177,9 @@ async def collect_daily_snapshot(
                 written = await upsert_rows(
                     session, FactStockDaily, rows, ["code", "trade_date"]
                 )
-                await record_quality(session, dataset, report, trade_date, "ok")
+                await record_quality(
+                    session, dataset, report, trade_date, QualityStatus.OK
+                )
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -1379,7 +1388,7 @@ async def backfill_stock_history(
                         "（中断/失败过多，可重跑断点续传）"
                     ),
                 )
-            await _record_quality_isolated(dataset, report, trade_date, "ok")
+            await _record_quality_isolated(dataset, report, trade_date, QualityStatus.OK)
 
             final_checkpoint = {
                 "params": params,
@@ -1589,7 +1598,9 @@ async def collect_sector_daily(
                             "（无成交量/成交额）",
                 )
             if not report.ok:
-                await _record_quality_isolated(dataset, report, trade_date, "quality_failed")
+                await _record_quality_isolated(
+                    dataset, report, trade_date, QualityStatus.QUALITY_FAILED
+                )
                 raise QualityBlockedError(
                     f"板块日线质量不合格：{report.error_text()}",
                     detail=report.to_detail(),
@@ -1599,7 +1610,9 @@ async def collect_sector_daily(
                 written = await upsert_rows(
                     session, FactSectorDaily, rows, ["sector_code", "trade_date"]
                 )
-                await record_quality(session, dataset, report, trade_date, "ok")
+                await record_quality(
+                    session, dataset, report, trade_date, QualityStatus.OK
+                )
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -1914,7 +1927,7 @@ async def collect_sector_members(
                     )
                 await record_quality(
                     session, dataset, report, trade_date,
-                    "ok" if report.ok else "quality_failed",
+                    QualityStatus.OK if report.ok else QualityStatus.QUALITY_FAILED,
                 )
 
             elapsed = int((time.perf_counter() - started) * 1000)
@@ -1939,7 +1952,9 @@ async def collect_sector_members(
                     "attempts": getattr(chain, "last_attempts", None),
                 },
                 # 全部失败时质量记录是 quality_failed，不能被 run_task 的 mark_success 洗成 ok
-                quality_status="ok" if report.ok else "stale",
+                quality_status=(
+                    QualityStatus.OK.value if report.ok else QualityStatus.STALE.value
+                ),
             )
             await job.finish(
                 "success" if not failed else "partial",
@@ -2078,7 +2093,9 @@ async def collect_moneyflow(
                     message=f"{missing_t0} 行缺少主力净流入（{missing_t0 / len(rows):.2%}）",
                 )
             if not report.ok:
-                await _record_quality_isolated(dataset, report, trade_date, "quality_failed")
+                await _record_quality_isolated(
+                    dataset, report, trade_date, QualityStatus.QUALITY_FAILED
+                )
                 raise QualityBlockedError(
                     f"资金流质量不合格：{report.error_text()}",
                     detail=report.to_detail(),
@@ -2088,7 +2105,9 @@ async def collect_moneyflow(
                 written = await upsert_rows(
                     session, FactMoneyflow, rows, ["code", "trade_date"]
                 )
-                await record_quality(session, dataset, report, trade_date, "ok")
+                await record_quality(
+                    session, dataset, report, trade_date, QualityStatus.OK
+                )
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -2177,7 +2196,9 @@ async def collect_margin(
                 written = await upsert_rows(
                     session, MarginTrading, [row], ["trade_date"]
                 )
-                await record_quality(session, dataset, report, actual_date, "ok")
+                await record_quality(
+                    session, dataset, report, actual_date, QualityStatus.OK
+                )
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -2279,7 +2300,9 @@ async def collect_indices(
             # 仪表盘指数行空掉（实测踩到）。改为"部分成功即写库 + 记异常"。
             partial_ok = len(rows) >= 1
             if not report.ok and not partial_ok:
-                await _record_quality_isolated(dataset, report, trade_date, "quality_failed")
+                await _record_quality_isolated(
+                    dataset, report, trade_date, QualityStatus.QUALITY_FAILED
+                )
                 raise QualityBlockedError(
                     f"指数日线质量不合格：{report.error_text()}",
                     detail=report.to_detail(),
@@ -2296,7 +2319,7 @@ async def collect_indices(
                 )
                 await record_quality(
                     session, dataset, report, trade_date,
-                    "ok" if report.ok else "stale",
+                    QualityStatus.OK if report.ok else QualityStatus.STALE,
                 )
 
             elapsed = int((time.perf_counter() - started) * 1000)
@@ -2312,7 +2335,9 @@ async def collect_indices(
                         "coverage": report.coverage,
                         "index_sources": fetched.detail.get("index_sources")},
                 # 部分缺失时质量记录为 stale；run_task 不能再用 mark_success 洗成 ok
-                quality_status="ok" if report.ok else "stale",
+                quality_status=(
+                    QualityStatus.OK.value if report.ok else QualityStatus.STALE.value
+                ),
             )
             await job.finish("success" if not fetched.failed else "partial",
                              done=written, failed=fetched.failed, rows_written=written)
@@ -2594,7 +2619,9 @@ async def verify_adj_factors(
             message=f"{failed}/{len(checks)} 只样本复权因子与 baostock 偏差 > 1%",
             samples=[check["code"] for check in checks if not check.get("ok")],
         )
-    await _record_quality_isolated("adj_factor_check", report, end_date, "ok")
+    await _record_quality_isolated(
+        "adj_factor_check", report, end_date, QualityStatus.OK
+    )
 
     elapsed = int((time.perf_counter() - started) * 1000)
     return FetchResult(

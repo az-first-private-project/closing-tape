@@ -25,7 +25,7 @@ import pandas as pd
 
 from app.core import config
 from app.core.logging import get_logger
-from app.ingest.base import upsert_rows
+from app.core.status import QualityStatus
 
 logger = get_logger(__name__)
 
@@ -600,7 +600,7 @@ async def record_quality(
     dataset: str,
     report: QualityReport,
     trade_date: date | None,
-    status: str,
+    status: QualityStatus | str,
 ) -> int:
     """把质量报告 upsert 进 ``meta_data_quality``（方案 A9 / A10 / E2）。
 
@@ -618,56 +618,32 @@ async def record_quality(
     保证前端能同时看到"上次成功时间"与"本次失败原因"。
     """
     # 延迟 import：让 quality 模块的纯函数校验可以在没有 sqlalchemy 的极简环境里 import
-    from app.db.models.meta import MetaDataQuality
+    from app.services.freshness import write_freshness
 
-    now = datetime.now(timezone.utc)
-    error_text = None if status == "ok" else report.error_text()
-    row: dict[str, Any] = {
-        "dataset": dataset,
-        "display_name": DATASET_LABELS.get(dataset, dataset),
-        "last_attempt_at": now,
-        "rows": report.rows,
-        "coverage": report.coverage,
-        "anomalies": len(report.anomalies),
-        "status": status,
-        "error": error_text,
-        "detail": report.to_detail(),
-    }
-    if status == "ok":
-        row["last_success_at"] = now
-        row["last_trade_date"] = trade_date
-        update_columns = list(row.keys())
-    else:
-        # 失败不清空历史成功信息（前端要区分"上次成功"和"这次失败"）
-        update_columns = [
-            "display_name",
-            "last_attempt_at",
-            "rows",
-            "coverage",
-            "anomalies",
-            "status",
-            "error",
-            "detail",
-        ]
-        row["last_trade_date"] = trade_date
-
-    written = await upsert_rows(
+    current = QualityStatus(status)
+    await write_freshness(
         db,
-        MetaDataQuality,
-        [row],
-        ["dataset"],
-        update_columns=update_columns,
-        update_timestamp=False,
+        dataset,
+        status=current,
+        mode="success" if current is QualityStatus.OK else "attempt",
+        now=datetime.now(timezone.utc),
+        trade_date=trade_date,
+        rows=report.rows,
+        coverage=report.coverage,
+        anomalies=len(report.anomalies),
+        display_name=DATASET_LABELS.get(dataset, dataset),
+        error=None if current is QualityStatus.OK else report.error_text(),
+        detail=report.to_detail(),
     )
     logger.info(
         "质量记录 dataset=%s status=%s rows=%s coverage=%.2f%% anomalies=%d",
         dataset,
-        status,
+        current.value,
         report.rows,
         report.coverage * 100,
         len(report.anomalies),
     )
-    return written
+    return 1
 
 
 __all__ = [

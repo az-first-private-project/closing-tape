@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import config
 from app.core.logging import get_logger
+from app.core.status import TaskStatus
 from app.db.models import FactStockDaily, TradeCalendar
 
 logger = get_logger("catch_up")
@@ -213,14 +214,17 @@ async def _execute_catch_up(
             ))
             failed = [
                 key for key, value in summary["steps"].items()
-                if isinstance(value, dict) and value.get("status") == "failed"
+                if isinstance(value, dict) and value.get("status") == TaskStatus.FAILED
             ]
             partial = [
                 key for key, value in summary["steps"].items()
-                if isinstance(value, dict) and value.get("status") == "partial"
+                if isinstance(value, dict) and value.get("status") == TaskStatus.PARTIAL
             ]
             results[f"{day}:daily_pipeline"] = {
-                "status": "partial" if failed or partial else "success",
+                "status": (
+                    TaskStatus.PARTIAL.value if failed or partial
+                    else TaskStatus.SUCCESS.value
+                ),
                 "failed": failed,
                 "partial": partial,
             }
@@ -228,7 +232,7 @@ async def _execute_catch_up(
         for step in DAY_STEPS:
             outcome = await run_task(step, trade_date=day, db=db)
             results[f"{day}:{step}"] = outcome
-            if outcome.get("status") in {"failed", "partial"}:
+            if outcome.get("status") in {TaskStatus.FAILED, TaskStatus.PARTIAL}:
                 logger.warning(
                     "补跑 %s %s %s：%s", day, step, outcome.get("status"),
                     outcome.get("error") or outcome.get("quality_status") or "见任务详情",
@@ -242,14 +246,17 @@ async def _execute_catch_up(
 
     failed_steps = [
         key for key, value in results.items()
-        if isinstance(value, dict) and value.get("status") == "failed"
+        if isinstance(value, dict) and value.get("status") == TaskStatus.FAILED
     ]
     partial_steps = [
         key for key, value in results.items()
-        if isinstance(value, dict) and value.get("status") == "partial"
+        if isinstance(value, dict) and value.get("status") == TaskStatus.PARTIAL
     ]
     return {
-        "status": "partial" if failed_steps or partial_steps else "success",
+        "status": (
+            TaskStatus.PARTIAL.value if failed_steps or partial_steps
+            else TaskStatus.SUCCESS.value
+        ),
         "days": [day.isoformat() for day in days],
         "failed": failed_steps,
         "partial": partial_steps,
@@ -285,7 +292,7 @@ async def run_catch_up(db: AsyncSession | None = None) -> dict:
         acquired = await try_advisory_lock(db, CATCH_UP_LOCK)
         if not acquired:
             logger.info("日更正在其他实例运行，跳过启动补跑")
-            return {"status": "skipped", "reason": "lock_busy",
+            return {"status": TaskStatus.SKIPPED.value, "reason": "lock_busy",
                     "days": [day.isoformat() for day in days], **summary}
         logger.info("启动补跑：%d 个交易日 %s", len(days), [d.isoformat() for d in days])
         result = await _execute_catch_up(

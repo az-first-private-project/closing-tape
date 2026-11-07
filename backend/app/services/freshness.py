@@ -6,13 +6,16 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import TIMEZONE
+from app.core.status import QualityStatus
 from app.db.models import MetaDataQuality
 
 # dataset -> (展示名, 过期小时数, 是否关键数据集)
@@ -36,6 +39,75 @@ DATASET_META: dict[str, tuple[str, int, bool]] = {
 
 _TZ = ZoneInfo(TIMEZONE)
 
+_WRITE_MODES = frozenset({"success", "attempt", "failure"})
+
+
+async def write_freshness(
+    db: AsyncSession,
+    dataset: str,
+    *,
+    status: QualityStatus | str,
+    mode: str = "attempt",
+    now: datetime | None = None,
+    trade_date: date | None = None,
+    rows: int | None = None,
+    coverage: float | None = None,
+    anomalies: int | None = None,
+    display_name: str | None = None,
+    error: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """``meta_data_quality`` 的唯一写入口（W0-4）。
+
+    mode 决定"这次采集能改写哪些列"，三种语义与原来三个写入点一一对应：
+
+    - ``success``: 记录成功时间与本次行数/覆盖率/详情；
+    - ``attempt``: 质量不合格的一次尝试，更新体检结果但**保留 last_success_at**；
+    - ``failure``: 采集直接抛异常，只更新尝试时间/状态/错误，保留行数与成功信息。
+    """
+    if mode not in _WRITE_MODES:
+        raise ValueError(f"未知的新鲜度写入模式: {mode}")
+    current = QualityStatus(status)
+    attempted_at = now or datetime.now()
+    error_text = error[:2000] if error else None
+
+    values: dict[str, Any] = {
+        "dataset": dataset,
+        "last_attempt_at": attempted_at,
+        "status": current.value,
+        "error": error_text,
+    }
+    update: dict[str, Any] = {
+        "last_attempt_at": attempted_at,
+        "status": current.value,
+        "error": error_text,
+    }
+    if display_name is not None:
+        values["display_name"] = display_name
+        update["display_name"] = display_name
+
+    if mode == "success":
+        values.update(
+            last_success_at=attempted_at,
+            last_trade_date=trade_date,
+            rows=rows,
+            coverage=coverage,
+            anomalies=anomalies,
+            detail=detail,
+        )
+        update = {key: value for key, value in values.items() if key != "dataset"}
+    elif mode == "attempt":
+        # 失败不清空历史成功信息；last_trade_date 只在新插入时写入。
+        values["last_trade_date"] = trade_date
+        values.update(rows=rows, coverage=coverage, anomalies=anomalies, detail=detail)
+        update.update(rows=rows, coverage=coverage, anomalies=anomalies, detail=detail)
+
+    stmt = pg_insert(MetaDataQuality).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[MetaDataQuality.dataset], set_=update
+    )
+    await db.execute(stmt)
+
 
 def _as_aware(value: datetime | None) -> datetime | None:
     if value is None:
@@ -48,14 +120,14 @@ def _as_aware(value: datetime | None) -> datetime | None:
 def classify(dataset: str, row: MetaDataQuality | None) -> str:
     """ok / stale / quality_failed / error / unknown"""
     if row is None or row.last_success_at is None:
-        return "unknown"
-    if row.status in {"error", "quality_failed"}:
+        return QualityStatus.UNKNOWN.value
+    if row.status in {QualityStatus.ERROR, QualityStatus.QUALITY_FAILED}:
         return row.status
     last = _as_aware(row.last_success_at)
     max_age_h = DATASET_META.get(dataset, ("", 48, False))[1]
     if last is not None and datetime.now(tz=last.tzinfo) - last > timedelta(hours=max_age_h):
-        return "stale"
-    return row.status or "ok"
+        return QualityStatus.STALE.value
+    return row.status or QualityStatus.OK.value
 
 
 def to_item(dataset: str, row: MetaDataQuality | None) -> dict:
@@ -89,7 +161,11 @@ async def get_freshness_items(
 def summarize(items: list[dict]) -> dict:
     """给出一句话结论，供 /health 与前端顶部提示使用。"""
     critical = [i for i in items if i.get("is_critical")]
-    bad = [i for i in critical if i["status"] in {"unknown", "stale", "error", "quality_failed"}]
+    bad_status = {
+        QualityStatus.UNKNOWN, QualityStatus.STALE,
+        QualityStatus.ERROR, QualityStatus.QUALITY_FAILED,
+    }
+    bad = [i for i in critical if i["status"] in bad_status]
     if not critical:
         return {"ready": False, "message": "尚未建立数据质量记录"}
     if bad:
@@ -98,4 +174,7 @@ def summarize(items: list[dict]) -> dict:
     return {"ready": True, "message": "关键数据集均新鲜可用"}
 
 
-__all__ = ["get_freshness_items", "summarize", "classify", "to_item", "DATASET_META"]
+__all__ = [
+    "get_freshness_items", "summarize", "classify", "to_item", "write_freshness",
+    "DATASET_META",
+]

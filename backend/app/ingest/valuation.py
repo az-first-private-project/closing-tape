@@ -109,6 +109,7 @@ except ImportError:  # pragma: no cover
 
 from app.core import config
 from app.core.logging import get_logger
+from app.core.status import QualityStatus
 from app.ingest.base import FetchResult, chunked, make_history_limiter, upsert_rows
 from app.ingest.quality import QualityReport, make_error_report, record_quality
 
@@ -2324,13 +2325,15 @@ async def sync_financials(
                 message=f"{len(failed)} 只标的财报抓取失败（未写库，重跑可补）",
                 samples=sorted(failed)[:5],
             )
-        status = "ok" if written > 0 or not pending else "error"
-        if status == "error":
+        status = (
+            QualityStatus.OK if written > 0 or not pending else QualityStatus.ERROR
+        )
+        if status is QualityStatus.ERROR:
             await _record_quality(
                 db,
                 make_error_report(DATASET, "全部标的财报抓取失败"),
                 today,
-                "error",
+                QualityStatus.ERROR,
             )
         else:
             await _record_quality(db, report, today, status)
@@ -2623,10 +2626,14 @@ async def sync_dividends(
                 message=f"{len(failed)} 只标的分红抓取失败（未写库，重跑可补）",
                 samples=sorted(failed)[:5],
             )
-        status = "ok" if not pending or any(code in done for code in pending) else "error"
-        if status == "error":
+        status = (
+            QualityStatus.OK if not pending or any(code in done for code in pending)
+            else QualityStatus.ERROR
+        )
+        if status is QualityStatus.ERROR:
             await _record_quality(
-                db, make_error_report(DATASET, "全部标的分红抓取失败"), today, "error"
+                db, make_error_report(DATASET, "全部标的分红抓取失败"),
+                today, QualityStatus.ERROR,
             )
         else:
             await _record_quality(db, report, today, status)
@@ -3038,7 +3045,10 @@ async def compute_valuation(
         )
     if covered:
         # 覆盖率不达标时记 stale，不能记 ok：否则监控看不到 PE/PB 大面积缺失
-        await _record_quality(db, report, end_date, "ok" if report.ok else "stale")
+        await _record_quality(
+            db, report, end_date,
+            QualityStatus.OK if report.ok else QualityStatus.STALE,
+        )
     else:
         # 一只都没算出来（例如财报缓存是空的）→ 记 error，前端能立刻看到原因
         await _record_quality(
@@ -3064,7 +3074,9 @@ async def compute_valuation(
             "failed_codes": sorted(failed)[:100],
             "range": [start_date.isoformat(), end_date.isoformat()],
         },
-        quality_status="ok" if report.ok else "stale",
+        quality_status=(
+            QualityStatus.OK.value if report.ok else QualityStatus.STALE.value
+        ),
     )
 
 

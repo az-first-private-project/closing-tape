@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app import pipeline
 from app.db.models import MetaDataQuality
 from app.ingest.base import FetchResult
+from app.ingest.quality import QualityReport, record_quality
 
 pytestmark = pytest.mark.asyncio
 
@@ -90,6 +91,26 @@ async def test_quality_failed_keeps_last_success_and_marks_partial(
     assert row.status == "quality_failed"
     assert row.last_success_at == OLD_SUCCESS
     assert "600000" in (row.error or "")
+
+
+async def test_record_quality_attempt_keeps_success_metadata(db_session) -> None:
+    """单一写入口的 attempt 模式：更新体检结果，但保留上次成功时间与交易日。"""
+    await _seed_quality(db_session)
+    report = QualityReport(dataset="stock_daily", rows=4000, coverage=0.8)
+    report.add("missing_trade_days", count=2, severity="error", message="缺 2 天")
+
+    await record_quality(
+        db_session, "stock_daily", report, date(2026, 11, 6), "stale"
+    )
+    await db_session.commit()
+    row = await _quality(db_session)
+
+    assert row.status == "stale"
+    assert row.last_success_at == OLD_SUCCESS
+    assert row.last_trade_date == date(2020, 1, 1)
+    assert row.rows == 4000
+    assert float(row.coverage) == 0.8
+    assert "missing_trade_days" in (row.error or "")
 
 
 async def test_non_ok_quality_without_failed_codes_is_not_written_as_success(

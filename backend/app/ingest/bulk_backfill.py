@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import config
 from app.core.constants import is_st_name, limit_prices
 from app.core.logging import get_logger
+from app.core.status import QualityStatus
 from app.db.models import DimStock, FactMoneyflow, FactStockDaily, TradeCalendar
 from app.db.session import session_scope
 from app.ingest.base import FetchResult, upsert_rows
@@ -475,7 +476,9 @@ async def backfill_prices(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
-        quality_status="quality_failed" if failed else "ok",
+        quality_status=(
+            QualityStatus.QUALITY_FAILED.value if failed else QualityStatus.OK.value
+        ),
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
@@ -608,7 +611,9 @@ async def backfill_moneyflow(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
-        quality_status="quality_failed" if failed else "ok",
+        quality_status=(
+            QualityStatus.QUALITY_FAILED.value if failed else QualityStatus.OK.value
+        ),
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
@@ -794,7 +799,9 @@ async def backfill_valuation(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
-        quality_status="quality_failed" if failed else "ok",
+        quality_status=(
+            QualityStatus.QUALITY_FAILED.value if failed else QualityStatus.OK.value
+        ),
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),

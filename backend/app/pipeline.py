@@ -13,15 +13,15 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Iterable, Optional
 
 from sqlalchemy import select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import bind_run, get_logger
-from app.db.models import MetaDataQuality
+from app.core.status import QualityStatus, TaskStatus
+from app.services.freshness import write_freshness
 
 logger = get_logger(__name__)
 
@@ -84,34 +84,16 @@ async def mark_success(
     detail: dict | None = None,
 ) -> None:
     """记录一次成功的数据集更新（upsert）。"""
-    now = datetime.now()
-    stmt = pg_insert(MetaDataQuality).values(
-        dataset=dataset,
-        last_success_at=now,
-        last_attempt_at=now,
-        last_trade_date=trade_date,
+    await write_freshness(
+        db, dataset,
+        status=QualityStatus.OK,
+        mode="success",
         rows=rows,
         coverage=coverage,
         anomalies=anomalies,
-        status="ok",
-        error=None,
+        trade_date=trade_date,
         detail=detail,
     )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[MetaDataQuality.dataset],
-        set_={
-            "last_success_at": now,
-            "last_attempt_at": now,
-            "last_trade_date": trade_date,
-            "rows": rows,
-            "coverage": coverage,
-            "anomalies": anomalies,
-            "status": "ok",
-            "error": None,
-            "detail": detail,
-        },
-    )
-    await db.execute(stmt)
     await db.commit()
 
 
@@ -120,18 +102,12 @@ async def mark_failure(
     dataset: str,
     error: str,
     *,
-    status: str = "error",
+    status: QualityStatus | str = QualityStatus.ERROR,
 ) -> None:
     """记录一次失败/质量不合格（**不清空历史成功时间**，便于前端区分"上次成功"与"这次失败"）。"""
-    now = datetime.now()
-    stmt = pg_insert(MetaDataQuality).values(
-        dataset=dataset, last_attempt_at=now, status=status, error=error[:2000]
+    await write_freshness(
+        db, dataset, status=status, mode="failure", error=error
     )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[MetaDataQuality.dataset],
-        set_={"last_attempt_at": now, "status": status, "error": error[:2000]},
-    )
-    await db.execute(stmt)
     await db.commit()
 
 
@@ -181,7 +157,7 @@ def _summary(result: Any) -> dict:
         if value is not None:
             payload[attr] = value
     quality_status = getattr(result, "quality_status", None)
-    if quality_status and quality_status != "ok":
+    if quality_status and quality_status != QualityStatus.OK:
         payload["quality_status"] = quality_status
     return payload
 
@@ -240,7 +216,7 @@ async def run_task(
                 except Exception:                     # noqa: BLE001 —— DB 不可用时只能留日志
                     logger.exception("记录任务失败状态也失败 dataset=%s", dataset)
             return {
-                "task": task, "dataset": dataset, "status": "failed",
+                "task": task, "dataset": dataset, "status": TaskStatus.FAILED.value,
                 "error": f"{type(exc).__name__}: {exc}",
                 "elapsed_ms": int((time.perf_counter() - started) * 1000),
             }
@@ -256,7 +232,7 @@ async def run_task(
         stats = _summary(payload)
         rows = stats.get("rows")
         failed_count = int(stats.get("failed") or 0)
-        quality_status = str(stats.get("quality_status") or "ok")
+        quality_status = QualityStatus(stats.get("quality_status") or QualityStatus.OK)
         detail = stats.get("detail") if isinstance(stats.get("detail"), dict) else None
         if failed_count:
             logger.warning("任务 %s 自动重试后仍有 %d 个标的失败", task, failed_count)
@@ -277,7 +253,7 @@ async def run_task(
                     "任务 %s 跳过（%s），不更新数据集 %s 的新鲜度",
                     task, skipped_reason, dataset,
                 )
-            elif quality_status == "ok":
+            elif quality_status is QualityStatus.OK:
                 if skipped_reason == "already_collected":
                     # 数据已在库且达到完整阈值：记真实存量行数，不能记 0。
                     rows = detail.get("existing") or rows
@@ -300,7 +276,7 @@ async def run_task(
                         await mark_failure(
                             db, dataset,
                             f"自动重试后仍有 {failed_count} 个标的失败{suffix}",
-                            status="quality_failed",
+                            status=QualityStatus.QUALITY_FAILED,
                         )
                     except Exception:                 # noqa: BLE001 —— 记录失败不能改变任务结果
                         logger.exception("记录部分失败状态失败 dataset=%s", dataset)
@@ -309,12 +285,12 @@ async def run_task(
                         "任务 %s 质量状态为 %s，保留采集层质量记录", task, quality_status
                     )
         logger.info("任务完成 rows=%s elapsed_ms=%s", rows, elapsed)
-        if quality_status != "ok":
-            status = "partial"
+        if quality_status is not QualityStatus.OK:
+            status = TaskStatus.PARTIAL.value
         elif skipped_reason:
-            status = "skipped"
+            status = TaskStatus.SKIPPED.value
         else:
-            status = "success"
+            status = TaskStatus.SUCCESS.value
         return {"task": task, "dataset": dataset,
                 "status": status,
                 "elapsed_ms": elapsed, **stats}
@@ -526,7 +502,7 @@ async def run_daily_pipeline(
                 summary[step] = await run_task(step, trade_date=trade_date, db=db)
             except Exception as exc:                  # noqa: BLE001
                 logger.exception("步骤 %s 失败", step)
-                summary[step] = {"status": "failed", "error": str(exc)}
+                summary[step] = {"status": TaskStatus.FAILED.value, "error": str(exc)}
         from app.quality.invariants import log_invariants
         await log_invariants(logger)
         logger.info("每日流水线结束")

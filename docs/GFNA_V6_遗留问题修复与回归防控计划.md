@@ -139,12 +139,23 @@
 
 - 文件：`backend/app/core/status.py`
 - 内容：
-  - `TaskStatus`: success / partial / quality_failed / error / skipped；
+  - `TaskStatus`: running / success / partial / failed / skipped；
   - `QualityStatus`: ok / stale / quality_failed / error / unknown；
-  - 允许的状态迁移表；
-  - 新鲜度写入只保留一个函数入口。
-- 替换 `pipeline.py`、`catch_up.py`、`bulk_backfill.py` 中的魔法字符串。
-- 验收：全仓 grep 不到裸状态字符串；现有 45 个相关测试全绿。
+  - 允许的状态迁移表（任务终态不得回到 running；新鲜度不得写回 unknown）；
+  - 新鲜度写入只保留一个函数入口 `services/freshness.py::write_freshness`。
+- 替换 `pipeline.py`、`catch_up.py`、`bulk_backfill.py` 中的魔法字符串；`record_quality`
+  与 `mark_success`/`mark_failure` 全部改为调用单一写入口。
+- 验收：相关模块不再有裸状态字符串；现有 45 个相关测试全绿。
+- 完成情况（11-07）：
+  - `TaskStatus` 按运行时真实取值补入 `running/failed`（原计划写的 `quality_failed/error`
+    属于质量域，已归入 `QualityStatus`）；
+  - 所有 `meta_data_quality` 写入统一走 `write_freshness`（success / attempt / failure
+    三种模式），`record_quality`、`mark_success`、`mark_failure` 均为薄封装；新增静态
+    守卫测试确保其他模块不得直接 upsert 该表；
+  - `pipeline`/`catch_up`/`bulk_backfill`/`freshness`/`ingest service`/`valuation`/`calendar`
+    的状态字面量已替换为枚举；
+  - 新增 `tests/test_status.py` 4 个用例与 1 个集成用例；全量 483 passed / 46 skipped，
+    集成 13 passed。
 
 #### W0-5 清理测试残留（需授权）
 
@@ -351,7 +362,7 @@
 | W0-1 | 基建 | CI 流水线 | 0.5d | W1 | — | 完成（11-07） |
 | W0-2 | 基建 | 集成测试骨架与 6 组不变量 | 1–2d | W1 | W0-1 | 完成（11-07） |
 | W0-3 | 基建 | `check_invariants.py` | 0.5d | W1 | W0-2 | 完成（11-07） |
-| W0-4 | 基建 | 状态枚举与新鲜度单一入口 | 0.5d | W1 | W0-2 | 待开始 |
+| W0-4 | 基建 | 状态枚举与新鲜度单一入口 | 0.5d | W1 | W0-2 | 完成（11-07） |
 | W0-5 | 基建 | 测试残留清理 | 0.5d | W1 | 授权 | 待授权 |
 | P1-1 | P1 | 板块名单完整性 | 0.5–1d | W2 | W0-3 | 待开始 |
 | P1-2 | P1 | 信号样本标识 | 0.5d | W2 | — | 待开始 |

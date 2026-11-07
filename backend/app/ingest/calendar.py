@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import config
 from app.core.errors import ProviderError
 from app.core.logging import get_logger
+from app.core.status import QualityStatus
 from app.db.models.meta import TradeCalendar
 from app.ingest.base import FetchResult, upsert_rows
 from app.ingest.quality import QualityReport, record_quality
@@ -192,7 +193,7 @@ async def sync_trade_calendar(
             severity="warning",
             message=f"日历获取存在 {fetched.failed} 个失败",
         )
-    await record_quality(db, "trade_calendar", report, None, "ok")
+    await record_quality(db, "trade_calendar", report, None, QualityStatus.OK)
 
     elapsed = int((time.perf_counter() - started) * 1000)
     logger.info(
