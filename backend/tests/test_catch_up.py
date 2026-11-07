@@ -164,6 +164,12 @@ def test_execute_history_day_order_and_params(monkeypatch) -> None:
     assert summary["days"] == [D1.isoformat()]
 
 
+def test_history_day_steps_include_margin_before_sector_scores() -> None:
+    """两融按日披露，漏跑日只能由该日补；且须早于依赖它的板块情绪评分。"""
+    assert "margin" in cu.DAY_STEPS
+    assert cu.DAY_STEPS.index("margin") < cu.DAY_STEPS.index("sector_scores")
+
+
 def test_execute_today_uses_snapshot_pipeline(monkeypatch) -> None:
     """缺口日就是今天且已收盘 → 快照口径的完整流水线，不逐日跑历史步骤。"""
     calls = _patch_pipeline(monkeypatch)

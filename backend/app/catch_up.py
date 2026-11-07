@@ -6,7 +6,7 @@
 
   - 历史缺口日：先用 ``history_fast / valuation_fast / moneyflow_history`` 一次性
     覆盖整个缺口区间（历史口径，不依赖当日快照），再逐日重算
-    ``index / sector / sector_agg / valuation / features / scores /
+    ``index / sector / sector_agg / margin / valuation / features / scores /
     sector_scores / temperature / report / algos``，最后统一重算 ``signal_perf``；
   - 缺口日就是今天且已收盘：直接走完整 ``run_daily_pipeline``（快照口径）。
 
@@ -36,8 +36,10 @@ CATCH_UP_LOCK = "gfna:daily_pipeline"
 # 缺口区间用历史口径一次补齐
 RANGE_STEPS = ("history_fast", "valuation_fast", "moneyflow_history")
 # 逐日重算（依赖当日行情/资金流已落库）
+# margin 为逐日历史数据：漏跑日的两融只能由该日自己补，且须早于 sector_scores
+# （情绪分读取 <= 当日的最新两融行）。
 DAY_STEPS = (
-    "index", "sector", "sector_agg", "valuation", "features", "scores",
+    "index", "sector", "sector_agg", "margin", "valuation", "features", "scores",
     "sector_scores", "temperature", "report", "algos",
 )
 # 全市场单日行数下限（约 5000+ 只；低于此值视为残缺日）
