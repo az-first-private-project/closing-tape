@@ -25,11 +25,15 @@ WATCHDOG_LOG = VAR_DIR / "backend_watchdog.log"
 UVICORN_LOG = VAR_DIR / "uvicorn.log"
 PID_FILE = VAR_DIR / "backend.pid"
 LOCK_FILE = VAR_DIR / "backend_watchdog.lock"
+INVARIANTS_STATE = VAR_DIR / "invariants_last_run.json"
+INVARIANTS_SCRIPT = BACKEND_DIR / "scripts" / "check_invariants.py"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 HEALTH_TIMEOUT = 3.0
 START_TIMEOUT = 30.0
+INVARIANTS_INTERVAL_SEC = 3600.0
+INVARIANTS_TIMEOUT_SEC = 60.0
 UVICORN_LOG_MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -134,6 +138,55 @@ def spawn_flags() -> int:
     return 0
 
 
+def _run_invariants(logger: logging.Logger) -> None:
+    """每小时跑一次只读数据不变量检查；失败只记日志，不影响守护结果。"""
+    now = time.time()
+    try:
+        state = json.loads(INVARIANTS_STATE.read_text(encoding="utf-8"))
+        last = float(state.get("ts") or 0)
+    except (OSError, ValueError, TypeError):
+        last = 0.0
+    if now - last < INVARIANTS_INTERVAL_SEC:
+        return
+
+    exit_code: int | None = None
+    error: str | None = None
+    try:
+        proc = subprocess.run(
+            [str(_server_python()), str(INVARIANTS_SCRIPT), "--compact"],
+            cwd=str(BACKEND_DIR),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=INVARIANTS_TIMEOUT_SEC,
+            creationflags=spawn_flags(),
+        )
+        exit_code = proc.returncode
+        if proc.returncode == 0:
+            logger.info("数据不变量检查通过")
+        else:
+            try:
+                summary = json.loads(proc.stdout).get("summary", {})
+            except (ValueError, AttributeError):
+                summary = (proc.stdout or proc.stderr or "")[-1000:]
+            logger.warning("数据不变量检查退出码 %s：%s", proc.returncode, summary)
+    except Exception as exc:                            # noqa: BLE001
+        error = f"{type(exc).__name__}: {exc}"
+        logger.warning("数据不变量检查执行失败：%s", error)
+    finally:
+        try:
+            INVARIANTS_STATE.write_text(
+                json.dumps(
+                    {"ts": now, "exit_code": exit_code, "error": error},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("写入不变量检查状态失败：%s", exc)
+
+
 def _start_server(
     host: str, port: int, timeout: float, logger: logging.Logger
 ) -> tuple[bool, str]:
@@ -195,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         state, detail = _health_state(args.host, args.port)
         if state == "healthy":
             logger.info("后端健康，跳过：%s", detail)
+            _run_invariants(logger)
             return 0
         if state == "degraded":
             logger.warning("后端在运行但数据库未连接，不重启：%s", detail)
@@ -207,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         ok, message = _start_server(args.host, args.port, args.start_timeout, logger)
         if ok:
             logger.info("后端已恢复：%s", message)
+            _run_invariants(logger)
             return 0
         logger.error("后端拉起失败：%s", message)
         return 1

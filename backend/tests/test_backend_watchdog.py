@@ -79,6 +79,8 @@ def isolated_var(monkeypatch, tmp_path):
     monkeypatch.setattr(
         backend_watchdog, "_setup_logging", lambda: logging.getLogger("test.watchdog")
     )
+    # 主流程测试不启动真实子进程；不变量检查单独验收
+    monkeypatch.setattr(backend_watchdog, "_run_invariants", lambda logger: None)
     return tmp_path
 
 

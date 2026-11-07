@@ -237,6 +237,9 @@ async def _execute_catch_up(
     # 前瞻统计依赖所有补跑日的选股结果，最后统一重算
     results["signal_perf"] = await run_task("signal_perf", trade_date=last, db=db)
 
+    from app.quality.invariants import log_invariants
+    await log_invariants(logger)
+
     failed_steps = [
         key for key, value in results.items()
         if isinstance(value, dict) and value.get("status") == "failed"

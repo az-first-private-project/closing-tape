@@ -527,6 +527,8 @@ async def run_daily_pipeline(
             except Exception as exc:                  # noqa: BLE001
                 logger.exception("步骤 %s 失败", step)
                 summary[step] = {"status": "failed", "error": str(exc)}
+        from app.quality.invariants import log_invariants
+        await log_invariants(logger)
         logger.info("每日流水线结束")
     return {"trade_date": trade_date.isoformat(), "steps": summary}
 

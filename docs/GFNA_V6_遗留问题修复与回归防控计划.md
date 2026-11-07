@@ -129,6 +129,11 @@
   - 超过 2 小时的 running 任务；
   - failed 回测/任务是否被误计入成功统计。
 - 验收：在已知 12 条僵尸任务上能报出违规；清理后归零。
+- 完成情况（11-07）：
+  - `backend/app/quality/invariants.py` 实现 17 项只读检查；生产实测违规 1 项（`stale_running_jobs`=12），警告 2 项（`scd2_zero_length`=351、`open_partial_sectors`=6），退出码 1，与已知基线一致；
+  - `check_invariants.py` 支持 `--compact`，事务只读，异常不阻断调用方；
+  - `run_daily_pipeline` 结束与 catch-up `signal_perf` 之后各调用一次；watchdog 健康/拉起成功后每小时最多执行一次（60s 超时，失败只记日志）；
+  - 集成测试新增 3 个用例（干净库无违规 / 重叠+僵尸+失败产物可报出 / 空库仍报错），`tests/integration` 12 passed，全量 479 passed。
 
 #### W0-4 状态枚举与单一入口
 
@@ -345,7 +350,7 @@
 | P0-1 | P0 | 11-05 两融未来函数订正 | 1–2h | W1 | 授权 | 待授权 |
 | W0-1 | 基建 | CI 流水线 | 0.5d | W1 | — | 完成（11-07） |
 | W0-2 | 基建 | 集成测试骨架与 6 组不变量 | 1–2d | W1 | W0-1 | 完成（11-07） |
-| W0-3 | 基建 | `check_invariants.py` | 0.5d | W1 | W0-2 | 待开始 |
+| W0-3 | 基建 | `check_invariants.py` | 0.5d | W1 | W0-2 | 完成（11-07） |
 | W0-4 | 基建 | 状态枚举与新鲜度单一入口 | 0.5d | W1 | W0-2 | 待开始 |
 | W0-5 | 基建 | 测试残留清理 | 0.5d | W1 | 授权 | 待授权 |
 | P1-1 | P1 | 板块名单完整性 | 0.5–1d | W2 | W0-3 | 待开始 |
