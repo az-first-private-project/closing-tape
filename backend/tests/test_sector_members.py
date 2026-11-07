@@ -428,6 +428,22 @@ def test_resolve_em_board_code_by_concept_alias() -> None:
     ) == "BK0900"
 
 
+def test_resolve_em_board_code_aliases_parenthetical_ths_names() -> None:
+    """THS 括号同义名（MR(混合现实)）归一化后只剩前缀，必须用别名指向括号内名称。"""
+    cases = {
+        "IP经济(谷子经济)": "谷子经济",
+        "MR(混合现实)": "混合现实",
+        "新型烟草(电子烟)": "电子烟",
+    }
+    for ths_name, em_name in cases.items():
+        exact = {em_name: "BK9001"}
+        normalized = {akshare_provider.normalize_board_name(em_name): "BK9001"}
+
+        assert akshare_provider.resolve_em_board_code(
+            exact, normalized, ths_name, "concept"
+        ) == "BK9001"
+
+
 def test_resolve_em_board_code_prefers_exact_and_skips_alias_for_industry() -> None:
     exact = {"新能源汽车": "BK9999", "新能源车": "BK0900"}
     normalized = {
