@@ -1095,6 +1095,8 @@ async def collect_daily_snapshot(
                                  rows_written=0, done=existing)
                 return _skipped_result(
                     task, "already_collected", existing=existing,
+                    coverage=round(min(existing / expected, 1.0), 4)
+                    if expected else None,
                     trade_date=trade_date.isoformat(),
                 )
 

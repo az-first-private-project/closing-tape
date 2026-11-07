@@ -258,10 +258,22 @@ async def run_task(
         coverage = stats.get("coverage")
         if coverage is None and detail is not None:
             coverage = detail.get("coverage")
+        # 跳过标记：FetchResult 放在 detail.skipped，引擎层 dict 放在顶层 skipped
+        skipped_reason = stats.get("skipped") or (detail or {}).get("skipped")
         if task != "calendar":
             if scoped:
                 logger.info("定向回补（codes 非空）不更新数据集 %s 的新鲜度", dataset)
+            elif skipped_reason and skipped_reason != "already_collected":
+                # 跳过不等于成功：之前这里会 mark_success(rows=0)，把快照未到点/
+                # 限频/锁占用写成"0 行且成功"，监控误判为已更新。
+                logger.info(
+                    "任务 %s 跳过（%s），不更新数据集 %s 的新鲜度",
+                    task, skipped_reason, dataset,
+                )
             elif quality_status == "ok":
+                if skipped_reason == "already_collected":
+                    # 数据已在库且达到完整阈值：记真实存量行数，不能记 0。
+                    rows = detail.get("existing") or rows
                 await mark_success(
                     db, dataset, rows=rows,
                     coverage=coverage,
@@ -276,8 +288,14 @@ async def run_task(
                     "任务 %s 质量状态为 %s，保留采集层质量记录", task, quality_status
                 )
         logger.info("任务完成 rows=%s elapsed_ms=%s", rows, elapsed)
+        if quality_status != "ok":
+            status = "partial"
+        elif skipped_reason:
+            status = "skipped"
+        else:
+            status = "success"
         return {"task": task, "dataset": dataset,
-                "status": "partial" if quality_status != "ok" else "success",
+                "status": status,
                 "elapsed_ms": elapsed, **stats}
 
 

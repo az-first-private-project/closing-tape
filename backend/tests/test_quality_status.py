@@ -77,6 +77,77 @@ def test_run_task_writes_success_for_ok(monkeypatch) -> None:
     assert written and written[0]["rows"] == 7
 
 
+def test_run_task_skip_does_not_write_success(monkeypatch) -> None:
+    """跳过（未到收盘/限频/锁占用）不是成功：不得把数据集写成 0 行 fresh。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return FetchResult(
+            rows=0, total=0, detail={"skipped": "before_close_ready_time"}
+        )
+
+    written: list[dict] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        written.append(kwargs)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+
+    out = asyncio.run(
+        pipeline.run_task("snapshot", trade_date=date(2026, 11, 6), db=_FakeDB())
+    )
+    assert out["status"] == "skipped"
+    assert written == []
+
+
+def test_run_task_already_collected_marks_existing_rows(monkeypatch) -> None:
+    """已有数据跳过：数据本身完整，按存量行数与覆盖率记成功，不能记 0 行。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return FetchResult(
+            rows=0, total=0,
+            detail={
+                "skipped": "already_collected",
+                "existing": 5031,
+                "coverage": 0.9,
+            },
+        )
+
+    written: list[dict] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        written.append(kwargs)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+
+    out = asyncio.run(
+        pipeline.run_task("snapshot", trade_date=date(2026, 11, 6), db=_FakeDB())
+    )
+    assert out["status"] == "skipped"
+    assert written and written[0]["rows"] == 5031
+    assert written[0]["coverage"] == 0.9
+
+
+def test_run_task_dict_skip_does_not_write_success(monkeypatch) -> None:
+    """引擎层用顶层 skipped 标记跳过（如日历为空），同样不能写成功。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return {"rows": 0, "skipped": True, "reason": "交易日历为空"}
+
+    written: list[dict] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        written.append(kwargs)
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+
+    out = asyncio.run(pipeline.run_task("signal_perf", db=_FakeDB()))
+    assert out["status"] == "skipped"
+    assert written == []
+
+
 def test_run_task_scoped_backfill_skips_success_mark(monkeypatch) -> None:
     """定向回补的行数只是局部代码，不能覆盖全市场数据集的新鲜度。"""
 
