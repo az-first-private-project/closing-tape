@@ -126,7 +126,8 @@ async def amain(args: argparse.Namespace) -> int:
         return 0
 
     imported = skipped = 0
-    with httpx.Client() as client:
+    # 与 SinaProvider 一致：本机 NO_PROXY 含 "[::1]" 时 httpx 默认会解析失败
+    with httpx.Client(trust_env=False) as client:
         for index, board in enumerate(candidates, 1):
             name, code = board["sector_name"], board["sector_code"]
             node = node_map[name]

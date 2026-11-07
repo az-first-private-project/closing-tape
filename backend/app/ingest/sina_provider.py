@@ -80,8 +80,14 @@ class SinaProvider(BaseProvider):
 
     # ---------- 内部 ----------
     def _get_json(self, path: str, params: dict[str, Any]) -> Any:
+        # trust_env=False：本机 NO_PROXY 含 "[::1]" 时 httpx 构造 Client
+        # 会抛 InvalidURL，导致兜底源整体不可用；新浪接口应直连。
         response = httpx.get(
-            SINA_API + path, params=params, headers=SINA_HEADERS, timeout=12
+            SINA_API + path,
+            params=params,
+            headers=SINA_HEADERS,
+            timeout=12,
+            trust_env=False,
         )
         response.raise_for_status()
         return json.loads(response.text)

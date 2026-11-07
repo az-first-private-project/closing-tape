@@ -47,7 +47,7 @@ class _FakeSina:
         self.calls: list[int] = []
         self.node_calls = 0
 
-    def __call__(self, url, params=None, headers=None, timeout=None):
+    def __call__(self, url, params=None, headers=None, timeout=None, **kwargs):
         if url.endswith("Market_Center.getHQNodes"):
             self.node_calls += 1
             if isinstance(self.nodes, Exception):
@@ -86,6 +86,20 @@ def test_node_map_keeps_only_concept_nodes_and_prefers_gn() -> None:
     mapping = build_node_map(payload)
 
     assert mapping == {"白酒": "gn_baijiu", "PM2.5": "chgn_730615"}
+
+
+def test_requests_ignore_env_proxy(monkeypatch) -> None:
+    """NO_PROXY 含 "[::1]" 时 httpx 默认 Client 构造即抛 InvalidURL（P0-32）。"""
+    seen: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        seen.append(kwargs)
+        return _Response(_nodes(["白酒", "", "gn_baijiu"]))
+
+    monkeypatch.setattr(sina_provider.httpx, "get", fake_get)
+
+    assert SinaProvider()._node_map() == {"白酒": "gn_baijiu"}
+    assert seen and all(call.get("trust_env") is False for call in seen)
 
 
 def test_industry_type_skipped_without_network(monkeypatch) -> None:
