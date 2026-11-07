@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -55,6 +56,7 @@ def plan_catch_up(
     latest: date | None,
     open_days: list[date],
     latest_complete: bool = True,
+    incomplete_days: Sequence[date] = (),
     max_days: int = config.CATCH_UP_MAX_DAYS,
 ) -> list[date]:
     """返回需要补跑的交易日（升序）。
@@ -62,20 +64,24 @@ def plan_catch_up(
     - ``latest`` 为库里最新行情日期，``open_days`` 是 (latest, last_completed]
       之间的开市日；
     - ``latest`` 本身残缺时一并重跑（流水线中途失败的情况）；
+    - ``incomplete_days`` 是最近若干开市日里行数偏低的残日：只看 latest 会漏掉
+      被后续完整日盖住的历史缺口（11-05 仅 280 行、11-06 完整后就不再补）；
     - 全库无行情（``latest is None``）不自动补：那是首次回补的事。
     """
     if last_completed is None or latest is None:
         return []
-    days = [day for day in open_days if latest < day <= last_completed]
+    days = {day for day in open_days if latest < day <= last_completed}
     if not latest_complete:
-        days.insert(0, latest)
-    if len(days) > max_days:
+        days.add(latest)
+    days.update(day for day in incomplete_days if day <= last_completed)
+    ordered = sorted(days)
+    if len(ordered) > max_days:
         logger.warning(
             "补跑缺口 %d 个交易日超过上限 %d，只补最近 %d 天（更早的用 pipeline_cli 回补）",
-            len(days), max_days, max_days,
+            len(ordered), max_days, max_days,
         )
-        days = days[-max_days:]
-    return days
+        ordered = ordered[-max_days:]
+    return ordered
 
 
 def _today_cn() -> date:
@@ -87,30 +93,55 @@ def _after_close() -> bool:
     return (now.hour, now.minute) >= (15, 30)
 
 
-async def _day_row_count(db: AsyncSession, day: date) -> int:
-    value = await db.scalar(
-        select(func.count())
-        .select_from(FactStockDaily)
-        .where(FactStockDaily.trade_date == day)
-    )
-    return int(value or 0)
+def find_incomplete_days(
+    days: Sequence[date], counts: Mapping[date, int]
+) -> list[date]:
+    """在给定开市日（升序）里找出残缺日：行数低于绝对下限，或较前高缩水 20% 以上。
+
+    基准取窗口内此前的最大行数，既避免把市场正常增减误判为残缺，也避免一天
+    截断后把基准拉低、连带掩盖紧随其后的另一天。
+    """
+    incomplete: list[date] = []
+    baseline = 0
+    for day in days:
+        rows = int(counts.get(day) or 0)
+        if rows < _MIN_DAILY_ROWS or (
+            baseline and rows < baseline * _COMPLETENESS_RATIO
+        ):
+            incomplete.append(day)
+        baseline = max(baseline, rows)
+    return incomplete
 
 
-async def _latest_complete(db: AsyncSession, latest: date | None) -> bool:
-    """最新行情日是否完整（行数绝对值 + 与前一交易日比例）。"""
-    if latest is None:
-        return True
-    rows = await _day_row_count(db, latest)
-    if rows < _MIN_DAILY_ROWS:
-        return False
-    previous = await db.scalar(
-        select(func.max(FactStockDaily.trade_date))
-        .where(FactStockDaily.trade_date < latest)
+async def _recent_incomplete_days(
+    db: AsyncSession, upto: date, scan_days: int = config.CATCH_UP_SCAN_DAYS
+) -> list[date]:
+    days = list(
+        (
+            await db.execute(
+                select(TradeCalendar.cal_date)
+                .where(
+                    TradeCalendar.is_open.is_(True),
+                    TradeCalendar.cal_date <= upto,
+                )
+                .order_by(TradeCalendar.cal_date.desc())
+                .limit(scan_days)
+            )
+        ).scalars()
     )
-    if previous is None:
-        return True
-    previous_rows = await _day_row_count(db, previous)
-    return previous_rows == 0 or rows >= previous_rows * _COMPLETENESS_RATIO
+    if not days:
+        return []
+    days.sort()
+    counts = dict(
+        (
+            await db.execute(
+                select(FactStockDaily.trade_date, func.count())
+                .where(FactStockDaily.trade_date.in_(days))
+                .group_by(FactStockDaily.trade_date)
+            )
+        ).all()
+    )
+    return find_incomplete_days(days, counts)
 
 
 async def _catch_up_state(db: AsyncSession) -> dict:
@@ -137,11 +168,16 @@ async def _catch_up_state(db: AsyncSession) -> dict:
                 )
             ).scalars()
         )
+    incomplete_days = (
+        await _recent_incomplete_days(db, last_completed)
+        if last_completed is not None else []
+    )
     return {
         "latest": latest,
         "last_completed": last_completed,
         "open_days": open_days,
-        "latest_complete": await _latest_complete(db, latest),
+        "latest_complete": latest not in incomplete_days if latest else True,
+        "incomplete_days": incomplete_days,
     }
 
 
@@ -216,6 +252,9 @@ async def run_catch_up(db: AsyncSession | None = None) -> dict:
             state["last_completed"].isoformat() if state["last_completed"] else None
         ),
         "latest_complete": state["latest_complete"],
+        "incomplete_days": [
+            day.isoformat() for day in state.get("incomplete_days") or []
+        ],
     }
     if not days:
         return {"status": "up_to_date", **summary}
@@ -250,6 +289,6 @@ async def run_catch_up_in_background(*, delay_sec: float | None = None) -> None:
 
 
 __all__ = [
-    "plan_catch_up", "run_catch_up", "run_catch_up_in_background",
-    "RANGE_STEPS", "DAY_STEPS", "CATCH_UP_LOCK",
+    "plan_catch_up", "find_incomplete_days", "run_catch_up",
+    "run_catch_up_in_background", "RANGE_STEPS", "DAY_STEPS", "CATCH_UP_LOCK",
 ]

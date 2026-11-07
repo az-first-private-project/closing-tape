@@ -1,7 +1,8 @@
 """日更错过自愈测试（不联网、不连库）。
 
 覆盖：
-  ① ``plan_catch_up``：无缺口 / 跨日缺口 / 最新日残缺 / 缺口超上限；
+  ① ``plan_catch_up``：无缺口 / 跨日缺口 / 最新日残缺 / 残日合并 / 缺口超上限；
+      ``find_incomplete_days``：绝对下限 / 缩水比例 / 空心日 / 基准不被拉低；
   ② ``_execute_catch_up``：区间步骤 → 逐日重算 → signal_perf 的顺序与参数，
      当天缺口走完整 run_daily_pipeline（快照口径），单步失败不中断；
   ③ ``run_catch_up``：无缺口不取锁；锁被占用直接跳过。
@@ -17,6 +18,7 @@ from app import catch_up as cu
 
 D1 = date(2026, 11, 2)
 D2 = date(2026, 11, 3)
+D3 = date(2026, 11, 4)
 
 
 # ============================================================
@@ -66,6 +68,55 @@ def test_plan_caps_to_most_recent_days() -> None:
         last_completed=D2, latest=date(2026, 10, 19), open_days=days,
         latest_complete=True, max_days=2,
     ) == days[-2:]
+
+
+def test_plan_includes_incomplete_history_days() -> None:
+    """被后续完整日盖住的残日也要补：latest 完整不代表更早的日完整。"""
+    assert cu.plan_catch_up(
+        last_completed=D2, latest=D2, open_days=[], latest_complete=True,
+        incomplete_days=[D1],
+    ) == [D1]
+
+
+def test_plan_merges_incomplete_and_open_days() -> None:
+    assert cu.plan_catch_up(
+        last_completed=D3, latest=D2, open_days=[D3], latest_complete=True,
+        incomplete_days=[D1, D3],
+    ) == [D1, D3]
+
+
+# ============================================================
+# ①b find_incomplete_days
+# ============================================================
+def test_find_incomplete_days_flags_absolute_low() -> None:
+    assert cu.find_incomplete_days(
+        [D1, D2], {D1: 280, D2: 5287}
+    ) == [D1]
+
+
+def test_find_incomplete_days_flags_ratio_drop() -> None:
+    assert cu.find_incomplete_days(
+        [D1, D2], {D1: 5568, D2: 4000}
+    ) == [D2]
+
+
+def test_find_incomplete_days_flags_missing_day() -> None:
+    assert cu.find_incomplete_days(
+        [D1, D2, D3], {D1: 5568, D3: 5571}
+    ) == [D2]
+
+
+def test_find_incomplete_days_normal_growth_is_complete() -> None:
+    assert cu.find_incomplete_days(
+        [D1, D2, D3], {D1: 5510, D2: 5568, D3: 5571}
+    ) == []
+
+
+def test_find_incomplete_days_baseline_not_dragged_down() -> None:
+    """截断日不能把基准拉低，否则紧随其后的另一残日会被漏判。"""
+    assert cu.find_incomplete_days(
+        [D1, D2, D3], {D1: 5568, D2: 4000, D3: 3400}
+    ) == [D2, D3]
 
 
 # ============================================================

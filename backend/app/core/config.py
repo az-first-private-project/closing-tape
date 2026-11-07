@@ -230,6 +230,8 @@ AUTO_CREATE_TABLES = _env_bool("AUTO_CREATE_TABLES", True)
 # 启动补跑：宿主机休眠/进程未运行导致日更整日跳过时，启动后按历史口径补齐缺口
 CATCH_UP_ENABLED = _env_bool("CATCH_UP_ENABLED", True)
 CATCH_UP_MAX_DAYS = _env_int("CATCH_UP_MAX_DAYS", 5)
+# 每次启动回看最近 N 个开市日的行数，识别被后续完整日掩盖的残缺日
+CATCH_UP_SCAN_DAYS = _env_int("CATCH_UP_SCAN_DAYS", 5)
 CATCH_UP_DELAY_SEC = _env_float("CATCH_UP_DELAY_SEC", 15.0)
 
 # 允许的 CORS 来源（默认放开给本地开发；生产用环境变量收紧）
