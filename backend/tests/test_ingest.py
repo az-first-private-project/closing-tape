@@ -26,6 +26,7 @@ pd = pytest.importorskip("pandas")
 
 from app.core.errors import ProviderError
 from app.ingest.akshare_provider import (  # noqa: E402
+    INDEX_COLUMNS,
     SHARES_PER_LOT,
     AkshareProvider,
     _margin_effective_date,
@@ -38,6 +39,7 @@ from app.ingest.akshare_provider import (  # noqa: E402
     _normalize_sector_members,
     _normalize_spot,
     _normalize_stock_history,
+    _normalize_tencent_index,
     _num,
     _pick,
 )
@@ -469,6 +471,71 @@ def test_normalize_index_pre_close_and_pct() -> None:
     assert second["pct_chg"] == pytest.approx(2.0)
     # 新浪指数成交量单位已是股（实测与 baostock 股口径一致），不做 ×100
     assert second["volume"] == 20
+
+
+def test_normalize_tencent_index_units_and_target_row() -> None:
+    """腾讯指数兜底：成交量手→股（×100），前收/涨跌幅来自前一条记录。"""
+    rows = [
+        ["2026-11-03", "3624.580", "3608.100", "3624.580", "3580.380", "536848407.000"],
+        ["2026-11-04", "3605.390", "3686.170", "3686.170", "3590.800", "599394361.000"],
+    ]
+    frame = _normalize_tencent_index(rows, "sh000001", "上证指数", date(2026, 11, 4))
+    assert list(frame.columns) == list(INDEX_COLUMNS)
+    assert len(frame) == 1
+    row = frame.to_dict("records")[0]
+    assert row["pre_close"] == pytest.approx(3608.100)
+    assert row["pct_chg"] == pytest.approx(round((3686.170 / 3608.100 - 1) * 100, 3))
+    assert row["volume"] == 599394361 * SHARES_PER_LOT
+    assert row["amount"] is None
+    # 目标日不在返回区间时不落行（不写错日期）
+    assert _normalize_tencent_index(rows, "sh000001", "上证指数", date(2026, 11, 5)).empty
+
+
+def test_fetch_index_daily_falls_back_to_tencent(monkeypatch) -> None:
+    """新浪单指数失败时切腾讯；只有一个指数两者都失败才计 failed。"""
+    from app.core import constants as consts
+
+    monkeypatch.setattr(consts, "INDEX_MAP", {
+        "sh000001": ("上证指数", True),
+        "sz399001": ("深证成指", True),
+        "sh000688": ("科创50", True),
+    })
+    provider = AkshareProvider()
+    tencent_calls: list[str] = []
+
+    def fake_sina(self, index_code, index_name, trade_date):
+        if index_code == "sh000001":
+            raise ProviderError("sina dns failed")
+        if index_code == "sh000688":
+            return pd.DataFrame(columns=list(INDEX_COLUMNS))  # 当日无行
+        return pd.DataFrame([{
+            "index_code": index_code, "index_name": index_name,
+            "trade_date": trade_date, "open": 1.0, "high": 1.0, "low": 1.0,
+            "close": 1.0, "pre_close": 1.0, "pct_chg": 0.0,
+            "volume": 1, "amount": None,
+        }], columns=list(INDEX_COLUMNS))
+
+    def fake_tencent(self, index_code, index_name, trade_date):
+        tencent_calls.append(index_code)
+        if index_code == "sh000688":
+            raise ProviderError("tencent blocked")
+        return pd.DataFrame([{
+            "index_code": index_code, "index_name": index_name,
+            "trade_date": trade_date, "open": 2.0, "high": 2.0, "low": 2.0,
+            "close": 2.0, "pre_close": 2.0, "pct_chg": 0.0,
+            "volume": 2, "amount": None,
+        }], columns=list(INDEX_COLUMNS))
+
+    monkeypatch.setattr(AkshareProvider, "_fetch_sina_index", fake_sina)
+    monkeypatch.setattr(AkshareProvider, "_fetch_tencent_index", fake_tencent)
+
+    result = provider.fetch_index_daily(date(2026, 11, 4))
+    assert set(tencent_calls) == {"sh000001", "sh000688"}
+    assert result.rows == 2
+    assert result.failed == 1
+    assert result.detail["index_sources"] == {
+        "sh000001": "tencent", "sz399001": "sina",
+    }
 
 
 def test_normalize_calendar_dedup_sorted() -> None:

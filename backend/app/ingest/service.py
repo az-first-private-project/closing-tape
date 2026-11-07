@@ -2271,7 +2271,11 @@ async def collect_indices(
                 failed=fetched.failed,
                 elapsed_ms=elapsed,
                 detail={"source": fetched.source,
-                        "attempts": fetched.detail.get("attempts")},
+                        "attempts": fetched.detail.get("attempts"),
+                        # FetchResult 没有 coverage 字段；run_task 做 mark_success
+                        # 时从 detail 回填，否则会把这里的精确覆盖率覆盖成 NULL。
+                        "coverage": report.coverage,
+                        "index_sources": fetched.detail.get("index_sources")},
                 # 部分缺失时质量记录为 stale；run_task 不能再用 mark_success 洗成 ok
                 quality_status="ok" if report.ok else "stale",
             )

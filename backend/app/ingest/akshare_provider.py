@@ -34,6 +34,7 @@ from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 
 try:  # pragma: no cover —— 依赖是否安装由运行环境决定
     import akshare as ak
@@ -60,6 +61,15 @@ SHARES_PER_LOT = 100
 INDEX_VOLUME_IN_LOTS = False
 # 上交所两融金额单位是元，模型里统一存亿元
 YI = 100_000_000.0
+
+# 指数日线兜底端点为腾讯"无复权"K 线：fqkline 带 qfq 参数对指数会被 WAF 拦（实测 501），
+# 而指数本身无复权概念，kline/kline 即可。行格式：
+# [日期, 开盘, 收盘, 最高, 最低, 成交量(手)]，不含成交额。
+TENCENT_INDEX_URL = "https://web.ifzq.gtimg.cn/appstock/app/kline/kline"
+_TENCENT_INDEX_HEADERS = {
+    "User-Agent": config.HTTP_USER_AGENT,
+    "Referer": "https://gu.qq.com/",
+}
 
 # ---- 列名候选（顺序重要：越靠前越精确）----
 COL_CODE = ("代码", "证券代码", "股票代码", "code", "symbol")
@@ -861,6 +871,39 @@ def _normalize_index(
     pct_series = (close_series / pre_close_series - 1) * 100
     frame["pct_chg"] = pct_series.where(valid).round(3)
     return frame[list(INDEX_COLUMNS)]
+
+
+def _normalize_tencent_index(
+    rows: Sequence[Sequence[Any]] | None,
+    index_code: str,
+    index_name: str,
+    trade_date: date,
+) -> pd.DataFrame:
+    """腾讯指数日线归一化：只保留目标日一行（前收由前一条记录算出）。
+
+    行格式 ``[日期, 开盘, 收盘, 最高, 最低, 成交量(手)]``，成交量 ×100 转"股"
+    与新浪口径一致；接口不返回成交额，``amount`` 留空。
+    """
+    records: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            continue
+        volume = _num(row[5])
+        records.append(
+            {
+                "date": row[0],
+                "open": _num(row[1]),
+                "close": _num(row[2]),
+                "high": _num(row[3]),
+                "low": _num(row[4]),
+                "volume": volume * SHARES_PER_LOT if volume is not None else None,
+            }
+        )
+    normalized = _normalize_index(pd.DataFrame(records), index_code, index_name)
+    if normalized.empty:
+        return _empty_frame(INDEX_COLUMNS)
+    target = normalized[normalized["trade_date"] == trade_date]
+    return target.reset_index(drop=True)
 
 
 def _normalize_us_index(
@@ -1972,33 +2015,91 @@ class AkshareProvider(BaseProvider):
         )
 
     # ---------- A6 指数 ----------
+    def _fetch_sina_index(
+        self, index_code: str, index_name: str, trade_date: date
+    ) -> pd.DataFrame:
+        """新浪（AKShare ``stock_zh_index_daily``）单指数，仅保留目标日。"""
+        raw = self._fetch_one(
+            ak.stock_zh_index_daily,
+            f"stock_zh_index_daily[{index_code}]",
+            symbol=index_code,
+        )
+        self._throttle()
+        normalized = _normalize_index(raw, index_code, index_name)
+        if normalized.empty:
+            return _empty_frame(INDEX_COLUMNS)
+        target = normalized[normalized["trade_date"] == trade_date]
+        return target.reset_index(drop=True)
+
+    def _fetch_tencent_index(
+        self, index_code: str, index_name: str, trade_date: date
+    ) -> pd.DataFrame:
+        """腾讯单指数兜底（新浪 DNS 抖动/单指数失败时）。"""
+        params = {"param": f"{index_code},day,,,10"}
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                response = requests.get(
+                    TENCENT_INDEX_URL, params=params,
+                    headers=_TENCENT_INDEX_HEADERS, timeout=(5, 10),
+                )
+                if response.status_code in (403, 501):
+                    # WAF 拦截页：重试只会延长封禁
+                    raise ProviderError(
+                        f"腾讯指数接口被拦截 HTTP {response.status_code}",
+                        detail={"index_code": index_code},
+                    )
+                response.raise_for_status()
+                data = (response.json() or {}).get("data") or {}
+                rows = (data.get(index_code) or {}).get("day") or []
+                return _normalize_tencent_index(
+                    rows, index_code, index_name, trade_date
+                )
+            except ProviderError:
+                raise
+            except Exception as exc:  # noqa: BLE001 —— DNS/连接抖动重试一次
+                last_error = exc
+                time.sleep(0.5 * (attempt + 1))
+        raise ProviderError(
+            f"腾讯指数日线获取失败 {index_code}：{last_error}",
+            detail={"index_code": index_code},
+        )
+
     def fetch_index_daily(self, trade_date: date, include_us: bool = False) -> FetchResult:
-        """A 股指数日线（逐指数拉历史后过滤目标日）；美股可选（yfinance 未装则跳过）。"""
+        """A 股指数日线（逐指数拉历史后过滤目标日）；美股可选（yfinance 未装则跳过）。
+
+        每个指数独立降级：新浪取不到（抛错或当日无行）→ 腾讯无复权 K 线。
+        降级链只在"整源有行"时返回，单指数缺失不会触发下一级源，所以兜底
+        必须放在这里，否则一个指数失败就要等下次重跑（实测 11-04 缺上证指数）。
+        """
         from app.core.constants import INDEX_MAP
 
         started = time.perf_counter()
         frames: list[pd.DataFrame] = []
         failed = 0
+        index_sources: dict[str, str] = {}
         for index_code, (index_name, is_a_share) in INDEX_MAP.items():
             if not is_a_share:
                 continue
+            source = "sina"
+            target = _empty_frame(INDEX_COLUMNS)
             try:
-                raw = self._fetch_one(
-                    ak.stock_zh_index_daily,
-                    f"stock_zh_index_daily[{index_code}]",
-                    symbol=index_code,
-                )
+                target = self._fetch_sina_index(index_code, index_name, trade_date)
             except ProviderError as exc:
+                logger.warning("新浪指数日线获取失败[%s]：%s", index_code, exc)
+            if target.empty:
+                source = "tencent"
+                try:
+                    target = self._fetch_tencent_index(
+                        index_code, index_name, trade_date
+                    )
+                except ProviderError as exc:
+                    logger.warning("腾讯指数日线获取失败[%s]：%s", index_code, exc)
+            if target.empty:
                 failed += 1
-                logger.warning("指数日线获取失败[%s]：%s", index_code, exc)
                 continue
-            self._throttle()
-            normalized = _normalize_index(raw, index_code, index_name)
-            if normalized.empty:
-                continue
-            target = normalized[normalized["trade_date"] == trade_date]
-            if not target.empty:
-                frames.append(target)
+            frames.append(target)
+            index_sources[index_code] = source
 
         if include_us:
             frames.extend(self._fetch_us_indices(trade_date))
@@ -2015,7 +2116,8 @@ class AkshareProvider(BaseProvider):
             elapsed_ms=elapsed,
             detail={"data": frame, "source": self.name,
                     "trade_date": trade_date.isoformat(),
-                    "include_us": include_us},
+                    "include_us": include_us,
+                    "index_sources": index_sources},
         )
 
     def _fetch_us_indices(self, trade_date: date) -> list[pd.DataFrame]:
