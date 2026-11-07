@@ -125,14 +125,21 @@ def build_server_command(host: str, port: int) -> list[str]:
     ]
 
 
+def spawn_flags() -> int:
+    """venv 的 python.exe 只是重定向器：DETACHED_PROCESS 让它无控制台，它派生的基础
+    解释器便会自行新建控制台（默认终端为 Windows Terminal 时表现为弹窗）。
+    CREATE_NO_WINDOW 的无窗口控制台可被子解释器继承。"""
+    if os.name == "nt":
+        return subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    return 0
+
+
 def _start_server(
     host: str, port: int, timeout: float, logger: logging.Logger
 ) -> tuple[bool, str]:
     _rotate_uvicorn_log()
     log_file = open(UVICORN_LOG, "a", encoding="utf-8")
-    flags = 0
-    if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    flags = spawn_flags()
     try:
         proc = subprocess.Popen(
             build_server_command(host, port),

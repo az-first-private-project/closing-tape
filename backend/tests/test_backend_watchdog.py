@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +38,15 @@ def test_server_command_uses_uvicorn() -> None:
     command = build_server_command("127.0.0.1", 8123)
     assert command[1:4] == ["-m", "uvicorn", "app.main:app"]
     assert command[-2:] == ["--port", "8123"]
+
+
+def test_spawn_flags_do_not_let_child_allocate_a_console_window() -> None:
+    flags = backend_watchdog.spawn_flags()
+    if os.name == "nt":
+        assert flags & subprocess.CREATE_NO_WINDOW
+        assert not flags & subprocess.DETACHED_PROCESS
+    else:
+        assert flags == 0
 
 
 def test_task_command_quotes_both_paths() -> None:
