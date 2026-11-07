@@ -159,11 +159,18 @@
 
 #### W0-5 清理测试残留（需授权）
 
-- 预览并确认后处理：
-  - 10 条 failed 回测（验收/测试写入）；
-  - 15 条 failed、12 条僵尸 running 任务；
-- 优先标记 archived，不直接删除审计记录；确需删除时按数据库订正流程执行。
-- 验收：任务监控不再出现僵尸条目；回测列表不再混入测试失败记录。
+- 已完成（11-07，用户授权"全部归档"）：
+  - 10 条 failed 回测 → `backtest_run.status='archived'`；
+  - 15 条 failed 任务 → `ingest_job.status='archived'`；
+  - 12 条僵尸 running 任务（无 `finished_at`）→ `archived`，补 `finished_at=now()`
+    与 `stale running > 2h; archived (W0-5)` 说明；
+  - 单事务执行，更新语句均带 `AND status=...` 守卫并严格校验 rowcount 为
+    10/12/15，不符即回滚；审计记录全部保留、未删除。
+- `/api/v1/meta/jobs` 默认排除 `archived`，显式传 `status=archived` 仍可审计
+  查询；新增集成测试覆盖（`tests/integration/test_jobs_archive_filter.py`）。
+- 验收：`check_invariants.py` 退出码 0、`stale_running_jobs=0`；`ingest_job`
+  仅剩 success 66 / partial 20 / skipped 3 / archived 27；`backtest_run` 仅剩
+  success 88 / archived 10；单测 483 passed、集成 14 passed。
 
 ### Phase 1：P0 数据订正（需授权，预计 1–2 小时）
 
@@ -363,7 +370,7 @@
 | W0-2 | 基建 | 集成测试骨架与 6 组不变量 | 1–2d | W1 | W0-1 | 完成（11-07） |
 | W0-3 | 基建 | `check_invariants.py` | 0.5d | W1 | W0-2 | 完成（11-07） |
 | W0-4 | 基建 | 状态枚举与新鲜度单一入口 | 0.5d | W1 | W0-2 | 完成（11-07） |
-| W0-5 | 基建 | 测试残留清理 | 0.5d | W1 | 授权 | 待授权 |
+| W0-5 | 基建 | 测试残留清理 | 0.5d | W1 | 授权 | 完成（11-07） |
 | P1-1 | P1 | 板块名单完整性 | 0.5–1d | W2 | W0-3 | 待开始 |
 | P1-2 | P1 | 信号样本标识 | 0.5d | W2 | — | 待开始 |
 | P1-3 | P1 | 自选隔离与鉴权 | 1h–2d | W3 | 方案确认 | 待决策 |

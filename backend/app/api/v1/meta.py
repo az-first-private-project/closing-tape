@@ -65,12 +65,17 @@ async def list_jobs(
     status: Optional[str] = Query(None, description="状态过滤"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """采集/选股任务运行记录（任务监控页）。"""
+    """采集/选股任务运行记录（任务监控页）。
+
+    归档记录（W0-5）默认不出现在监控页；显式传 status=archived 仍可审计查询。
+    """
     stmt = select(IngestJob).order_by(IngestJob.started_at.desc()).limit(limit)
     if task:
         stmt = stmt.where(IngestJob.task == task)
     if status:
         stmt = stmt.where(IngestJob.status == status)
+    else:
+        stmt = stmt.where(IngestJob.status != "archived")
 
     rows = (await db.execute(stmt)).scalars().all()
     return {
