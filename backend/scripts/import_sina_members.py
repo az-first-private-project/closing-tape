@@ -81,16 +81,18 @@ def fetch_members(client, node: str) -> list[dict[str, str]] | None:
     return None
 
 
-def build_node_map() -> dict[str, str]:
-    """板块名 → 新浪 node，优先 gn_，其次 chgn_。"""
+def build_node_map() -> dict[str, list[str]]:
+    """板块名 → 精确同名新浪节点列表，gn_ 优先，chgn_ 作为回退。"""
     nodes = json.loads((BACKEND_DIR / "var" / "sina_nodes.json").read_text(encoding="utf-8"))
-    chosen: dict[str, str] = {}
+    chosen: dict[str, list[str]] = {}
     for name, _extra, node in nodes:
         if not name or not node:
             continue
-        prefer_gn = node.startswith("gn_")
-        if name not in chosen or (prefer_gn and not chosen[name].startswith("gn_")):
-            chosen[name] = node
+        items = chosen.setdefault(name, [])
+        if node not in items:
+            items.append(node)
+    for items in chosen.values():
+        items.sort(key=lambda n: (not n.startswith("gn_"), n))
     return chosen
 
 
@@ -122,7 +124,7 @@ async def amain(args: argparse.Namespace) -> int:
     print(f"[sina] 待导入 {len(candidates)} 个概念板块（精确同名）", flush=True)
     if args.dry_run:
         for b in candidates:
-            print(f"  {b['sector_name']} -> {node_map[b['sector_name']]}")
+            print(f"  {b['sector_name']} -> {', '.join(node_map[b['sector_name']])}")
         return 0
 
     imported = skipped = 0
@@ -130,13 +132,25 @@ async def amain(args: argparse.Namespace) -> int:
     with httpx.Client(trust_env=False) as client:
         for index, board in enumerate(candidates, 1):
             name, code = board["sector_name"], board["sector_code"]
-            node = node_map[name]
-            try:
-                members = await asyncio.to_thread(fetch_members, client, node)
-            except Exception as exc:  # noqa: BLE001
-                failed[code] = {"name": name, "node": node,
-                                "error": f"{type(exc).__name__}: {exc}"[:160]}
-                print(f"[{index}/{len(candidates)}] ! {name} 抓取失败：{exc}", flush=True)
+            nodes = node_map[name]
+            members = None
+            used_node = None
+            last_error: Exception | None = None
+            attempted_ok = False
+            for node in nodes:
+                try:
+                    got = await asyncio.to_thread(fetch_members, client, node)
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    continue
+                attempted_ok = True
+                if got:
+                    members, used_node = got, node
+                    break
+            if members is None and not attempted_ok and last_error is not None:
+                failed[code] = {"name": name, "node": ",".join(nodes),
+                                "error": f"{type(last_error).__name__}: {last_error}"[:160]}
+                print(f"[{index}/{len(candidates)}] ! {name} 抓取失败：{last_error}", flush=True)
                 save_progress(progress)
                 continue
 
@@ -147,12 +161,12 @@ async def amain(args: argparse.Namespace) -> int:
 
             stats = await sync_members(code, name, "concept", members, EFFECTIVE_FROM)
             completed[code] = {"count": len(members), "source": "sina",
-                               "partial": False, "node": node}
+                               "partial": False, "node": used_node}
             failed.pop(code, None)
             imported += 1
             save_progress(progress)
             print(f"[{index}/{len(candidates)}] + {name} {len(members)} 只"
-                  f"（新增 {stats['added']}，关闭 {stats['closed']}）", flush=True)
+                  f"（{used_node}；新增 {stats['added']}，关闭 {stats['closed']}）", flush=True)
             await asyncio.sleep(PAUSE_SEC)
 
     print(f"[sina] 完成：导入 {imported}，跳过 {skipped}，失败 {len(failed)}；"

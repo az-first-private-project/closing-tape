@@ -137,7 +137,8 @@ def load_progress() -> dict[str, Any]:
     return data
 
 
-async def main(dry_run: bool, force: bool = False, skip_partial: bool = False) -> int:
+async def main(dry_run: bool, force: bool = False, skip_partial: bool = False,
+               names: list[str] | None = None) -> int:
     from app.core.logging import setup_logging
     from app.db.session import dispose_engines
 
@@ -149,6 +150,7 @@ async def main(dry_run: bool, force: bool = False, skip_partial: bool = False) -
         return 1
 
     boards_by_name = load_boards_by_name()
+    only = set(names or [])
     # dry-run 也读真实断点：否则所有板块都显示“新”，无法判断待导入范围
     progress = load_progress()
     completed = progress["members"]["completed"]
@@ -160,6 +162,8 @@ async def main(dry_run: bool, force: bool = False, skip_partial: bool = False) -
     for path in files:
         payload = json.loads(path.read_text(encoding="utf-8"))
         for name, members, total_pages in iter_results(payload):
+            if only and name not in only:
+                continue
             board = boards_by_name.get(name)
             if board is None:
                 print(f"[skip] 板块清单无此名称：{name}")
@@ -237,5 +241,8 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true", help="忽略断点重导全部")
     parser.add_argument("--skip-partial", action="store_true",
                         help="跳过 pages>10 的 partial 名单（不用于市值聚合）")
+    parser.add_argument("--name", action="append", default=[],
+                        help="只导入指定板块名（可重复），避免触碰未列入目标的缓存")
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(args.dry_run, args.force, args.skip_partial)))
+    raise SystemExit(asyncio.run(main(args.dry_run, args.force, args.skip_partial,
+                                      args.name)))
