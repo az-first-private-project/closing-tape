@@ -773,3 +773,31 @@ def test_fetch_result_summary_is_json_safe() -> None:
     assert "data" not in summary["detail"]
     assert summary["detail"]["source"] == "akshare"
     assert math.isfinite(summary["rows"])
+
+
+def test_build_universe_rows_excludes_bonds_and_b_shares() -> None:
+    """北交所定转（810xxx）与 B 股不是 A 股股票，不得进入 dim_stock。"""
+    from app.ingest.service import _build_universe_rows
+
+    frame = pd.DataFrame([
+        {"code": "600519", "name": "贵州茅台"},
+        {"code": "810011", "name": "优机定转"},
+        {"code": "810013", "name": "万通定转"},
+        {"code": "200002", "name": "万  科Ｂ"},
+    ])
+    rows = _build_universe_rows(frame, {})
+    assert [row["code"] for row in rows] == ["600519"]
+
+
+def test_non_stock_active_codes_only_returns_active_junk() -> None:
+    """存量里的定转（status=1）要停用；已退市 B 股（status=9）不重复处理。"""
+    from app.ingest.service import _non_stock_active_codes
+
+    existing = {
+        "600519": {"status": 1},
+        "810011": {"status": 1},
+        "810013": {"status": 1},
+        "200002": {"status": 9},
+        "900901": {"status": 9},
+    }
+    assert sorted(_non_stock_active_codes(existing)) == ["810011", "810013"]

@@ -58,6 +58,7 @@ from app.core.constants import (
     board_of,
     exchange_of,
     is_st_name,
+    is_stock_code,
     limit_prices,
 )
 from app.core.errors import (
@@ -675,6 +676,14 @@ def _limit_flags(
     )
 
 
+def _non_stock_active_codes(existing: dict[str, dict[str, Any]]) -> list[str]:
+    """存量里被错误标成活跃的非 A 股标的（定转/B 股），同步时一并停用。"""
+    return [
+        code for code, item in existing.items()
+        if item.get("status") == STATUS_NORMAL and not is_stock_code(code)
+    ]
+
+
 def _build_universe_rows(
     frame: pd.DataFrame | None,
     existing: dict[str, dict[str, Any]],
@@ -688,9 +697,13 @@ def _build_universe_rows(
           总市值/收盘价 反推（AKShare 东财股票池不直接给股本），仅作近似。
     """
     rows: list[dict[str, Any]] = []
+    skipped_non_stock: list[str] = []
     for record in _records(frame):
         code = str(record.get("code") or "").zfill(6)
         if not code or not code.isdigit() or len(code) != 6:
+            continue
+        if not is_stock_code(code):
+            skipped_non_stock.append(code)
             continue
         old = existing.get(code, {})
         name = record.get("name") or old.get("name") or code
@@ -736,6 +749,12 @@ def _build_universe_rows(
                 "total_share": total_share,
                 "float_share": float_share,
             }
+        )
+    if skipped_non_stock:
+        # 北交所定向可转债（810xxx）与 B 股不是 A 股股票，不能进股票池
+        logger.info(
+            "股票池剔除非 A 股标的 %d 个：%s",
+            len(skipped_non_stock), ",".join(sorted(set(skipped_non_stock))[:10]),
         )
     return rows
 
@@ -978,8 +997,22 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
                 )
 
             rows = _build_universe_rows(frame, existing)
+            stale_non_stock = _non_stock_active_codes(existing)
             async with _db_scope(db) as session:
                 written = await upsert_rows(session, DimStock, rows, ["code"])
+                if stale_non_stock:
+                    await session.execute(
+                        update(DimStock)
+                        .where(
+                            DimStock.code.in_(stale_non_stock),
+                            DimStock.status == STATUS_NORMAL,
+                        )
+                        .values(status=STATUS_DELISTED)
+                    )
+                    logger.info(
+                        "股票池停用存量非 A 股标的 %d 个：%s",
+                        len(stale_non_stock), ",".join(stale_non_stock[:10]),
+                    )
                 await record_quality(session, dataset, report, _today_cn(), "ok")
 
             elapsed = int((time.perf_counter() - started) * 1000)

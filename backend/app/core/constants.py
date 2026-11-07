@@ -210,6 +210,25 @@ def is_index_code(code: str) -> bool:
     return code in INDEX_MAP
 
 
+def is_stock_code(code: str) -> bool:
+    """是否 A 股股票代码（股票池白名单）。
+
+    新浪/东财快照与交易所名单会混入非股票标的：北交所定向可转债
+    （810xxx，如"优机定转"）没有行情与股本，进入股票池后每个回补日都失败
+    并污染资金流。B 股（200xxx/900xxx）同理不属于 A 股股票池。
+    """
+    code = str(code).zfill(6)
+    if is_index_code(code):
+        return False
+    if code.startswith(("600", "601", "603", "605", "688", "689")):
+        return True
+    if code.startswith(("000", "001", "002", "003", "300", "301", "302")):
+        return True
+    if code.startswith("920") or code.startswith(("43", "83", "87")):
+        return True
+    return False
+
+
 def trading_year_range(start: date, end: date) -> list[int]:
     """返回需要建分区的年份列表（含两端）。"""
     return list(range(start.year, end.year + 1))
@@ -217,7 +236,8 @@ def trading_year_range(start: date, end: date) -> list[int]:
 
 __all__ = [
     "exchange_of", "board_of", "limit_pct_of", "limit_prices", "is_st_name",
-    "is_index_code", "trading_year_range", "LIMIT_PCT", "ST_LIMIT_PCT",
+    "is_index_code", "is_stock_code", "trading_year_range", "LIMIT_PCT",
+    "ST_LIMIT_PCT",
     "BOARD_MAIN", "BOARD_GEM", "BOARD_STAR", "BOARD_BSE", "INDEX_MAP",
     "BENCHMARK_INDEX", "SECTOR_INDUSTRY", "SECTOR_CONCEPT",
 ]
