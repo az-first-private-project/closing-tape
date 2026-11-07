@@ -25,11 +25,11 @@ function HitBadge({ hits, total }: { hits: number; total: number }) {
   const ratio = safeTotal > 0 ? hits / safeTotal : 0
   const tone =
     ratio >= 1
-      ? 'bg-primary text-primary-foreground border-primary'
+      ? 'bg-brass text-[#17140d] border-brass'
       : ratio >= 0.6
-        ? 'bg-primary/20 text-primary border-primary/50'
+        ? 'bg-brass/20 text-brass-strong border-brass/45 dark:text-brass'
         : ratio >= 0.35
-          ? 'bg-primary/10 text-primary border-primary/30'
+          ? 'bg-brass/10 text-brass-strong border-brass/30 dark:text-brass'
           : 'bg-muted text-muted-foreground border-border'
   const dots = '●'.repeat(hits) + '○'.repeat(Math.max(0, safeTotal - hits))
   return (
@@ -158,13 +158,13 @@ export default function ConsensusBoard({
     <section className="card p-4 sm:p-5" aria-labelledby="consensus-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="consensus-title" className="text-base font-semibold flex items-center gap-2">
+          <h2 id="consensus-title" className="flex items-center gap-2 text-[14px] font-semibold">
             多策略共识榜
-            <span className="text-[11px] font-normal px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">
+            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
               按命中策略数排序
             </span>
           </h2>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             同一只票被多个策略同时命中时，按命中策略数排序；命中策略可展开查看该票在各策略里的名次与指标。
           </p>
         </div>
@@ -176,7 +176,7 @@ export default function ConsensusBoard({
             onClick={() => setOpen((value) => !value)}
             aria-expanded={open}
             aria-controls="consensus-body"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted transition-colors"
+            className="btn btn-sm h-9"
           >
             {open ? '收起共识榜' : '展开共识榜'}
             <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -227,9 +227,9 @@ export default function ConsensusBoard({
             />
           ) : (
             <div className="overflow-x-auto -mx-1">
-              <table className="w-full min-w-[960px] text-sm">
+              <table className="w-full min-w-[960px] text-[12px]">
                 <thead>
-                  <tr className="text-[11px] text-muted-foreground border-b border-border">
+                  <tr className="border-b border-border/70 bg-muted/25 font-mono text-[10px] tracking-[0.05em] text-muted-foreground">
                     <th className="text-left font-medium py-2 pl-1 min-w-[10rem]">代码 / 名称</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[8.5rem]">命中数</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[6rem]">行业</th>
@@ -247,13 +247,13 @@ export default function ConsensusBoard({
                     return (
                       <Fragment key={item.code}>
                         <tr
-                          className={`border-b border-border/60 ${isExpanded ? 'bg-muted/30' : ''}`}
+                          className={`table-row border-b border-border/50 ${isExpanded ? 'bg-brass/[0.05]' : ''}`}
                         >
                           <td className="py-2.5 pl-1">
                             <div className="flex items-center gap-2 min-w-0">
                               <Link
                                 to={`/stocks/${item.code}`}
-                                className="font-mono text-xs text-primary hover:underline"
+                                className="font-mono text-[10px] text-brass-strong hover:underline dark:text-brass"
                               >
                                 {item.code}
                               </Link>
@@ -292,7 +292,7 @@ export default function ConsensusBoard({
                                   </span>
                                 ))}
                               </span>
-                              <span className="text-[11px] text-primary group-hover:underline">
+                              <span className="text-[11px] text-brass-strong group-hover:underline dark:text-brass">
                                 {isExpanded ? '收起指标' : '查看指标'}
                               </span>
                             </button>
@@ -331,7 +331,7 @@ export default function ConsensusBoard({
 
           {watchHint && <p className="text-[11px] text-warning">⚠ {watchHint}</p>}
 
-          <p className="text-[11px] text-muted-foreground">
+          <p className="border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
             各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。
             共识只说明多策略同时选中，不代表更强收益。30 日走势为未复权收盘价，按个股缓存 5 分钟。
           </p>

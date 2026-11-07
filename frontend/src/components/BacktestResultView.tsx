@@ -112,7 +112,7 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
             event.stopPropagation()
             navigate(stockLink(row.code))
           }}
-          className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+          className="inline-flex items-center gap-0.5 text-[11px] text-brass-strong hover:underline dark:text-brass"
         >
           在 K 线查看
           <ExternalLink className="h-3 w-3" />
@@ -165,7 +165,7 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
       <div>
         <button
           onClick={() => setShowTrades((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 text-sm font-medium hover:text-primary transition-colors"
+          className="inline-flex items-center gap-1.5 text-[13px] font-medium transition-colors hover:text-brass"
         >
           {showTrades ? '▾' : '▸'} 成交明细（{result.trades.length} 笔）
         </button>

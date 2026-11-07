@@ -1,5 +1,6 @@
 /**
  * 404 页面（契约第 7 节：`*` → 404）
+ * 视觉：把 404 当作一块行情读数牌——大号等宽数字 + 铜色刻度。
  */
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
@@ -10,31 +11,29 @@ export default function NotFoundPage() {
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      className="max-w-2xl mx-auto px-4 py-24 text-center space-y-6"
+      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+      className="mx-auto flex min-h-[68vh] max-w-2xl flex-col items-center justify-center px-4 py-16 text-center"
     >
-      <div className="flex justify-center">
-        <Compass className="w-16 h-16 text-primary/60" />
-      </div>
-      <div>
-        <p className="text-[28px] font-bold text-primary num">404</p>
-        <h1 className="mt-3 text-lg font-semibold">页面不存在</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          你访问的地址可能已迁移或输入有误。V5 已将旧量化页面统一到「盘后分析」。
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-        >
-          <Home className="w-4 h-4" />
+      <span className="grid h-12 w-12 place-items-center rounded-full border border-border/70 bg-muted/30">
+        <Compass className="h-5 w-5 text-muted-foreground/70" />
+      </span>
+
+      <p className="readout mt-6 text-[72px] leading-none text-foreground sm:text-[88px]">
+        4<span className="text-brass">0</span>4
+      </p>
+
+      <h1 className="mt-4 text-[15px] font-semibold">页面不存在</h1>
+      <p className="mt-2 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
+        你访问的地址可能已迁移或输入有误。V5 已将旧量化页面统一到「盘后分析」。
+      </p>
+
+      <div className="mt-7 flex flex-wrap items-center justify-center gap-2.5">
+        <Link to="/" className="btn btn-primary btn-sm">
+          <Home className="h-3.5 w-3.5" />
           返回首页
         </Link>
-        <Link
-          to="/dashboard"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm border border-border hover:bg-muted transition-colors"
-        >
-          <TrendingUp className="w-4 h-4" />
+        <Link to="/dashboard" className="btn btn-sm">
+          <TrendingUp className="h-3.5 w-3.5" />
           前往盘后分析
         </Link>
       </div>

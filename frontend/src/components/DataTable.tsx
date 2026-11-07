@@ -118,13 +118,13 @@ export default function DataTable<T>({
 
   return (
     <div className="card overflow-hidden">
-      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
-        <span className="text-xs text-muted-foreground">共 {rows.length} 条</span>
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 px-4 py-2.5">
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground">共 {rows.length} 条</span>
         {csvFilename && (
           <button
             onClick={handleExport}
             disabled={rows.length === 0}
-            className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-40"
+            className="btn btn-sm disabled:opacity-40"
             title="导出当前表格为 CSV"
           >
             <Download className="w-3.5 h-3.5" />
@@ -133,16 +133,16 @@ export default function DataTable<T>({
         )}
       </div>
 
-      <div className="overflow-x-auto overflow-y-auto" style={maxHeight ? { maxHeight } : undefined}>
+      <div className="overflow-x-auto overflow-y-auto scrollbar-thin" style={maxHeight ? { maxHeight } : undefined}>
         <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10">
-            <tr className="border-b border-border bg-muted/60">
+          <thead className="table-sticky">
+            <tr className="border-b border-border/80">
               {renderExpanded && <th className="w-8 px-2" aria-label="展开依据" />}
               {columns.map((column) => {
                 const active = sort?.key === column.key
                 const align = ALIGN_CLASS[column.align ?? 'left']
                 return (
-                  <th key={column.key} className={`px-4 py-2 text-xs font-medium text-muted-foreground ${align} ${column.className ?? ''}`}>
+                  <th key={column.key} className={`px-4 py-2.5 text-[10px] font-medium tracking-[0.06em] text-muted-foreground ${align} ${column.className ?? ''}`}>
                     {column.sortable ? (
                       <button
                         onClick={() => handleSort(column)}
@@ -172,7 +172,7 @@ export default function DataTable<T>({
               <tr>
                 <td
                   colSpan={columns.length + (renderExpanded ? 1 : 0)}
-                  className="px-4 py-10 text-center text-sm text-muted-foreground"
+                  className="px-4 py-12 text-center text-[12px] text-muted-foreground"
                 >
                   {emptyText}
                 </td>
@@ -185,9 +185,9 @@ export default function DataTable<T>({
                   <Fragment key={key}>
                     <tr
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
-                      className={`border-b border-border transition-colors ${
-                        onRowClick ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/20'
-                      } ${expanded ? 'bg-muted/30' : ''}`}
+                      className={`table-row border-b border-border/60 ${
+                        onRowClick ? 'cursor-pointer' : ''
+                      } ${expanded ? 'bg-brass/[0.05]' : ''}`}
                     >
                       {renderExpanded && (
                         <td className="px-2 py-2 text-center">
@@ -212,14 +212,14 @@ export default function DataTable<T>({
                         const align = ALIGN_CLASS[column.align ?? 'left']
                         const value = resolveValue(row, column)
                         return (
-                          <td key={column.key} className={`px-4 py-2 text-xs ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
+                          <td key={column.key} className={`px-4 py-[7px] text-[11.5px] ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
                             {column.render ? column.render(row, index) : value === null || value === undefined ? '—' : String(value)}
                           </td>
                         )
                       })}
                     </tr>
                     {renderExpanded && expanded && (
-                      <tr className="border-b border-border last:border-0 bg-muted/20">
+                      <tr className="border-b border-border/60 bg-muted/20">
                         <td colSpan={columns.length + 1} className="px-4 py-3">
                           {renderExpanded(row, index)}
                         </td>
@@ -233,7 +233,11 @@ export default function DataTable<T>({
         </table>
       </div>
 
-      {footer && <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">{footer}</div>}
+      {footer && (
+        <div className="border-t border-border/70 px-4 py-2.5 text-[10px] tracking-wide text-muted-foreground">
+          {footer}
+        </div>
+      )}
     </div>
   )
 }

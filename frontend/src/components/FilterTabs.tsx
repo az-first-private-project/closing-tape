@@ -2,6 +2,9 @@
  * 来源筛选标签（契约 2 · /sources）
  * 前端不再写死来源，改为读取后端 /api/v1/sources；
  * 注意：后端 /sources 尚未上线时使用临时兜底列表，接口可用后自动切换为后端数据。
+ *
+ * 视觉：编辑部的「索引标签」——标签文字 + 铜色滑动下划线，
+ * 比整块实心药丸更克制，也不会和数据红绿抢色。
  */
 import { motion } from 'framer-motion'
 import { useSources } from '../hooks/useArticles'
@@ -30,31 +33,38 @@ export default function FilterTabs({ active, onChange }: FilterTabsProps) {
   ]
 
   return (
-    <div className="border-b border-border bg-card">
-      <div className="max-w-7xl mx-auto px-4">
-        <div className="flex gap-1 py-2 overflow-x-auto scrollbar-thin">
-          {tabs.map((source) => (
-            <button
-              key={source.id ?? 'all'}
-              onClick={() => onChange(source.id)}
-              className={cn(
-                'relative px-4 py-2 text-sm font-medium rounded-full transition-colors',
-                'hover:text-foreground whitespace-nowrap',
-                active === source.id
-                  ? 'text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-secondary',
-              )}
-            >
-              {active === source.id && (
-                <motion.div
-                  layoutId="filter-indicator"
-                  className="absolute inset-0 bg-primary rounded-full"
-                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                />
-              )}
-              <span className="relative z-10">{source.name}</span>
-            </button>
-          ))}
+    <div className="border-b border-border/70">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="fade-right flex items-stretch gap-1 overflow-x-auto scrollbar-thin">
+          <span className="hidden shrink-0 items-center pr-3 font-mono text-[10px] tracking-[0.18em] text-muted-foreground/70 sm:flex">
+            SOURCE
+          </span>
+
+          {tabs.map((source) => {
+            const isActive = active === source.id
+            return (
+              <button
+                key={source.id ?? 'all'}
+                onClick={() => onChange(source.id)}
+                aria-pressed={isActive}
+                className={cn(
+                  'relative shrink-0 whitespace-nowrap px-3.5 py-3 text-[13px] font-medium',
+                  'transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {source.name}
+                {isActive && (
+                  <motion.span
+                    layoutId="filter-indicator"
+                    aria-hidden="true"
+                    className="absolute inset-x-2.5 -bottom-px h-[2px] rounded-full bg-brass"
+                    transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+                  />
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>

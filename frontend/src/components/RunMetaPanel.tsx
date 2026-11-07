@@ -109,7 +109,7 @@ export default function RunMetaPanel({
           <button
             onClick={onForceRefresh}
             disabled={refreshing}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-muted transition-colors disabled:opacity-50"
+            className="btn btn-sm"
             title="忽略缓存重新计算（force_refresh=true）"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -122,7 +122,7 @@ export default function RunMetaPanel({
       <div className="flex items-center gap-2">
         <GitBranch className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
         <span className="text-[11px] text-muted-foreground shrink-0">run_id</span>
-        <code className="text-xs font-mono bg-muted px-2 py-1 rounded truncate" title={run.run_id}>
+        <code className="truncate rounded border border-border/60 bg-muted/50 px-2 py-1 font-mono text-[11px]" title={run.run_id}>
           {run.run_id.length > SHORT_RUN_ID_LENGTH ? `…${run.run_id.slice(-SHORT_RUN_ID_LENGTH)}` : run.run_id}
         </code>
         <button
@@ -151,7 +151,7 @@ export default function RunMetaPanel({
           {paramEntries.map(([key, value]) => (
             <span
               key={key}
-              className="text-[11px] px-2 py-0.5 rounded bg-muted font-mono"
+              className="rounded border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-[9.5px] tracking-wide"
               title={`${key} = ${formatParamValue(value)}`}
             >
               {key}=<span className="text-foreground">{formatParamValue(value)}</span>

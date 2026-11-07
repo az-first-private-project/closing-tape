@@ -116,7 +116,7 @@ function Segment({
     <div
       role="group"
       aria-label={label}
-      className="inline-flex overflow-hidden rounded-lg border border-border"
+      className="inline-flex overflow-hidden rounded-lg border border-border/70 bg-muted/25 p-0.5"
     >
       {options.map((option) => (
         <button
@@ -124,10 +124,10 @@ function Segment({
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`px-2.5 py-1 text-[11px] transition-colors ${
+          className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
             value === option.value
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-muted'
+              ? 'bg-card text-brass-strong shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70 dark:text-brass'
+              : 'text-muted-foreground hover:text-foreground'
           }`}
         >
           {option.label}
@@ -269,15 +269,15 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
   return (
     <div className="card p-4">
       {/* ========== 标题栏 + 维度切换 ========== */}
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="font-semibold">
-            🧱 板块热力图
-            <span className="ml-2 text-[11px] font-normal text-muted-foreground">
-              面积 = {capMode ? '市值' : '等权'} · 色阶 ±5% 饱和
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-[15px] font-semibold tracking-[-0.01em]">板块热力图</h3>
+            <span className="font-mono text-[10px] tracking-[0.12em] text-muted-foreground">
+              面积 = {capMode ? '市值' : '等权'} · ±5% 饱和
             </span>
-          </h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground num">
+          </div>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground/85">
             {typeLabel} {sectorsQuery.data?.count ?? items.length} 个
             {capMode && ` · 市值覆盖 ${capCovered}/${items.length}`}
             {` · 成分合计 ${memberTotal} 家`}
@@ -307,7 +307,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
             <button
               type="button"
               onClick={() => setShowAll((current) => !current)}
-              className="rounded-lg border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted"
+              className="btn btn-sm"
             >
               {showAll ? '只看前 80' : '显示全部'}
             </button>
@@ -319,7 +319,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
       </div>
 
       {autoFallback && (
-        <p className="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-[11px] text-warning">
+        <p className="mb-2 rounded-md border border-warning/30 bg-warning/[0.07] px-2 py-1 text-[10px] text-warning">
           当前板块无市值数据，已自动回退等权面积（{items.length} 个板块）。
         </p>
       )}
@@ -368,7 +368,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
                       ? `${cell.name}，点击显示全部`
                       : `${cell.name} ${pctLabel(cell.pct_chg, 2)}`
                   }
-                  className="absolute overflow-hidden rounded-[2px] border border-card text-left transition-shadow hover:z-10 hover:ring-1 hover:ring-primary focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-primary"
+                  className="absolute overflow-hidden rounded-[3px] border border-card/80 text-left transition-shadow duration-200 hover:z-10 hover:ring-1 hover:ring-brass/90 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-brass"
                   style={{
                     left: rect.x,
                     top: rect.y,
@@ -395,8 +395,8 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
                 >
                   {canLabel && (
                     <span className="flex h-full flex-col justify-between gap-0.5 p-1">
-                      <span className="truncate text-[11px] leading-tight">{cell.name}</span>
-                      <span className="text-xs font-semibold leading-tight num">
+                      <span className="truncate text-[10.5px] leading-tight opacity-90">{cell.name}</span>
+                      <span className="num text-[11px] font-semibold leading-tight">
                         {pctLabel(cell.pct_chg)}
                       </span>
                     </span>
@@ -407,7 +407,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
 
             {hoveredCell && (
               <div
-                className="pointer-events-none absolute z-20 w-[264px] rounded-lg border border-border bg-card p-2.5 text-xs shadow-xl"
+                className="pointer-events-none absolute z-20 w-[264px] rounded-xl border border-border/80 bg-card/95 p-3 text-xs shadow-[var(--shadow-3)] backdrop-blur-md"
                 style={{ left: tooltipLeft, top: tooltipTop }}
               >
                 {hoveredCell.sector ? (
@@ -434,19 +434,21 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
       </motion.div>
 
       {/* ========== 图例 ========== */}
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <div className="flex items-center gap-1.5">
-          <span className="text-down">↓ 跌</span>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span className="text-down">跌</span>
           <span
-            className="h-2 w-24 rounded-full border border-border"
+            className="h-1.5 w-24 rounded-full ring-1 ring-border/60"
             style={{
               background: `linear-gradient(90deg, ${trendHeat(-5).background}, ${trendHeat(-2.5).background}, ${trendHeat(0).background}, ${trendHeat(2.5).background}, ${trendHeat(5).background})`,
             }}
           />
-          <span className="text-up">涨 ↑</span>
-          <span>色阶 ±5% 饱和</span>
+          <span className="text-up">涨</span>
+          <span className="text-muted-foreground/70">色阶 ±5% 饱和</span>
         </div>
-        <span>面积 = {capMode ? '成分股市值合计' : '等权（每板块同面积）'} · 点击板块看详情</span>
+        <span className="text-muted-foreground/70">
+          面积 = {capMode ? '成分股市值合计' : '等权（每板块同面积）'} · 点击板块看详情
+        </span>
       </div>
 
       {selected &&
@@ -533,29 +535,32 @@ function SectorDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`${sector.sector_name} 板块详情`}
-        className="relative flex h-full w-full max-w-md flex-col overflow-hidden border-l border-border bg-card shadow-2xl"
+        className="relative flex h-full w-full max-w-md flex-col overflow-hidden border-l border-border bg-card/98 shadow-[var(--shadow-3)] backdrop-blur-md"
       >
-        <header className="flex items-start justify-between gap-3 border-b border-border p-4">
-          <div>
-            <h3 className="text-lg font-semibold">
-              {sector.sector_name}
-              <span className="ml-2 text-xs font-normal text-muted-foreground num">
-                {sector.sector_code}
-              </span>
-            </h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {sector.sector_type === 'concept' ? '概念板块' : '行业板块'} · 交易日{' '}
-              {detail?.trade_date ?? tradeDate ?? '最新'}
-            </p>
+        <header className="border-b border-border/70 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <span className="eyebrow">Sector Detail</span>
+              <h3 className="mt-1.5 flex items-baseline gap-2 text-[17px] font-semibold tracking-[-0.015em]">
+                {sector.sector_name}
+                <span className="num text-[10px] font-normal text-muted-foreground">
+                  {sector.sector_code}
+                </span>
+              </h3>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {sector.sector_type === 'concept' ? '概念板块' : '行业板块'} · 交易日{' '}
+                {detail?.trade_date ?? tradeDate ?? '最新'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="关闭"
+              className="rounded-lg border border-transparent p-1.5 text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
         </header>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -611,17 +616,26 @@ function SectorDrawer({
               </section>
 
               <section>
-                <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">三面评分（0–10）</h4>
+                <h4 className="mb-2 font-mono text-[10px] tracking-[0.14em] text-muted-foreground">
+                  三面评分（0–10）
+                </h4>
                 <div className="grid grid-cols-4 gap-2 text-center">
                   {[
                     { label: '技术', value: detail.scores.technical },
                     { label: '情绪', value: detail.scores.sentiment },
                     { label: '消息', value: detail.scores.news },
                     { label: '综合', value: detail.scores.composite },
-                  ].map((score) => (
-                    <div key={score.label} className="rounded-lg border border-border p-2">
-                      <p className="text-[11px] text-muted-foreground">{score.label}</p>
-                      <p className="mt-0.5 text-sm font-semibold num">
+                  ].map((score, index) => (
+                    <div
+                      key={score.label}
+                      className={`rounded-lg border p-2.5 ${
+                        index === 3
+                          ? 'border-brass/40 bg-brass/[0.06]'
+                          : 'border-border/60 bg-muted/25'
+                      }`}
+                    >
+                      <p className="text-[10px] text-muted-foreground">{score.label}</p>
+                      <p className="num mt-1 text-[13px] font-semibold">
                         {score.value === null ? EMPTY_TEXT : score.value.toFixed(1)}
                       </p>
                     </div>
@@ -662,9 +676,9 @@ function SectorDrawer({
 
 function Stat({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-2">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-0.5 text-sm font-medium num">{children}</p>
+    <div className="rounded-lg border border-border/60 bg-muted/25 px-2.5 py-2">
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="num mt-1 text-[12px] font-medium">{children}</p>
     </div>
   )
 }
@@ -673,15 +687,18 @@ function LeaderList({ title, leaders }: { title: string; leaders: LeaderStock[] 
   if (!leaders.length) return null
   return (
     <section>
-      <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">{title}</h4>
-      <ul className="space-y-1">
+      <h4 className="mb-1.5 font-mono text-[10px] tracking-[0.14em] text-muted-foreground">{title}</h4>
+      <ul>
         {leaders.slice(0, 5).map((leader) => (
-          <li key={leader.code} className="flex items-center justify-between gap-2 text-sm">
+          <li
+            key={leader.code}
+            className="flex items-center justify-between gap-2 rounded-md px-1.5 py-1.5 text-[12px] transition-colors hover:bg-muted/50"
+          >
             <span className="min-w-0 truncate">
               {leader.name}
-              <span className="ml-1.5 text-[11px] text-muted-foreground num">{leader.code}</span>
+              <span className="num ml-1.5 text-[10px] text-muted-foreground">{leader.code}</span>
             </span>
-            <span className={`shrink-0 num ${pctColor(leader.change_pct)}`}>
+            <span className={`num shrink-0 ${pctColor(leader.change_pct)}`}>
               {fmtPct(leader.change_pct, 1)}
             </span>
           </li>

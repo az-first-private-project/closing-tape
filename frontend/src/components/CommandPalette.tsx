@@ -86,7 +86,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
     <>
       {splitHighlight(text, query).map((part, index) =>
         part.match ? (
-          <mark key={index} className="rounded bg-warning/25 px-0.5 text-foreground">
+          <mark key={index} className="rounded bg-brass/20 px-0.5 text-foreground">
             {part.text}
           </mark>
         ) : (
@@ -353,7 +353,7 @@ export default function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-start justify-center bg-background/80 px-4 pt-[12vh] backdrop-blur-sm"
+      className="fixed inset-0 z-[90] flex items-start justify-center bg-background/70 px-4 pt-[12vh] backdrop-blur-md"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close()
       }}
@@ -363,11 +363,15 @@ export default function CommandPalette() {
         aria-modal="true"
         aria-label="命令面板"
         data-command-palette="true"
-        className="w-full max-w-xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        className="relative w-full max-w-xl overflow-hidden rounded-2xl border border-border/90 bg-card shadow-[var(--shadow-3)]"
         onKeyDown={handleKeyDown}
       >
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-brass/70 via-brass/25 to-transparent"
+        />
+        <div className="flex items-center gap-2.5 border-b border-border/70 px-4 py-3.5 transition-colors focus-within:border-brass/50">
+          <Search className="h-4 w-4 shrink-0 text-brass" />
           <input
             ref={inputRef}
             value={query}
@@ -381,7 +385,7 @@ export default function CommandPalette() {
             aria-controls="command-palette-results"
             aria-activedescendant={items[activeIndex] ? `palette-item-${activeIndex}` : undefined}
             data-palette-input="true"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none focus-visible:outline-none placeholder:text-muted-foreground"
           />
           {query && (
             <button
@@ -396,8 +400,8 @@ export default function CommandPalette() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <kbd className="hidden rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline">
-            Esc
+          <kbd className="hidden rounded border border-border/80 bg-muted/40 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-muted-foreground sm:inline">
+            ESC
           </kbd>
         </div>
 
@@ -411,7 +415,7 @@ export default function CommandPalette() {
             <section key={group.key} role="group" aria-labelledby={`palette-group-${group.key}`}>
               <div
                 id={`palette-group-${group.key}`}
-                className="flex items-center gap-1 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                className="flex items-center gap-1.5 px-3 pb-1 pt-3 font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80"
               >
                 {group.key === 'recent' && <Clock className="h-3 w-3" />}
                 {GROUP_LABELS[group.key]}
@@ -431,11 +435,19 @@ export default function CommandPalette() {
                     onMouseEnter={() => setActiveIndex(flatIndex)}
                     onClick={() => choose(item)}
                     className={cn(
-                      'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
-                      isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60',
+                      'relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors duration-150',
+                      isActive
+                        ? 'bg-brass/[0.09] text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/50',
                     )}
                   >
-                    <Icon className="h-4 w-4 shrink-0" />
+                    {isActive && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-y-1.5 left-0 w-[2px] rounded-full bg-brass"
+                      />
+                    )}
+                    <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brass' : ''}`} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm">
                         <Highlight text={item.label} query={group.key === 'recent' ? '' : trimmedQuery} />
@@ -463,11 +475,11 @@ export default function CommandPalette() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
-          <span><kbd className="rounded border border-border px-1">↑</kbd> <kbd className="rounded border border-border px-1">↓</kbd> 选择</span>
-          <span><kbd className="rounded border border-border px-1">Tab</kbd> 切换分组</span>
-          <span><kbd className="rounded border border-border px-1">↵</kbd> 打开</span>
-          <span><kbd className="rounded border border-border px-1">Esc</kbd> 关闭</span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/70 bg-muted/25 px-4 py-2 text-[9px] text-muted-foreground">
+          <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">↑</kbd> <kbd className="rounded border border-border/80 bg-card px-1 font-mono">↓</kbd> 选择</span>
+          <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">Tab</kbd> 切换分组</span>
+          <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">↵</kbd> 打开</span>
+          <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">Esc</kbd> 关闭</span>
           <span className="ml-auto hidden sm:inline">Ctrl/⌘ K 随时唤起</span>
         </div>
       </div>

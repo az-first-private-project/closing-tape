@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle2, SearchX } from 'lucide-react'
+import { CheckCircle2, SearchX, Loader2 } from 'lucide-react'
 import StatsBar from '../components/StatsBar'
 import FilterTabs from '../components/FilterTabs'
 import ArticleCard from '../components/ArticleCard'
@@ -50,37 +50,58 @@ export default function HomePage() {
         }}
       />
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* 自动抓取进度（旧新闻保持可见） */}
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* ===== 状态条 ===== */}
         {crawling && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm text-primary">
-            <span className="skeleton h-4 w-4 shrink-0 rounded-full" aria-hidden="true" />
+          <div className="mb-5 flex items-center gap-2.5 rounded-lg border border-brass/30 bg-brass/[0.06] px-4 py-2.5 text-[12px] text-brass-strong">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
             正在搜索最新财经新闻…已有新闻可先浏览
           </div>
         )}
         {!crawling && notice && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-success/30 bg-success/5 px-4 py-2.5 text-sm text-success">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <div className="mb-5 flex items-center gap-2.5 rounded-lg border border-success/30 bg-success/[0.06] px-4 py-2.5 text-[12px] text-success">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
             {notice}
           </div>
         )}
 
-        {/* 搜索提示 */}
-        {isSearching && (
-          <div className="mb-4 text-sm text-muted-foreground">
-            搜索「{searchQuery}」的结果
+        {/* ===== 列表刊头 ===== */}
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3 border-b border-border/60 pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span aria-hidden="true" className="h-px w-5 bg-brass/70" />
+              <span className="eyebrow">{isSearching ? 'Search Result' : 'Latest Wire'}</span>
+            </div>
+            <h2 className="mt-2 text-[19px] font-semibold tracking-[-0.02em]">
+              {isSearching ? (
+                <>
+                  搜索「<span className="text-brass-strong dark:text-brass">{searchQuery}</span>」
+                </>
+              ) : (
+                '最新情报'
+              )}
+            </h2>
           </div>
-        )}
+
+          <div className="flex items-center gap-3 pb-0.5 font-mono text-[11px] text-muted-foreground">
+            {data && <span>{data.total.toLocaleString()} 条</span>}
+            {data && data.total_pages > 1 && (
+              <span className="text-muted-foreground/60">
+                P{String(data.page).padStart(2, '0')}/{String(data.total_pages).padStart(2, '0')}
+              </span>
+            )}
+          </div>
+        </div>
 
         {/* 加载状态 — 骨架占位始终参与布局，超过 150ms 才可见，避免闪烁与跳变 */}
         {isLoading && (
           <div
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 lg:gap-5"
             aria-busy="true"
             style={{ visibility: showListSkeleton ? 'visible' : 'hidden' }}
           >
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="skeleton h-56 rounded-xl" />
+              <div key={i} className="skeleton h-56 rounded-[14px]" />
             ))}
           </div>
         )}
@@ -93,21 +114,23 @@ export default function HomePage() {
         {/* 空状态 */}
         {!isLoading && !isError && data && data.items.length === 0 && (
           crawling ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" aria-busy="true">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 lg:gap-5" aria-busy="true">
               {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="skeleton h-56 rounded-xl" />
+                <div key={i} className="skeleton h-56 rounded-[14px]" />
               ))}
               <p className="col-span-full text-center text-sm text-muted-foreground">
                 正在搜索最新财经新闻…首次抓取通常需要几秒钟
               </p>
             </div>
           ) : (
-            <div className="text-center py-20">
-              <SearchX className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
-              <p className="text-muted-foreground text-lg">
+            <div className="card flex flex-col items-center gap-3 px-6 py-20 text-center">
+              <span className="grid h-12 w-12 place-items-center rounded-full border border-border/80 bg-muted/40">
+                <SearchX className="h-5 w-5 text-muted-foreground/60" />
+              </span>
+              <p className="mt-1 text-[15px] font-medium text-foreground">
                 {isSearching ? `未找到与「${searchQuery}」相关的新闻` : '暂无新闻数据'}
               </p>
-              <p className="text-muted-foreground/60 text-sm mt-2">
+              <p className="max-w-sm text-[12px] leading-relaxed text-muted-foreground">
                 {isSearching ? '请尝试其他关键词' : '新闻抓取失败或被限流，刷新页面可重试'}
               </p>
             </div>
@@ -123,10 +146,15 @@ export default function HomePage() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+              className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 lg:gap-5"
             >
               {data.items.map((article, index) => (
-                <ArticleCard key={article.id} article={article} index={index} />
+                <ArticleCard
+                  key={article.id}
+                  article={article}
+                  index={index}
+                  featured={index === 0 && data.items.length >= 4}
+                />
               ))}
             </motion.div>
           </AnimatePresence>

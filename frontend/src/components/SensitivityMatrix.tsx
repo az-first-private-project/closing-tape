@@ -90,7 +90,7 @@ function metricHeat(key: MetricKey, metrics: BacktestGridMetrics): HeatStyle {
 
 const STATUS_META: Record<string, { label: string; dot: string; text: string }> = {
   queued: { label: '排队', dot: 'bg-muted-foreground/50', text: 'text-muted-foreground' },
-  running: { label: '运行中', dot: 'bg-primary animate-pulse', text: 'text-primary' },
+  running: { label: '运行中', dot: 'bg-brass animate-pulse', text: 'text-brass-strong dark:text-brass' },
   success: { label: '完成', dot: 'bg-up', text: 'text-up' },
   failed: { label: '失败', dot: 'bg-alert', text: 'text-alert' },
 }
@@ -124,7 +124,7 @@ function AxisPicker({
               aria-pressed={active}
               className={`px-2 py-1 rounded-md border text-xs num transition-colors ${
                 active
-                  ? 'border-primary bg-primary/10 text-primary'
+                  ? 'border-brass/60 bg-brass/[0.08] text-brass-strong dark:text-brass'
                   : 'border-border text-muted-foreground hover:bg-muted'
               }`}
             >
@@ -277,7 +277,7 @@ export default function SensitivityMatrix({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-        <LayoutGrid className="w-4 h-4 text-primary" />
+        <LayoutGrid className="h-3.5 w-3.5 text-brass" />
         参数敏感性矩阵
         <span className="text-[11px] font-normal text-muted-foreground">
           每格独立回测（同一引擎），用于观察稳健性；策略参数沿用左侧面板当前值
@@ -423,7 +423,7 @@ export default function SensitivityMatrix({
                     aria-pressed={metric === option.key}
                     className={`px-2 py-1 rounded-md border text-[11px] transition-colors ${
                       metric === option.key
-                        ? 'border-primary bg-primary/10 text-primary'
+                        ? 'border-brass/60 bg-brass/[0.08] text-brass-strong dark:text-brass'
                         : 'border-border text-muted-foreground hover:bg-muted'
                     }`}
                   >

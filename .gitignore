@@ -63,8 +63,13 @@ scrapy-output/*.csv
 # ==================== Node / Vite (前端) ====================
 node_modules/
 dist/
+# 本地评审用的静态演示包（含打包产物，不入库）
+dist-preview/
 .vite/
 *.tsbuildinfo
+
+# ==================== 工作区数据 ====================
+.workbuddy/
 
 # ==================== Docker ====================
 .docker/

@@ -25,7 +25,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     }
     if (part.startsWith('`') && part.endsWith('`')) {
       return (
-        <code key={key} className="px-1 py-0.5 rounded bg-muted font-mono text-[0.85em]">
+        <code key={key} className="rounded border border-border/60 bg-muted/60 px-1 py-0.5 font-mono text-[0.82em] text-foreground">
           {part.slice(1, -1)}
         </code>
       )
@@ -62,7 +62,7 @@ export default function Markdown({ text, className = '' }: MarkdownProps) {
     blocks.push(
       <Tag
         key={`list-${blockIndex++}`}
-        className={`${listOrdered ? 'list-decimal' : 'list-disc'} list-inside space-y-1 my-2 text-sm text-muted-foreground`}
+        className={`${listOrdered ? 'list-decimal' : 'list-disc'} my-2.5 space-y-1.5 pl-4 text-[13px] leading-relaxed text-muted-foreground marker:text-brass/60`}
       >
         {items.map((item, index) => (
           <li key={index}>{renderInline(item, `li-${blockIndex}-${index}`)}</li>
@@ -76,7 +76,7 @@ export default function Markdown({ text, className = '' }: MarkdownProps) {
     const content = paragraphLines.join(' ')
     paragraphLines = []
     blocks.push(
-      <p key={`p-${blockIndex++}`} className="text-sm leading-relaxed text-muted-foreground my-2">
+      <p key={`p-${blockIndex++}`} className="my-2 text-[13px] leading-[1.85] text-muted-foreground">
         {renderInline(content, `p-${blockIndex}`)}
       </p>,
     )
@@ -101,10 +101,10 @@ export default function Markdown({ text, className = '' }: MarkdownProps) {
       const content = heading[2]
       const className =
         level === 1
-          ? 'text-lg font-bold mt-5 mb-2'
+          ? 'mt-6 mb-2 text-[16px] font-semibold tracking-[-0.015em] text-foreground'
           : level === 2
-            ? 'text-sm font-bold mt-5 mb-2'
-            : 'text-xs font-semibold mt-4 mb-1.5'
+            ? 'mt-5 mb-1.5 text-[13px] font-semibold text-foreground'
+            : 'mt-4 mb-1 text-[11px] font-semibold tracking-[0.04em] text-muted-foreground'
       const key = `h-${blockIndex++}`
       if (level === 1) blocks.push(<h2 key={key} className={className}>{renderInline(content, key)}</h2>)
       else if (level === 2) blocks.push(<h3 key={key} className={className}>{renderInline(content, key)}</h3>)
@@ -116,7 +116,7 @@ export default function Markdown({ text, className = '' }: MarkdownProps) {
     if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
       flushParagraph()
       flushList()
-      blocks.push(<hr key={`hr-${blockIndex++}`} className="my-4 border-border" />)
+      blocks.push(<hr key={`hr-${blockIndex++}`} className="my-5 border-border/60" />)
       continue
     }
 
@@ -128,7 +128,7 @@ export default function Markdown({ text, className = '' }: MarkdownProps) {
       blocks.push(
         <blockquote
           key={`quote-${blockIndex++}`}
-          className="border-l-2 border-primary pl-3 my-2 text-sm text-muted-foreground italic"
+          className="my-3 border-l-2 border-brass/60 pl-3.5 text-[13px] italic leading-relaxed text-muted-foreground"
         >
           {renderInline(quote[1], `quote-${blockIndex}`)}
         </blockquote>,

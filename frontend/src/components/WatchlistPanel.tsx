@@ -59,21 +59,21 @@ export default function WatchlistPanel({
     <section className="card p-4 sm:p-5" aria-labelledby="watchlist-panel-title">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 id="watchlist-panel-title" className="text-base font-semibold flex items-center gap-2">
-            <Star className="w-4 h-4 text-warning" aria-hidden="true" />
+          <h2 id="watchlist-panel-title" className="flex items-center gap-2 text-[14px] font-semibold">
+            <Star className="h-3.5 w-3.5 text-brass" aria-hidden="true" />
             自选股
-            <span className="text-[11px] font-normal px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground num">
+            <span className="num rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
               {watchlist.length}/{MAX_WATCHLIST}
             </span>
           </h2>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="mt-1 text-[11px] text-muted-foreground">
             近 {days} 个交易日的策略命中；名单保存在本机缓存并同步到服务器。
           </p>
         </div>
         {(showAllLink || compact) && (
           <Link
             to="/watchlist"
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+            className="inline-flex items-center gap-1 rounded text-[11px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
           >
             查看全部提醒
             <ArrowRight className="w-3.5 h-3.5" />
@@ -99,26 +99,26 @@ export default function WatchlistPanel({
           还没有自选股。可在个股详情页、共识榜或盘后分析的龙头股旁点击星标加入。
         </p>
       ) : (
-        <ul className="mt-3 space-y-2">
+        <ul className={`mt-3 grid gap-1.5 ${compact ? 'sm:grid-cols-2' : ''}`}>
           {visible.map((code) => {
             const codeHits = hits.filter((hit) => hit.code === code)
             const latest = codeHits[0]
             return (
               <li
                 key={code}
-                className="flex items-start justify-between gap-3 rounded-lg border border-border bg-background/60 p-2.5"
+                className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-2 transition-colors hover:border-brass/30"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <Link
                       to={`/stocks/${code}`}
-                      className="font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                      className="rounded font-mono text-[10px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
                     >
                       {code}
                     </Link>
-                    <span className="text-sm font-medium truncate">{latest?.name ?? '—'}</span>
+                    <span className="truncate text-[12.5px] font-medium">{latest?.name ?? '—'}</span>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
                     {latest ? (
                       <>
                         <span className="font-mono uppercase text-foreground">{latest.algo_code}</span>
@@ -140,8 +140,8 @@ export default function WatchlistPanel({
                   type="button"
                   onClick={() => handleRemove(code)}
                   aria-label={`从自选中移除 ${latest?.name ?? code}`}
-                  className={`shrink-0 rounded-md border border-border p-1.5 text-muted-foreground transition-colors hover:border-alert/50 hover:bg-alert/10 hover:text-alert focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    compact ? '' : 'inline-flex items-center gap-1 px-2 text-[11px]'
+                  className={`shrink-0 rounded-md border border-border/70 p-1.5 text-muted-foreground transition-colors hover:border-alert/40 hover:bg-alert/[0.08] hover:text-alert focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    compact ? '' : 'inline-flex items-center gap-1 px-2 text-[10px]'
                   }`}
                 >
                   <Trash2 className="w-3.5 h-3.5" />

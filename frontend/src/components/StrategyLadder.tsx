@@ -95,13 +95,13 @@ export default function StrategyLadder({
     <section className="card p-4 sm:p-5 space-y-4" aria-labelledby="ladder-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="ladder-title" className="text-base font-semibold flex items-center gap-2">
+          <h2 id="ladder-title" className="flex items-center gap-2 text-[14px] font-semibold">
             策略天梯
-            <span className="text-[11px] font-normal px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">
+            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
               信号级 {horizon} 日收益
             </span>
           </h2>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             T 日收盘出信号 → T+1 开盘买入，含复权；超额对比沪深 300（{data?.benchmark ?? 'sh000300'}）。
             点击行选择下方策略。
           </p>
@@ -109,7 +109,7 @@ export default function StrategyLadder({
 
         <div className="flex flex-wrap items-center gap-2">
           <div
-            className="inline-flex rounded-lg border border-border overflow-hidden"
+            className="inline-flex overflow-hidden rounded-lg border border-border/70 bg-muted/25 p-0.5"
             role="group"
             aria-label="回看窗口"
           >
@@ -119,10 +119,10 @@ export default function StrategyLadder({
                 type="button"
                 aria-pressed={window === value}
                 onClick={() => setWindow(value)}
-                className={`px-2.5 py-1.5 text-xs transition-colors ${
+                className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
                   window === value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-background text-muted-foreground hover:bg-muted'
+                    ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
+                    : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
                 {WINDOW_LABEL[value]}
@@ -131,7 +131,7 @@ export default function StrategyLadder({
           </div>
 
           <div
-            className="inline-flex rounded-lg border border-border overflow-hidden"
+            className="inline-flex overflow-hidden rounded-lg border border-border/70 bg-muted/25 p-0.5"
             role="group"
             aria-label="收益周期"
           >
@@ -141,10 +141,10 @@ export default function StrategyLadder({
                 type="button"
                 aria-pressed={horizon === value}
                 onClick={() => setHorizon(value)}
-                className={`px-2.5 py-1.5 text-xs transition-colors ${
+                className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
                   horizon === value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-background text-muted-foreground hover:bg-muted'
+                    ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
+                    : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
                 {value} 日
@@ -170,7 +170,7 @@ export default function StrategyLadder({
       )}
 
       {query.isLoading && !data ? (
-        <p className="text-sm text-muted-foreground py-8 text-center">正在加载信号前瞻统计…</p>
+        <p className="py-8 text-center text-[12px] text-muted-foreground">正在加载信号前瞻统计…</p>
       ) : query.isError ? (
         <ErrorState title="策略天梯加载失败" error={query.error} onRetry={() => query.refetch()} />
       ) : items.length === 0 ? (
@@ -180,15 +180,15 @@ export default function StrategyLadder({
         />
       ) : (
         <div className="overflow-x-auto -mx-1">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[760px] text-[12px]">
             <thead>
-              <tr className="text-[11px] text-muted-foreground border-b border-border">
+              <tr className="border-b border-border/70 bg-muted/25 font-mono text-[10px] tracking-[0.05em] text-muted-foreground">
                 <th className="text-left font-medium py-2 pl-1 w-14">排名</th>
                 <th className="text-left font-medium py-2 min-w-[10rem]">策略</th>
                 {HORIZONS.map((value) => (
                   <th
                     key={value}
-                    className={`text-right font-medium py-2 px-2 ${horizon === value ? 'text-primary' : ''}`}
+                    className={`text-right font-medium py-2 px-2 ${horizon === value ? 'text-brass' : ''}`}
                   >
                     {value} 日
                   </th>
@@ -213,8 +213,8 @@ export default function StrategyLadder({
                         onSelectAlgo(item.algo_code)
                       }
                     }}
-                    className={`border-b border-border/60 cursor-pointer transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                      selectedCode === item.algo_code ? 'bg-primary/5' : ''
+                    className={`table-row cursor-pointer border-b border-border/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brass ${
+                      selectedCode === item.algo_code ? 'bg-brass/[0.06]' : ''
                     }`}
                   >
                     <td className="py-2.5 pl-1">{rankBadge(item)}</td>
@@ -290,7 +290,7 @@ export default function StrategyLadder({
         </div>
       )}
 
-      <p className="text-[11px] text-muted-foreground">
+      <p className="border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
         5/10/20 日均按各自的成熟窗口统计；停牌或一字板导致 T+1 无法成交的信号不计入胜率与均值。
         样本不足 30 条时排序仅作参考。
       </p>

@@ -22,50 +22,78 @@ export default function AboutPage() {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
-      className="max-w-2xl mx-auto px-4 py-8"
+      className="mx-auto max-w-3xl px-4 py-10 sm:px-6"
     >
-      <h1 className="text-[28px] font-bold mb-6">📊 关于 GFNA</h1>
+      {/* 刊头 */}
+      <div className="rise">
+        <div className="flex items-center gap-2.5">
+          <span aria-hidden="true" className="h-px w-6 bg-brass" />
+          <span className="eyebrow">About · V5</span>
+        </div>
+        <h1 className="page-title mt-2.5">关于 GFNA</h1>
+        <p className="lede mt-3 max-w-xl">
+          一个只读本地数据库的 A 股盘后研究终端：新闻聚合、行情复盘、量化选股与回测。
+        </p>
+      </div>
 
-      <div className="space-y-6">
-        <section className="card p-6">
-          <h2 className="font-semibold text-lg mb-2">项目简介</h2>
-          <p className="text-muted-foreground leading-relaxed">
+      <div className="mt-8 space-y-5">
+        <section className="card p-5 sm:p-6">
+          <div className="mb-3 flex items-baseline gap-2">
+            <span className="section-index">01</span>
+            <h2 className="text-[14px] font-semibold">项目简介</h2>
+          </div>
+          <p className="text-[13px] leading-[1.9] text-muted-foreground">
             GFNA (Global Finance News Aggregator) 已升级为 V5：在保留全球财经新闻聚合与 AI 中文摘要的基础上，
             补齐了 A 股全市场行情库、技术指标与因子评分、参数化选股策略（A3/A4 价值策略 + B1–B5 短线策略）以及回测能力。
             所有分析只读本地数据库，页面通过「数据新鲜度」标注每个数据集的可信度。
           </p>
         </section>
 
-        <section className="card p-6">
-          <h2 className="font-semibold text-lg mb-4">技术栈 (V5)</h2>
-          <div className="space-y-2">
+        <section className="card p-5 sm:p-6">
+          <div className="mb-4 flex items-baseline gap-2">
+            <span className="section-index">02</span>
+            <h2 className="text-[14px] font-semibold">技术栈</h2>
+            <span className="font-mono text-[10px] tracking-[0.14em] text-muted-foreground">V5</span>
+          </div>
+          <dl className="grid grid-cols-1 gap-x-10 sm:grid-cols-2">
             {TECH_STACK.map((item) => (
-              <div key={item.label} className="flex justify-between py-1 border-b border-border/50 last:border-0">
-                <span className="text-sm text-muted-foreground">{item.label}</span>
-                <span className="text-sm font-medium text-right">{item.value}</span>
+              <div
+                key={item.label}
+                className="flex items-baseline gap-3 border-b border-border/50 py-2.5"
+              >
+                <dt className="w-[4.5rem] shrink-0 text-[11px] text-muted-foreground">{item.label}</dt>
+                <dd className="text-[11.5px] font-medium leading-relaxed">{item.value}</dd>
               </div>
             ))}
-          </div>
+          </dl>
         </section>
 
-        <section className="card p-6">
-          <h2 className="font-semibold text-lg mb-2">数据与风险声明</h2>
-          <ul className="text-sm text-muted-foreground space-y-2 list-disc list-inside">
-            <li>本项目仅用于课程设计与个人研究，数据版权归原始数据源所有</li>
-            <li>行情数据来自公开接口（AKShare 等二次封装），不保证完整、及时、准确</li>
-            <li>选股信号、因子评分与回测结果均不构成投资建议，回测 ≠ 实盘</li>
-            <li>不实现任何绕过反爬、验证码识别或代理池轮换，请遵守目标站点条款</li>
+        <section className="card p-5 sm:p-6">
+          <div className="mb-3 flex items-baseline gap-2">
+            <span className="section-index">03</span>
+            <h2 className="text-[14px] font-semibold">数据与风险声明</h2>
+          </div>
+          <ul className="space-y-2.5">
+            {[
+              '本项目仅用于课程设计与个人研究，数据版权归原始数据源所有',
+              '行情数据来自公开接口（AKShare 等二次封装），不保证完整、及时、准确',
+              '选股信号、因子评分与回测结果均不构成投资建议，回测 ≠ 实盘',
+              '不实现任何绕过反爬、验证码识别或代理池轮换，请遵守目标站点条款',
+            ].map((text) => (
+              <li key={text} className="flex items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                <span aria-hidden="true" className="mt-[0.55rem] h-1 w-1 shrink-0 rounded-full bg-brass/70" />
+                {text}
+              </li>
+            ))}
           </ul>
         </section>
+      </div>
 
-        <div className="text-center">
-          <Link
-            to="/"
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            ← 返回首页
-          </Link>
-        </div>
+      <div className="mt-8 flex justify-center">
+        <Link to="/" className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass">
+          <span aria-hidden="true" className="transition-transform duration-300 group-hover:-translate-x-0.5">←</span>
+          返回首页
+        </Link>
       </div>
     </motion.div>
   )

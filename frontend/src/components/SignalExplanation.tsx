@@ -160,7 +160,7 @@ function BreakdownView({ breakdown }: { breakdown: ScoreBreakdown }) {
             </div>
             <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
               <div
-                className="h-full rounded-full bg-primary/70"
+                className="h-full rounded-full bg-brass/70"
                 style={{ width: `${scorePercent(part.score)}%` }}
               />
             </div>

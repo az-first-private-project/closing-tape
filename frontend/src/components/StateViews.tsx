@@ -3,6 +3,9 @@
  * ========================================
  * 错误态会展示后端统一错误体的 code 与 message（契约 0.2），
  * 便于定位「数据未就绪 / 数据质量 / 参数错误」等原因。
+ *
+ * 视觉：三态共用一套「仪表盘占位」语言——发丝线框、细条纹骨架、
+ * 居中的圆形图标座，避免整页出现大块纯灰。
  */
 import type { ReactNode } from 'react'
 import { AlertCircle, Inbox, RefreshCw } from 'lucide-react'
@@ -42,18 +45,22 @@ export function SkeletonTable({
   const gridStyle = { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }
   return (
     <div className={`card overflow-hidden ${className}`} aria-hidden="true">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 px-4 py-2.5">
         <SkeletonLine className="h-3 w-16" />
         <SkeletonLine className="h-3 w-12" />
       </div>
-      <div className="divide-y divide-border">
-        <div className="grid gap-3 bg-muted/40 px-4 py-2.5" style={gridStyle}>
+      <div>
+        <div className="grid gap-3 border-b border-border/60 bg-muted/30 px-4 py-2.5" style={gridStyle}>
           {Array.from({ length: cols }).map((_, index) => (
-            <SkeletonLine key={index} className="h-3 w-2/3" />
+            <SkeletonLine key={index} className="h-2.5 w-2/3" />
           ))}
         </div>
         {Array.from({ length: rows }).map((_, row) => (
-          <div key={row} className="grid gap-3 px-4 py-3" style={gridStyle}>
+          <div
+            key={row}
+            className="grid gap-3 border-b border-border/40 px-4 py-3 last:border-0"
+            style={gridStyle}
+          >
             {Array.from({ length: cols }).map((_, col) => (
               <SkeletonLine key={col} className={col === 0 ? 'h-3 w-4/5' : 'h-3 w-1/2'} />
             ))}
@@ -84,13 +91,13 @@ export function SkeletonChart({
 export function SkeletonKpiRow({ count = 6, className = '' }: { count?: number; className?: string }) {
   const gridClass =
     count <= 4
-      ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2'
-      : 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2'
+      ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5'
+      : 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5'
   return (
     <div className={`${gridClass} ${className}`} aria-hidden="true">
       {Array.from({ length: count }).map((_, index) => (
-        <div key={index} className="card space-y-2 p-3">
-          <SkeletonLine className="h-3 w-1/2" />
+        <div key={index} className="card space-y-2.5 p-3.5">
+          <SkeletonLine className="h-2.5 w-1/2" />
           <SkeletonLine className="h-5 w-2/3" />
         </div>
       ))}
@@ -141,32 +148,31 @@ export function ErrorState({
     typeof nextAction === 'string' && nextAction.trim() ? nextAction.trim() : null
 
   return (
-    <div className={`card p-8 flex flex-col items-center gap-3 text-center ${className}`}>
-      <AlertCircle className="w-7 h-7 text-alert" />
-      <p className="font-medium">{title}</p>
+    <div className={`card flex flex-col items-center gap-3 px-6 py-10 text-center ${className}`}>
+      <span className="grid h-11 w-11 place-items-center rounded-full border border-alert/25 bg-alert/[0.06]">
+        <AlertCircle className="h-5 w-5 text-alert" />
+      </span>
+      <p className="text-[15px] font-semibold">{title}</p>
       {apiError?.code && (
-        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-alert/10 text-alert border border-alert/30">
+        <span className="rounded border border-alert/25 bg-alert/[0.06] px-2 py-0.5 font-mono text-[10px] tracking-wide text-alert">
           {apiError.code}
         </span>
       )}
-      <p className="text-sm text-muted-foreground max-w-md break-words">{message}</p>
+      <p className="max-w-md break-words text-[12px] leading-relaxed text-muted-foreground">{message}</p>
       {nextActionText && (
-        <p className="text-xs text-muted-foreground max-w-md">建议：{nextActionText}</p>
+        <p className="max-w-md text-[11px] text-muted-foreground/80">建议：{nextActionText}</p>
       )}
       {apiError?.detail !== null && apiError?.detail !== undefined && (
-        <details className="text-xs text-muted-foreground max-w-md">
-          <summary className="cursor-pointer hover:text-foreground">查看错误详情</summary>
-          <pre className="mt-2 text-left whitespace-pre-wrap break-all bg-muted rounded-lg p-2">
+        <details className="max-w-md text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer transition-colors hover:text-foreground">查看错误详情</summary>
+          <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg border border-border/70 bg-muted/40 p-2.5 text-left font-mono text-[10px]">
             {JSON.stringify(apiError.detail, null, 2)}
           </pre>
         </details>
       )}
       {onRetry && (
-        <button
-          onClick={onRetry}
-          className="mt-1 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-        >
-          <RefreshCw className="w-4 h-4" />
+        <button onClick={onRetry} className="btn btn-primary btn-sm mt-1">
+          <RefreshCw className="h-3.5 w-3.5" />
           重试
         </button>
       )}
@@ -187,10 +193,14 @@ export function EmptyState({
   className?: string
 }) {
   return (
-    <div className={`card p-10 flex flex-col items-center gap-3 text-center ${className}`}>
-      <Inbox className="w-8 h-8 text-muted-foreground/40" />
-      <p className="font-medium text-muted-foreground">{title}</p>
-      {description && <div className="text-sm text-muted-foreground/80 max-w-md">{description}</div>}
+    <div className={`card flex flex-col items-center gap-3 px-6 py-12 text-center ${className}`}>
+      <span className="grid h-11 w-11 place-items-center rounded-full border border-border/80 bg-muted/35">
+        <Inbox className="h-5 w-5 text-muted-foreground/60" />
+      </span>
+      <p className="text-[14px] font-medium text-foreground">{title}</p>
+      {description && (
+        <div className="max-w-md text-[12px] leading-relaxed text-muted-foreground">{description}</div>
+      )}
       {action}
     </div>
   )

@@ -49,8 +49,8 @@ function KlineSkeleton() {
 /** 小型信息项 */
 function InfoItem({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-2 text-xs">
-      <span className="text-muted-foreground shrink-0">{label}</span>
+    <div className="flex items-baseline justify-between gap-2 border-b border-border/40 pb-1.5 text-[11px]">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className={`num font-medium ${color ?? ''}`}>{value}</span>
     </div>
   )
@@ -59,10 +59,10 @@ function InfoItem({ label, value, color }: { label: string; value: string; color
 /** 指标卡 */
 function IndicatorCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="card p-3">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-semibold num">{value}</p>
-      {hint && <p className="text-[11px] text-muted-foreground mt-0.5">{hint}</p>}
+    <div className="inset px-3 py-2.5">
+      <p className="text-[10px] tracking-wide text-muted-foreground">{label}</p>
+      <p className="num mt-1 text-[13px] font-semibold">{value}</p>
+      {hint && <p className="mt-0.5 text-[9px] text-muted-foreground/80">{hint}</p>}
     </div>
   )
 }
@@ -71,8 +71,11 @@ function IndicatorCard({ label, value, hint }: { label: string; value: string; h
 function LatestQuote({ latest }: { latest: StockLatest }) {
   return (
     <div className="card p-4">
-      <h3 className="font-semibold text-sm mb-3">行情快照（{latest.trade_date}）</h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2">
+      <div className="section-head">
+        <h3 className="section-title">行情快照</h3>
+        <span className="num text-[10px] text-muted-foreground">{latest.trade_date}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-4">
         <InfoItem label="开盘" value={fmtNumber(latest.open, 2)} />
         <InfoItem label="最高" value={fmtNumber(latest.high, 2)} />
         <InfoItem label="最低" value={fmtNumber(latest.low, 2)} />
@@ -95,7 +98,7 @@ function FeaturesPanel({ features, latest }: { features: StockFeatures; latest: 
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-sm">技术指标</h3>
+        <h3 className="text-[13px] font-semibold">技术指标</h3>
         <div className="flex items-center gap-1.5">
           {features.ma_bullish !== null && (
             <span
@@ -197,7 +200,7 @@ export default function StockDetailPage() {
     return (
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
         <ErrorState title="个股信息加载失败" error={stockQuery.error} onRetry={() => stockQuery.refetch()} />
-        <button onClick={() => navigate(-1)} className="text-sm text-primary hover:underline">
+        <button onClick={() => navigate(-1)} className="text-[13px] text-brass-strong hover:underline dark:text-brass">
           ← 返回上一页
         </button>
       </div>
@@ -237,18 +240,21 @@ export default function StockDetailPage() {
     >
       {/* 返回 + 历史日期选择 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to="/algo-center" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors">
-          <ArrowLeft className="w-4 h-4" />
+        <Link
+          to="/algo-center"
+          className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass"
+        >
+          <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-0.5" />
           返回选股中心
         </Link>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <CalendarDays className="w-3.5 h-3.5" />
-            交易日
+          <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
+            <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="eyebrow">Date</span>
             <select
               value={selectedDate}
               onChange={(event) => setSelectedDate(event.target.value)}
-              className="px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="cursor-pointer bg-transparent text-[12px] font-medium text-foreground focus:outline-none"
             >
               <option value="">最新交易日</option>
               {openDays.map((day) => (
@@ -259,24 +265,21 @@ export default function StockDetailPage() {
             </select>
           </label>
           {selectedDate && (
-            <button
-              onClick={() => setSelectedDate('')}
-              className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
+            <button onClick={() => setSelectedDate('')} className="btn btn-sm h-9">
+              <RefreshCw className="h-3.5 w-3.5" />
               回到最新
             </button>
           )}
-          {stockQuery.isFetching && <span className="text-[11px] text-muted-foreground">加载中…</span>}
+          {stockQuery.isFetching && <span className="text-[10px] text-muted-foreground">加载中…</span>}
         </div>
       </div>
 
       {/* ========== 标题 + 价格 ========== */}
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[28px] font-bold">{stock.name}</h1>
-            <span className="font-mono text-sm text-muted-foreground">{stock.code}</span>
+        <div className="rise">
+          <span className="eyebrow">A-Share · {stock.code}</span>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <h1 className="text-[30px] font-semibold leading-none tracking-[-0.03em]">{stock.name}</h1>
             {stock.is_st && (
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-alert/10 text-alert">
                 ST
@@ -299,7 +302,7 @@ export default function StockDetailPage() {
             )}
             <WatchButton code={code} name={stock.name} showLabel size="md" />
           </div>
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="mt-2 text-[11px] text-muted-foreground">
             {[stock.exchange, stock.board, stock.industry_l1, stock.industry_l2, stock.ownership]
               .filter(Boolean)
               .join(' · ')}
@@ -309,10 +312,10 @@ export default function StockDetailPage() {
 
         {latest && (
           <div className="text-right">
-            <p className={`text-[28px] font-bold num ${priceColorClass(latest.pct_chg)}`}>
+            <p className={`readout text-[34px] ${priceColorClass(latest.pct_chg)}`}>
               {fmtNumber(latest.close, 2)}
             </p>
-            <p className={`text-sm font-semibold num ${priceColorClass(latest.pct_chg)}`}>
+            <p className={`num mt-1 text-[12px] font-medium ${priceColorClass(latest.pct_chg)}`}>
               {trendGlyph(latest.pct_chg)} {fmtPct(latest.pct_chg)}
             </p>
           </div>
@@ -346,7 +349,7 @@ export default function StockDetailPage() {
 
       {/* ========== K 线 ========== */}
       {btId && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brass/30 bg-brass/[0.06] px-3 py-2 text-[11px]">
           <span className="text-muted-foreground">
             回测标记 <span className="font-mono text-foreground">{btId.slice(0, 12)}</span>
             {tradesQuery.isLoading
@@ -358,7 +361,7 @@ export default function StockDetailPage() {
           </span>
           <div className="flex items-center gap-3">
             {tradesQuery.isError && (
-              <button onClick={() => tradesQuery.refetch()} className="text-primary hover:underline">
+              <button onClick={() => tradesQuery.refetch()} className="text-brass-strong hover:underline dark:text-brass">
                 重试
               </button>
             )}
@@ -413,7 +416,7 @@ export default function StockDetailPage() {
 
           {/* 最近信号 */}
           <h3 className="font-semibold text-sm mt-5 mb-3 flex items-center gap-1.5">
-            <Radio className="w-4 h-4 text-primary" />
+            <Radio className="h-3.5 w-3.5 text-brass" />
             最近信号
           </h3>
           {signalsQuery.isLoading ? (
@@ -444,9 +447,9 @@ export default function StockDetailPage() {
       </div>
 
       {/* 免责声明 */}
-      <div className="card p-4 text-xs text-muted-foreground">
+      <p className="border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
         本页数据来自本地行情库；指标与因子评分仅作量化研究参考，不构成投资建议。最近信号为各算法最近一次运行的静态快照。
-      </div>
+      </p>
     </motion.div>
   )
 }

@@ -54,11 +54,11 @@ const CHART_HEIGHT = 400
 
 const MA_KEYS = ['ma5', 'ma20', 'ma60'] as const
 const MA_COLORS: Record<(typeof MA_KEYS)[number], string> = {
-  ma5: '#f59e0b',
-  ma20: '#8b5cf6',
-  ma60: '#38bdf8',
+  ma5: '#d3a55f',
+  ma20: '#6fbfab',
+  ma60: '#83aacb',
 }
-const BOLL_COLOR = '#94a3b8'
+const BOLL_COLOR = '#948f84'
 
 interface DayTrades {
   buys: BacktestTrade[]
@@ -563,36 +563,37 @@ export default function KlineChart({
 
   return (
     <div className="card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold text-sm flex flex-wrap items-center gap-2">
-            📈 日线 K 线
-            <span className="text-[11px] font-normal px-1.5 py-0.5 rounded border border-border text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="eyebrow">Daily Candle</span>
+            <span className="rounded border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] text-muted-foreground">
               {adjustBasis === 'hfq' ? '后复权' : '未复权'}
             </span>
             {btId && (
-              <span className="text-[11px] font-normal px-1.5 py-0.5 rounded border border-primary/40 text-primary">
+              <span className="rounded border border-brass/40 bg-brass/[0.08] px-1.5 py-0.5 text-[9px] text-brass-strong dark:text-brass">
                 回测标记
               </span>
             )}
-          </h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
+          </div>
+          <h3 className="mt-1.5 text-[14px] font-semibold">日线 K 线</h3>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
             {visibleItems.length > 0
               ? `${visibleItems[0].trade_date} ~ ${visibleItems[visibleItems.length - 1].trade_date} · ${visibleItems.length} 个交易日`
               : '暂无数据'}
             {' · '}滚轮缩放 / 拖拽平移 / 双击复位
           </p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/25 p-0.5">
           {RANGES.map((value) => (
             <button
               key={value}
               type="button"
               onClick={() => setRange(value)}
-              className={`px-2.5 py-1 text-[11px] rounded-md border transition-colors ${
+              className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
                 range === value
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:bg-muted'
+                  ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {value} 根
@@ -615,13 +616,13 @@ export default function KlineChart({
               type="checkbox"
               checked={overlays[key]}
               onChange={() => toggleOverlay(key)}
-              className="h-3 w-3 accent-primary"
+              className="h-3 w-3 accent-[var(--color-brass)]"
             />
             <span className="inline-block h-0.5 w-4 rounded" style={{ backgroundColor: color }} />
             <span className={overlays[key] ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
           </label>
         ))}
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground/80">
           买卖点来自回测成交；灰色圆点为「信号命中但无法成交」
         </span>
       </div>

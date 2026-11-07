@@ -97,39 +97,48 @@ export default function FreshnessBadge({
           const meta = STATUS_META[item.status] ?? STATUS_META.unknown
           const Icon = meta.icon
           return (
-            <div key={item.dataset} className="card p-4" title={buildTitle(item)}>
+            <div
+              key={item.dataset}
+              className="card group relative overflow-hidden p-4 pl-5"
+              title={buildTitle(item)}
+            >
+              {/* 左侧状态色条：一眼分辨数据集健康度 */}
+              <span
+                aria-hidden="true"
+                className={`absolute inset-y-0 left-0 w-[2px] ${meta.iconClass.replace('text-', 'bg-')} opacity-70`}
+              />
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Icon className={`w-4 h-4 shrink-0 ${meta.iconClass}`} />
-                  <span className="text-sm font-medium truncate">{item.display_name}</span>
+                  <Icon className={`w-3.5 h-3.5 shrink-0 ${meta.iconClass}`} />
+                  <span className="text-[13px] font-medium truncate">{item.display_name}</span>
                 </div>
-                <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full border ${meta.badge}`}>{meta.label}</span>
+                <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border ${meta.badge}`}>{meta.label}</span>
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground font-mono truncate">{item.dataset}</p>
-              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+              <p className="mt-1 text-[10px] text-muted-foreground/80 font-mono truncate tracking-wide">{item.dataset}</p>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-[11px]">
                 <div>
                   <dt className="text-muted-foreground">最后成功</dt>
-                  <dd className="num">{fmtDateTime(item.last_success_at)}</dd>
+                  <dd className="num mt-0.5 text-foreground">{fmtDateTime(item.last_success_at)}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">最后交易日</dt>
-                  <dd className="num">{item.last_trade_date ?? '—'}</dd>
+                  <dd className="num mt-0.5 text-foreground">{item.last_trade_date ?? '—'}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">行数</dt>
-                  <dd className="num">{fmtInt(item.rows)}</dd>
+                  <dd className="num mt-0.5">{fmtInt(item.rows)}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">覆盖率</dt>
-                  <dd className="num">{fmtRatio(item.coverage)}</dd>
+                  <dd className="num mt-0.5">{fmtRatio(item.coverage)}</dd>
                 </div>
                 <div>
                   <dt className="text-muted-foreground">异常数</dt>
-                  <dd className="num">{fmtInt(item.anomalies)}</dd>
+                  <dd className="num mt-0.5">{fmtInt(item.anomalies)}</dd>
                 </div>
               </dl>
               {item.error && (
-                <p className="mt-2 text-xs text-alert break-words line-clamp-3" title={item.error}>
+                <p className="mt-2 text-[11px] text-alert break-words line-clamp-3" title={item.error}>
                   {item.error}
                 </p>
               )}
@@ -142,8 +151,8 @@ export default function FreshnessBadge({
 
   return (
     <div className={`flex flex-wrap items-center gap-2 ${className}`}>
-      <span className="text-xs text-muted-foreground flex items-center gap-1">
-        <Database className="w-3.5 h-3.5" />
+      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.16em] text-muted-foreground/80 uppercase">
+        <Database className="w-3 h-3" />
         {title}
       </span>
       {items.map((item) => {
@@ -156,13 +165,16 @@ export default function FreshnessBadge({
           <span
             key={item.dataset}
             title={buildTitle(item)}
-            className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border cursor-help ${meta.badge}`}
+            className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-[3px] rounded-full border cursor-help
+              transition-colors duration-300 ${meta.badge}`}
           >
             <Icon className="w-3 h-3" />
             <span className="font-medium">{item.display_name}</span>
             <span className="opacity-80">{meta.label}</span>
-            {item.coverage !== null && <span className="opacity-70">覆盖 {fmtRatio(item.coverage)}</span>}
-            <span className="opacity-60 num">{lastSuccess}</span>
+            {item.coverage !== null && (
+              <span className="hidden opacity-70 num sm:inline">覆盖 {fmtRatio(item.coverage)}</span>
+            )}
+            <span className="hidden opacity-60 num sm:inline">{lastSuccess}</span>
           </span>
         )
       })}

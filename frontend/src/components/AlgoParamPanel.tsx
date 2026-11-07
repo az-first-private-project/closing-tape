@@ -76,7 +76,7 @@ function ParamControl({
           const matched = options.find((option) => String(option) === raw)
           onChange(schema.key, typeof matched === 'number' ? matched : raw)
         }}
-        className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+        className="field"
       >
         {options.length === 0 && <option value={String(value ?? '')}>{String(value ?? '')}</option>}
         {options.map((option) => (
@@ -95,7 +95,7 @@ function ParamControl({
         type="text"
         value={String(value ?? '')}
         onChange={(event) => onChange(schema.key, event.target.value)}
-        className="w-full text-sm border border-border rounded-lg px-3 py-2 bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+        className="field"
       />
     )
   }
@@ -118,7 +118,7 @@ function ParamControl({
             const next = event.target.value === '' ? 0 : Number(event.target.value)
             onChange(schema.key, Number.isFinite(next) ? next : 0)
           }}
-          className="w-24 text-sm border border-border rounded-lg px-3 py-1.5 bg-background num focus:outline-none focus:ring-2 focus:ring-primary"
+          className="field num !w-24"
         />
         {hasRange && (
           <input
@@ -128,11 +128,11 @@ function ParamControl({
             step={step}
             value={Number.isFinite(numericValue) ? numericValue : Number(schema.min ?? 0)}
             onChange={(event) => onChange(schema.key, Number(event.target.value))}
-            className="flex-1 accent-primary"
+            className="flex-1 accent-[var(--color-brass)]"
           />
         )}
         {hasRange && (
-          <span className="text-[11px] text-muted-foreground num whitespace-nowrap">
+          <span className="num whitespace-nowrap text-[10px] text-muted-foreground">
             {fmtRangeBound(schema.min)}–{fmtRangeBound(schema.max)}
           </span>
         )}
@@ -150,29 +150,30 @@ export default function AlgoParamPanel({
   isRunning,
 }: AlgoParamPanelProps) {
   return (
-    <div className="card p-4 space-y-4">
+    <div className="card space-y-4 p-4">
       {/* 标题 */}
       <div>
-        <div className="flex items-center gap-2">
-          <SlidersHorizontal className="w-4 h-4 text-primary" />
-          <h3 className="font-semibold text-sm">参数面板</h3>
+        <div className="flex items-baseline gap-2">
+          <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 self-center text-brass" />
+          <span className="eyebrow">Parameters</span>
         </div>
-        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{algo.full_desc}</p>
+        <h3 className="mt-1.5 text-[14px] font-semibold">参数面板</h3>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">{algo.full_desc}</p>
       </div>
 
       {/* schema 驱动控件 */}
       <div className="space-y-3">
         {algo.params_schema.map((schema) => (
           <div key={schema.key}>
-            <label className="text-xs font-medium block mb-1" title={schema.key}>
+            <label className="mb-1.5 block text-[11px] font-medium" title={schema.key}>
               {schema.label}
-              <span className="ml-1 text-[11px] text-muted-foreground font-mono">{schema.key}</span>
+              <span className="ml-1.5 font-mono text-[9px] tracking-wide text-muted-foreground/70">{schema.key}</span>
             </label>
             <ParamControl schema={schema} values={values} onChange={onChange} />
           </div>
         ))}
         {algo.params_schema.length === 0 && (
-          <p className="text-xs text-muted-foreground">该算法无可调参数。</p>
+          <p className="text-[11px] text-muted-foreground">该算法无可调参数。</p>
         )}
       </div>
 
@@ -181,7 +182,7 @@ export default function AlgoParamPanel({
         <button
           onClick={onExecute}
           disabled={isRunning}
-          className="w-full inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+          className="btn btn-primary w-full"
         >
           {isRunning ? (
             <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />
@@ -193,12 +194,12 @@ export default function AlgoParamPanel({
         <button
           onClick={onReset}
           disabled={isRunning}
-          className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs border border-border hover:bg-muted transition-colors disabled:opacity-50"
+          className="btn btn-sm w-full"
         >
           <RotateCcw className="w-3.5 h-3.5" />
           恢复默认参数
         </button>
-        <p className="text-[11px] text-muted-foreground text-center">修改参数不会自动请求，点击「执行算法」后生效</p>
+        <p className="text-center text-[10px] text-muted-foreground/80">修改参数不会自动请求，点击「执行算法」后生效</p>
       </div>
     </div>
   )

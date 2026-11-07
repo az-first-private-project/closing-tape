@@ -85,8 +85,10 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
   }
 
   const tabClass = (active: boolean) =>
-    `px-2.5 py-1 rounded-md transition-colors ${
-      active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+    `rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+      active
+        ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
+        : 'text-muted-foreground hover:text-foreground'
     }`
 
   return (
@@ -94,12 +96,12 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
       {/* 标题与标签页 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <FlaskConical className="w-4 h-4 text-primary" />
-          <h3 className="font-semibold text-sm">策略回测</h3>
+          <FlaskConical className="h-3.5 w-3.5 text-brass" />
+          <h3 className="text-[13px] font-semibold">策略回测</h3>
           {algoName && <span className="text-xs text-muted-foreground">· {algoName}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <div role="tablist" aria-label="回测视图" className="flex gap-0.5 rounded-lg border border-border p-0.5 text-xs">
+          <div role="tablist" aria-label="回测视图" className="flex gap-0.5 rounded-lg border border-border/70 bg-muted/25 p-0.5">
             <button
               role="tab"
               aria-selected={tab === 'single'}
@@ -121,7 +123,7 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
             <button
               onClick={handleExport}
               disabled={exporting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              className="btn btn-sm"
             >
               <Download className="w-3.5 h-3.5" />
               {exporting ? '导出中…' : '导出净值 CSV'}
@@ -139,7 +141,7 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
               type="date"
               value={start}
               onChange={(event) => setStart(event.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm num focus:outline-none focus:ring-2 focus:ring-primary"
+              className="field num"
             />
           </label>
           <label className="text-xs space-y-1">
@@ -150,7 +152,7 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
               max={250}
               value={rebalanceDays}
               onChange={(event) => setRebalanceDays(Number(event.target.value) || 1)}
-              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm num focus:outline-none focus:ring-2 focus:ring-primary"
+              className="field num"
             />
           </label>
           <label className="text-xs space-y-1">
@@ -162,14 +164,14 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
               value={boundPositions}
               readOnly
               title="与选股返回数量绑定，改上方「返回数量上限」即可"
-              className="w-full px-3 py-2 rounded-lg border border-border bg-muted text-sm num text-muted-foreground cursor-not-allowed"
+              className="field num cursor-not-allowed bg-muted/60 text-muted-foreground"
             />
           </label>
           <div className="flex items-end">
             <button
               onClick={handleRun}
               disabled={mutation.isPending}
-              className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="btn btn-primary w-full"
             >
               {mutation.isPending ? (
                 <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />

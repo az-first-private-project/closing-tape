@@ -51,10 +51,19 @@ function Gauge({ score }: { score: number | null }) {
   const clamped = score === null ? 0 : Math.min(100, Math.max(0, score))
   const band = temperatureBand(score)
   return (
-    <div className="relative mx-auto w-full max-w-[260px]">
+    <div className="relative mx-auto w-full max-w-[250px]">
+      {/* 仪表背后的温度光晕：颜色跟随温度档位 */}
+      {score !== null && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-6 h-28 w-40 -translate-x-1/2 rounded-full opacity-[0.16] blur-3xl"
+          style={{ backgroundColor: temperatureColor(score) }}
+        />
+      )}
+
       <svg
         viewBox="0 0 200 112"
-        className="w-full"
+        className="relative w-full"
         role="img"
         aria-label={score === null ? '市场温度：数据不足' : `市场温度 ${score.toFixed(1)}，${temperatureLabel(score)}`}
       >
@@ -62,7 +71,7 @@ function Gauge({ score }: { score: number | null }) {
           d={GAUGE_PATH}
           fill="none"
           stroke="var(--color-border)"
-          strokeWidth={14}
+          strokeWidth={12}
           strokeLinecap="round"
         />
         {score !== null && (
@@ -70,22 +79,42 @@ function Gauge({ score }: { score: number | null }) {
             d={GAUGE_PATH}
             fill="none"
             stroke={temperatureColor(score)}
-            strokeWidth={14}
+            strokeWidth={12}
             strokeLinecap="round"
             pathLength={100}
             strokeDasharray={`${clamped} 100`}
+            style={{ filter: 'drop-shadow(0 2px 10px rgba(0,0,0,0.12))' }}
           />
         )}
+        {/* 25 / 50 / 75 刻度：把仪表变成可读数具 */}
+        {[25, 50, 75].map((tick) => {
+          const angle = Math.PI * (1 - tick / 100)
+          const r1 = GAUGE_RADIUS - 11
+          const r2 = GAUGE_RADIUS - 6
+          const cx = 100
+          const cy = GAUGE_CENTER_Y
+          return (
+            <line
+              key={tick}
+              x1={cx + Math.cos(angle) * r1}
+              y1={cy - Math.sin(angle) * r1}
+              x2={cx + Math.cos(angle) * r2}
+              y2={cy - Math.sin(angle) * r2}
+              stroke="var(--color-border)"
+              strokeWidth={1}
+            />
+          )
+        })}
       </svg>
-      <div className="absolute inset-x-0 bottom-1 text-center">
-        <p className={`text-5xl font-bold num leading-none ${band?.textClass ?? 'text-muted-foreground'}`}>
+      <div className="absolute inset-x-0 bottom-3 text-center">
+        <p className={`readout text-[44px] leading-none ${band?.textClass ?? 'text-muted-foreground'}`}>
           {score === null ? '—' : score.toFixed(1)}
         </p>
-        <p className="mt-1.5 text-xs text-muted-foreground">
+        <p className="mt-2 text-[11px] tracking-wide text-muted-foreground">
           {score === null ? '数据不足' : temperatureLabel(score)}
         </p>
       </div>
-      <div className="absolute inset-x-0 bottom-0 flex justify-between px-1 text-[10px] text-muted-foreground">
+      <div className="absolute inset-x-0 bottom-0 flex justify-between px-1 font-mono text-[9px] text-muted-foreground/70">
         <span>0</span>
         <span>100</span>
       </div>
@@ -118,7 +147,7 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
         <button
           type="button"
           onClick={() => temperature.refetch()}
-          className="ml-2 text-primary hover:underline"
+          className="ml-2 text-brass-strong hover:underline dark:text-brass"
         >
           重试
         </button>
@@ -140,22 +169,31 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
     : null
 
   return (
-    <section className="card p-4 sm:p-5 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <h2 className="font-semibold">市场温度</h2>
-          <span className="text-xs text-muted-foreground">{fmtDate(data.trade_date)}</span>
+    <section className="card relative overflow-hidden p-4 sm:p-5 space-y-3.5">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <span className="eyebrow">Market Temperature</span>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em]">市场温度</h2>
+            <span className="num text-[10px] text-muted-foreground">{fmtDate(data.trade_date)}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          {band && <span className={band.textClass}>{band.label}</span>}
-          <span>
-            参与合成 {data.components?.available_count ?? 0}/{data.components?.total_count ?? 0} 项
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          {band && (
+            <span
+              className={`rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[10px] ${band.textClass}`}
+            >
+              {band.label}
+            </span>
+          )}
+          <span className="num">
+            合成 {data.components?.available_count ?? 0}/{data.components?.total_count ?? 0} 项
           </span>
         </div>
       </div>
 
       {data.confidence !== 'ok' && (
-        <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+        <div className="rounded-lg border border-warning/30 bg-warning/[0.07] px-3 py-2 text-[11px] leading-relaxed text-warning">
           <span className="font-medium">
             {data.confidence === 'insufficient' ? '温度数据不足，暂不给出总分。' : '部分子项缺数据，总分由可用子项重新加权。'}
           </span>
@@ -163,38 +201,41 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5 items-center">
+      <div className="grid grid-cols-1 items-center gap-6 lg:grid-cols-[250px_1fr]">
         <Gauge score={score} />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
           {items.map((item) => {
             const glyph = scoreGlyph(item.score)
             return (
-              <div key={item.key} className="rounded-lg border border-border/60 bg-muted/30 p-3">
+              <div
+                key={item.key}
+                className="group rounded-lg border border-border/60 bg-muted/25 p-3 transition-colors duration-300 hover:border-brass/35"
+              >
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     {item.label}
                     {item.direction < 0 && (
-                      <span className="rounded border border-border px-1 text-[10px] leading-4">降温</span>
+                      <span className="rounded border border-border/70 px-1 text-[9px] leading-4">降温</span>
                     )}
                   </span>
-                  <span className="text-sm font-medium num">{formatRaw(item)}</span>
+                  <span className="num text-[12px] font-medium text-foreground">{formatRaw(item)}</span>
                 </div>
-                <div className="mt-1.5 flex items-center gap-2">
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/60">
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-border/50">
                     {item.score !== null && (
                       <div
-                        className="h-full rounded-full"
+                        className="h-full rounded-full transition-[width] duration-700"
                         style={{ width: `${item.score}%`, backgroundColor: temperatureColor(item.score) }}
                       />
                     )}
                   </div>
-                  <span className="w-7 text-right text-xs num text-muted-foreground">
+                  <span className="w-7 text-right num text-[11px] text-muted-foreground">
                     {item.score === null ? '—' : item.score.toFixed(0)}
                   </span>
-                  <span className={`w-3 text-center text-xs ${glyph.className}`}>{glyph.glyph}</span>
+                  <span className={`w-3 text-center text-[11px] ${glyph.className}`}>{glyph.glyph}</span>
                 </div>
-                <p className="mt-1 truncate text-[11px] text-muted-foreground" title={item.note}>
+                <p className="mt-1.5 truncate text-[10px] text-muted-foreground/80" title={item.note}>
                   {item.note}
                 </p>
               </div>
@@ -203,8 +244,8 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
         </div>
       </div>
 
-      <div className="border-t border-border/60 pt-2">
-        <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="border-t border-border/60 pt-3">
+        <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
           <span>近 {seriesPoints.length} 个交易日</span>
           {seriesMin !== null && seriesMax !== null && (
             <span className="num">

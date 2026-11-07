@@ -87,7 +87,7 @@ function relativeBadgeClass(value: number | null | undefined): string {
 export function IndexCompareHeader({ showRelative = true }: { showRelative?: boolean }) {
   return (
     <div
-      className={`${ROW_GRID} px-3 py-2 text-[11px] text-muted-foreground bg-muted/40 border-b border-border`}
+      className={`${ROW_GRID} border-b border-border bg-muted/35 px-4 py-2.5 font-mono text-[10px] tracking-[0.1em] text-muted-foreground`}
     >
       <span>指数 / 收盘</span>
       {PERIODS.map((period) => (
@@ -122,17 +122,17 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
       initial={{ opacity: 0, x: -6 }}
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2, delay: Math.min(order * 0.025, 0.2) }}
-      className={`${ROW_GRID} px-3 py-2.5 border-b border-border/60 last:border-b-0 hover:bg-muted/30 transition-colors`}
+      className={`${ROW_GRID} px-4 py-3 border-b border-border/50 last:border-b-0 transition-colors duration-200 hover:bg-brass/[0.045]`}
     >
       {/* 名称 + 收盘 */}
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-sm font-medium truncate" title={index.index_name}>
+          <span className="truncate text-[13px] font-medium" title={index.index_name}>
             {index.index_name}
           </span>
           {warming && (
             <span
-              className="shrink-0 rounded border border-warning/40 bg-warning/10 px-1 py-0.5 text-[11px] text-warning"
+              className="shrink-0 rounded border border-warning/35 bg-warning/[0.08] px-1 py-0.5 text-[9px] tracking-wide text-warning"
               title="该指数历史数据回补中"
             >
               回补中
@@ -141,7 +141,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
         </div>
         <div className="flex items-center justify-between gap-2">
           <p
-            className="text-xs text-muted-foreground num truncate"
+            className="num truncate text-[11px] text-muted-foreground"
             title={`高 ${fmtNumber(index.high, 2)} / 低 ${fmtNumber(index.low, 2)}`}
           >
             {fmtNumber(index.close, 2)}
@@ -155,7 +155,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
               fill
               label={`${index.index_name} 近 30 日收盘走势`}
               formatValue={(value) => fmtNumber(value, 2)}
-              className="w-[72px] shrink-0"
+              className="w-[72px] shrink-0 opacity-80"
             />
           ) : (
             <span className="h-[22px] w-[72px] shrink-0" aria-hidden="true" />
@@ -169,10 +169,10 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
         const rank = index.ranks?.[period.key]
         return (
           <div key={period.key} className="flex flex-col items-end leading-tight num">
-            <span className={`text-sm font-medium ${pctColor(value)}`}>
+            <span className={`text-[13px] font-medium ${pctColor(value)}`}>
               {fmtPct(value)}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-[9px] tracking-wide text-muted-foreground/80">
               {rank && rank.total > 1 ? `${rank.rank}/${rank.total}` : '\u00A0'}
             </span>
           </div>
@@ -180,17 +180,17 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
       })}
 
       {/* 末列：相对300 或美股交易日 */}
-      <div className="flex flex-col items-end justify-center gap-0.5 text-[11px] num">
+      <div className="flex flex-col items-end justify-center gap-1 text-[10px] num">
         {showRelative ? (
           <>
-            <span className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">20日</span>
+            <span className="flex items-center gap-2">
+              <span className="text-muted-foreground/80">20日</span>
               <span className={relativeBadgeClass(index.rel_300_20d)}>
                 {fmtRelative(index.rel_300_20d)}
               </span>
             </span>
-            <span className="flex items-center gap-1.5">
-              <span className="text-muted-foreground">年内</span>
+            <span className="flex items-center gap-2">
+              <span className="text-muted-foreground/80">年内</span>
               <span className={relativeBadgeClass(index.rel_300_ytd)}>
                 {fmtRelative(index.rel_300_ytd)}
               </span>

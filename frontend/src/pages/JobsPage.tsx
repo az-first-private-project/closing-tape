@@ -30,7 +30,7 @@ function statusBadgeClass(status: string): string {
     case 'failed':
       return 'border-alert/40 bg-alert/10 text-alert'
     case 'running':
-      return 'border-primary/40 bg-primary/10 text-primary'
+      return 'border-brass/45 bg-brass/[0.08] text-brass-strong dark:text-brass'
     case 'pending':
       return 'border-warning/40 bg-warning/10 text-warning'
     default:
@@ -153,10 +153,14 @@ export default function JobsPage() {
       className="max-w-7xl mx-auto px-4 py-6 space-y-6"
     >
       {/* ========== 标题栏 ========== */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-[28px] font-bold">🛠️ 任务监控</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="rise">
+          <div className="flex items-center gap-2.5">
+            <span aria-hidden="true" className="h-px w-6 bg-brass" />
+            <span className="eyebrow">Pipeline Monitor</span>
+          </div>
+          <h1 className="page-title mt-2.5">任务监控</h1>
+          <p className="mt-2 text-[12px] text-muted-foreground">
             最近 {jobs.length} 条采集/策略任务
             {failedCount > 0 && <span className="text-alert"> · 其中失败 {failedCount} 条</span>}
             {' · '}
@@ -167,7 +171,8 @@ export default function JobsPage() {
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            className="px-2.5 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            className="field !h-9 !w-auto cursor-pointer !py-0 pr-2 text-[12px]"
+            aria-label="按状态筛选任务"
           >
             <option value="">全部状态</option>
             <option value="success">成功</option>
@@ -177,9 +182,9 @@ export default function JobsPage() {
           </select>
           <button
             onClick={() => setPaused((previous) => !previous)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors"
+            className="btn btn-sm h-9"
           >
-            {paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+            {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
             {paused ? '恢复自动刷新' : '暂停自动刷新'}
           </button>
           <button
@@ -188,9 +193,9 @@ export default function JobsPage() {
               void jobsQuery.refetch()
             }}
             disabled={jobsQuery.isFetching}
-            className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
+            className="btn btn-sm h-9"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`h-3.5 w-3.5 ${jobsQuery.isFetching ? 'animate-spin' : ''}`} />
             刷新{jobsQuery.isFetching ? '中…' : ''}
           </button>
         </div>
@@ -198,7 +203,7 @@ export default function JobsPage() {
 
       {/* ========== 数据集新鲜度总览 ========== */}
       <div className="space-y-2">
-        <h2 className="font-semibold text-sm">数据新鲜度总览</h2>
+        <h2 className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground">数据新鲜度总览</h2>
         {freshnessQuery.isLoading ? (
           <div
             aria-busy="true"
@@ -215,7 +220,7 @@ export default function JobsPage() {
 
       {/* ========== 任务表 ========== */}
       <div className="space-y-2">
-        <h2 className="font-semibold text-sm">采集 / 策略任务</h2>
+        <h2 className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground">采集 / 策略任务</h2>
         {jobsQuery.isLoading ? (
           <div
             aria-busy="true"
@@ -247,9 +252,9 @@ export default function JobsPage() {
         )}
       </div>
 
-      <div className="card p-4 text-xs text-muted-foreground">
-        任务数据来自后端 `meta_jobs` / 采集编排记录；若某个数据集长时间未成功，请检查数据源可用性与网络环境。
-      </div>
+      <p className="border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
+        任务数据来自后端 meta_jobs / 采集编排记录；若某个数据集长时间未成功，请检查数据源可用性与网络环境。
+      </p>
     </motion.div>
   )
 }

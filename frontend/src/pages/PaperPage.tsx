@@ -147,18 +147,20 @@ function PaperCard({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       onClick={() => selectable && onSelect(card.algo_code)}
-      className={`card p-4 transition-shadow ${selectable ? 'cursor-pointer hover:shadow-md' : ''} ${
-        selected ? 'ring-2 ring-primary border-primary' : 'border-border'
+      className={`card p-4 ${selectable ? 'card-lift cursor-pointer' : ''} ${
+        selected ? 'card-selected' : ''
       }`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="font-semibold text-sm truncate" title={card.name}>
+          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground/70">
+            {card.algo_code}
+          </p>
+          <h3 className="mt-1 truncate text-[13.5px] font-semibold" title={card.name}>
             {card.name}
           </h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            <span className="font-mono uppercase">{card.algo_code}</span>
-            {card.rebalance_days ? ` · 每 ${card.rebalance_days} 日调仓` : ''}
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            {card.rebalance_days ? `每 ${card.rebalance_days} 日调仓` : '调仓周期待定'}
             {card.max_positions ? ` · 持有 ${card.max_positions} 只` : ''}
           </p>
         </div>
@@ -166,7 +168,7 @@ function PaperCard({
       </div>
 
       <div className="mt-4 flex items-baseline gap-3">
-        <span className="text-[30px] leading-none font-bold num" title="累计净值（起点=1）">
+        <span className="readout text-[30px]" title="累计净值（起点=1）">
           {card.nav !== null ? fmtNumber(card.nav, 4) : '—'}
         </span>
         <span className={`text-sm font-medium num ${pctColor(card.total_return)}`}>
@@ -215,13 +217,13 @@ function PaperCard({
               event.stopPropagation()
               onSync(card.algo_code)
             }}
-            className="shrink-0 inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            className="btn btn-primary btn-sm shrink-0"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             {syncing ? '同步中…' : '立即同步'}
           </button>
         ) : (
-          <span className="shrink-0 text-xs text-primary">查看明细 →</span>
+          <span className="shrink-0 text-[11px] text-brass-strong dark:text-brass">查看明细 →</span>
         )}
       </div>
     </motion.div>
@@ -236,7 +238,8 @@ function PendingOrders({
   rebalanceDays: number | null
 }) {
   return (
-    <section className="card border-warning/40 bg-warning/5 p-4" aria-labelledby="pending-title">
+    <section className="card border-warning/30 p-4" aria-labelledby="pending-title"
+      style={{ background: 'color-mix(in srgb, var(--color-warning) 4%, var(--color-card))' }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id="pending-title" className="font-semibold flex items-center gap-2">
           <CalendarClock className="w-4 h-4 text-warning" />
@@ -255,7 +258,7 @@ function PendingOrders({
           {orders.map((order, index) => (
             <li
               key={`${order.side}-${order.code}-${index}`}
-              className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/70 px-3 py-2"
+              className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2"
             >
               <span
                 className={`text-xs font-semibold ${order.side === 'buy' ? 'text-up' : 'text-down'}`}
@@ -264,7 +267,7 @@ function PendingOrders({
               </span>
               <Link
                 to={`/stocks/${order.code}`}
-                className="font-mono text-xs text-primary hover:underline"
+                className="font-mono text-[10px] text-brass-strong hover:underline dark:text-brass"
               >
                 {order.code}
               </Link>
@@ -330,7 +333,7 @@ const holdingColumns: DataTableColumn<PaperHolding>[] = [
     value: (row) => row.code,
     sortable: true,
     render: (row) => (
-      <Link to={`/stocks/${row.code}`} className="font-mono text-primary hover:underline">
+      <Link to={`/stocks/${row.code}`} className="font-mono text-brass-strong hover:underline dark:text-brass">
         {row.code}
       </Link>
     ),
@@ -457,8 +460,11 @@ function PaperDetailPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Wallet className="w-5 h-5 text-primary" />
+          <div className="flex items-center gap-2">
+            <Wallet className="h-4 w-4 text-brass" aria-hidden="true" />
+            <span className="eyebrow">Portfolio Detail</span>
+          </div>
+          <h2 className="mt-1.5 flex flex-wrap items-center gap-2 text-[19px] font-semibold tracking-[-0.02em]">
             {detail.name}
             <StatusBadge status={detail.status} />
           </h2>
@@ -474,9 +480,9 @@ function PaperDetailPanel({
           type="button"
           onClick={onSync}
           disabled={syncing}
-          className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
+          className="btn btn-sm h-9"
         >
-          <RefreshCw className="w-4 h-4" />
+          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
           {syncing ? '后台重算中…' : '手动同步'}
         </button>
       </div>
@@ -488,9 +494,9 @@ function PaperDetailPanel({
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {metricItems.map((item) => (
-          <div key={item.label} className="card p-3">
-            <p className="text-[11px] text-muted-foreground">{item.label}</p>
-            <p className={`mt-1 text-sm font-semibold num ${item.tone}`}>{item.value}</p>
+          <div key={item.label} className="inset px-3 py-2.5">
+            <p className="text-[10px] tracking-wide text-muted-foreground">{item.label}</p>
+            <p className={`num mt-1 text-[14px] font-semibold ${item.tone}`}>{item.value}</p>
           </div>
         ))}
       </div>
@@ -625,17 +631,18 @@ export default function PaperPage() {
       transition={{ duration: 0.3 }}
       className="max-w-6xl mx-auto px-4 py-6 space-y-6"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-[28px] font-bold flex items-center gap-2">
-            <TrendingUp className="w-6 h-6 text-primary" aria-hidden="true" />
-            纸面组合跟踪
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="rise">
+          <div className="flex items-center gap-2.5">
+            <span aria-hidden="true" className="h-px w-6 bg-brass" />
+            <span className="eyebrow">Paper Portfolio</span>
+          </div>
+          <h1 className="page-title mt-2.5">纸面组合跟踪</h1>
+          <p className="mt-2 max-w-3xl text-[12px] leading-relaxed text-muted-foreground">
             按策略首次实盘 run 自动建仓，每个交易日收盘后把建仓日至今整段重算并覆盖净值（不做增量）。
             净值口径与回测完全一致：后复权、佣金/印花税/滑点、整手向下取整。
           </p>
-          <p className="text-[11px] text-muted-foreground mt-1">
+          <p className="mt-1.5 text-[10px] text-muted-foreground/80">
             17:30 自动执行；非交易日跳过。手动同步为完整区间重算，耗时与区间长度成正比。
           </p>
         </div>
@@ -646,9 +653,9 @@ export default function PaperPage() {
             if (selected) void detailQuery.refetch()
           }}
           disabled={listQuery.isFetching}
-          className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
+          className="btn btn-sm h-9"
         >
-          <RefreshCw className="w-4 h-4" />
+          <RefreshCw className={`h-3.5 w-3.5 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
           刷新{listQuery.isFetching ? '中…' : ''}
         </button>
       </div>

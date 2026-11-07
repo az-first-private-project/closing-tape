@@ -253,25 +253,30 @@ export default function AlgoCenter() {
       transition={{ duration: 0.3 }}
       className="max-w-7xl mx-auto px-4 py-6 space-y-6"
     >
-      {/* ========== 标题栏 ========== */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-[28px] font-bold">🧮 量化选股中心</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            基于本地行情库实时计算 · 参数真实生效 · 结果可复现（run_id）· 支持回测
-            {result?.trade_date && ` · 结果交易日 ${result.trade_date}`}
+      {/* ========== 刊头 ========== */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="rise">
+          <div className="flex items-center gap-2.5">
+            <span aria-hidden="true" className="h-px w-6 bg-brass" />
+            <span className="eyebrow">
+              Strategy Lab{result?.trade_date ? ` · ${result.trade_date}` : ''}
+            </span>
+          </div>
+          <h1 className="page-title mt-2.5">量化选股</h1>
+          <p className="mt-2 text-[12px] text-muted-foreground">
+            本地行情库实时计算 · 参数真实生效 · 结果可复现（run_id）· 支持回测
           </p>
         </div>
         {selectedCode && (
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {/* 交易日选择：自动 = 该策略所需数据最新就绪的交易日 */}
-            <label className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <CalendarDays className="w-3.5 h-3.5" />
-              交易日
+            <label className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
+              <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="eyebrow shrink-0">Date</span>
               <select
                 value={selectedDate}
                 onChange={(event) => handleDateChange(event.target.value)}
-                className="min-w-0 px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[15rem]"
+                className="min-w-0 max-w-[13rem] cursor-pointer bg-transparent text-[12px] font-medium text-foreground focus:outline-none"
                 title="自动：选择该策略所需数据（指标/资金流/估值）最新齐全的交易日"
               >
                 <option value="">自动（最近数据就绪日）</option>
@@ -284,13 +289,13 @@ export default function AlgoCenter() {
             </label>
 
             {/* 历史 run 切换 */}
-            <label className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <History className="w-3.5 h-3.5" />
-              历史 run
+            <label className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
+              <History className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="eyebrow shrink-0">Run</span>
               <select
                 value={historyRunId ?? ''}
                 onChange={(event) => setHistoryRunId(event.target.value || null)}
-                className="min-w-0 px-2.5 py-2 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary max-w-[16rem]"
+                className="min-w-0 max-w-[14rem] cursor-pointer bg-transparent text-[12px] font-medium text-foreground focus:outline-none"
               >
                 <option value="">当前运行结果</option>
                 {runOptions.map((run) => (
@@ -305,10 +310,10 @@ export default function AlgoCenter() {
             <button
               onClick={handleExportCsv}
               disabled={exporting || !result}
-              className="inline-flex items-center gap-1.5 px-3 py-2 border border-border rounded-lg text-sm hover:bg-muted transition-colors disabled:opacity-50"
+              className="btn btn-sm h-9"
               title="导出当前结果 CSV（后端生成）"
             >
-              <Download className="w-4 h-4" />
+              <Download className="h-3.5 w-3.5" />
               {exporting ? '导出中…' : '导出 CSV'}
             </button>
           </div>
@@ -321,7 +326,7 @@ export default function AlgoCenter() {
       <StrategyLadder onSelectAlgo={handleLadderSelect} selectedCode={selectedCode} />
 
       {/* ========== 算法卡片 ========== */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         {algoList.map((algo) => (
           <AlgoCard
             key={algo.algo_code}
@@ -413,9 +418,15 @@ export default function AlgoCenter() {
       )}
 
       {/* 免责声明 */}
-      <div className="card p-4 text-xs text-muted-foreground space-y-1">
-        <p>⚠️ 选股结果由本地行情数据按策略规则计算，仅作客观量化信号展示，不构成投资建议。</p>
-        <p>参数快照与 run_id 保证结果可复现；回测基于历史数据，回测 ≠ 实盘。投资有风险，决策需谨慎。</p>
+      <div className="space-y-1.5 border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
+        <p className="flex items-start gap-1.5">
+          <span aria-hidden="true" className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brass/70" />
+          选股结果由本地行情数据按策略规则计算，仅作客观量化信号展示，不构成投资建议。
+        </p>
+        <p className="flex items-start gap-1.5">
+          <span aria-hidden="true" className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brass/70" />
+          参数快照与 run_id 保证结果可复现；回测基于历史数据，回测 ≠ 实盘。投资有风险，决策需谨慎。
+        </p>
       </div>
     </motion.div>
   )
