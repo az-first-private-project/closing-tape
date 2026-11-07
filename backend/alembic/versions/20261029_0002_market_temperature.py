@@ -23,6 +23,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # 基线用当前 ORM metadata 建表，可能已包含本表；fresh DB 升级必须幂等。
+    if sa.inspect(op.get_bind()).has_table("market_temperature_daily"):
+        return
     op.create_table(
         "market_temperature_daily",
         sa.Column("trade_date", sa.Date(), primary_key=True),

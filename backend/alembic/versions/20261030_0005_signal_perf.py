@@ -20,6 +20,23 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if inspector.has_table("stg_signal_perf"):
+        existing = {item["name"] for item in inspector.get_indexes("stg_signal_perf")}
+        if "ix_stg_signal_perf_algo_date" not in existing:
+            op.create_index(
+                "ix_stg_signal_perf_algo_date",
+                "stg_signal_perf",
+                ["algo_code", "signal_date"],
+            )
+        if "ix_stg_signal_perf_algo_mature" not in existing:
+            op.create_index(
+                "ix_stg_signal_perf_algo_mature",
+                "stg_signal_perf",
+                ["algo_code", "mature_20", "signal_date"],
+            )
+        return
     op.create_table(
         "stg_signal_perf",
         sa.Column("algo_code", sa.String(16), nullable=False),

@@ -93,9 +93,8 @@
 
 - 文件：`.github/workflows/ci.yml`
 - 内容：
-  - backend job：Python 3.11 + PostgreSQL 16 service；
-  - 先跑单元测试（不设 `GFNA_TEST_DB`）；
-  - 再跑集成 job：`alembic upgrade head` + 测试夹具，设置 `GFNA_TEST_DB=1`；
+  - backend job：Python 3.11，跑单元测试（不设 `GFNA_TEST_DB`，不连库）；
+  - backend-integration job：PostgreSQL 16 service，`alembic upgrade head` 后跑集成测试，设置 `GFNA_TEST_DB=1`；
   - frontend job：`npm ci` + `npm run build` + 三个 `node --test`；
   - 失败即阻断。
 - 验收：CI 在干净环境一次通过；故意改坏一个断言能变红。
@@ -116,6 +115,7 @@
   4. catch-up 的 `margin` 必须排在评分/日报之后；
   5. checkpoint 只在提交后推进；失败码重跑能被重试并清除；
   6. 同一交易日、同一参数重复运行结果一致。
+- 完成情况（11-07）：`tests/integration/` 9 个用例覆盖上述 6 组不变量；本地 `GFNA_TEST_DB=1 pytest tests/integration -q` 9 passed；CI 新增 `backend-integration` job（PostgreSQL 16 + 迁移 + 集成测试）。
 
 #### W0-3 数据不变量脚本
 
@@ -344,7 +344,7 @@
 |---|---|---|---:|---|---|---|
 | P0-1 | P0 | 11-05 两融未来函数订正 | 1–2h | W1 | 授权 | 待授权 |
 | W0-1 | 基建 | CI 流水线 | 0.5d | W1 | — | 完成（11-07） |
-| W0-2 | 基建 | 集成测试骨架与 6 组不变量 | 1–2d | W1 | W0-1 | 待开始 |
+| W0-2 | 基建 | 集成测试骨架与 6 组不变量 | 1–2d | W1 | W0-1 | 完成（11-07） |
 | W0-3 | 基建 | `check_invariants.py` | 0.5d | W1 | W0-2 | 待开始 |
 | W0-4 | 基建 | 状态枚举与新鲜度单一入口 | 0.5d | W1 | W0-2 | 待开始 |
 | W0-5 | 基建 | 测试残留清理 | 0.5d | W1 | 授权 | 待授权 |

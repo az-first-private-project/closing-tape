@@ -21,7 +21,31 @@ jobs:
     name: backend unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # W0-2 起在 GFNA_TEST_DB=1 下复用该库跑集成测试
+    env:
+      SCHEDULER_ENABLED: '0'
+      AUTO_CREATE_TABLES: '0'
+      CATCH_UP_ENABLED: '0'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Unit tests (without GFNA_TEST_DB)
+        run: PYTHONPATH=. pytest tests -q
+
+  backend-integration:
+    name: backend integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16
@@ -42,6 +66,8 @@ jobs:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DATABASE: gfna_test
+      GFNA_TEST_DB: '1'
+      GFNA_TEST_DATABASE_NAME: gfna_test
       SCHEDULER_ENABLED: '0'
       AUTO_CREATE_TABLES: '0'
       CATCH_UP_ENABLED: '0'
@@ -59,8 +85,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Unit tests (without GFNA_TEST_DB)
-        run: PYTHONPATH=. pytest tests -q
+      - name: Migrate test database
+        run: alembic upgrade head
+      - name: Integration tests
+        run: PYTHONPATH=. pytest tests/integration -q
 
   frontend:
     name: frontend build and lib tests

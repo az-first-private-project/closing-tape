@@ -33,6 +33,12 @@ _PARTIAL_SECTORS = (
 
 
 def upgrade() -> None:
+    existing = {
+        item["name"]
+        for item in sa.inspect(op.get_bind()).get_columns("dim_sector_member")
+    }
+    if "is_partial" in existing:
+        return
     op.add_column(
         "dim_sector_member",
         sa.Column(

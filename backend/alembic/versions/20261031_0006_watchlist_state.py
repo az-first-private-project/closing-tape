@@ -20,6 +20,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table("app_watchlist_state"):
+        return
     op.create_table(
         "app_watchlist_state",
         sa.Column("id", sa.SmallInteger(), nullable=False),

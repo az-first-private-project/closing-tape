@@ -35,8 +35,13 @@ _COLUMNS = (
 
 
 def upgrade() -> None:
+    existing = {
+        item["name"]
+        for item in sa.inspect(op.get_bind()).get_columns("fact_sector_daily")
+    }
     for column in _COLUMNS:
-        op.add_column("fact_sector_daily", column)
+        if column.name not in existing:
+            op.add_column("fact_sector_daily", column)
 
 
 def downgrade() -> None:

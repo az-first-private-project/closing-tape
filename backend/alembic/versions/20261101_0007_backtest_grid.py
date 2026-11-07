@@ -20,20 +20,29 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "backtest_run",
-        sa.Column("grid_id", sa.String(length=36), nullable=True, comment="参数敏感性矩阵 ID（T10）"),
-    )
-    op.add_column(
-        "backtest_run",
-        sa.Column(
-            "grid_cell",
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=True,
-            comment="矩阵坐标 {rebalance_days,max_positions,start_date,end_date,reused}",
-        ),
-    )
-    op.create_index("ix_backtest_run_grid", "backtest_run", ["grid_id"])
+    bind = op.get_bind()
+    existing = {
+        item["name"]
+        for item in sa.inspect(bind).get_columns("backtest_run")
+    }
+    if "grid_id" not in existing:
+        op.add_column(
+            "backtest_run",
+            sa.Column("grid_id", sa.String(length=36), nullable=True, comment="参数敏感性矩阵 ID（T10）"),
+        )
+    if "grid_cell" not in existing:
+        op.add_column(
+            "backtest_run",
+            sa.Column(
+                "grid_cell",
+                postgresql.JSONB(astext_type=sa.Text()),
+                nullable=True,
+                comment="矩阵坐标 {rebalance_days,max_positions,start_date,end_date,reused}",
+            ),
+        )
+    indexes = {item["name"] for item in sa.inspect(bind).get_indexes("backtest_run")}
+    if "ix_backtest_run_grid" not in indexes:
+        op.create_index("ix_backtest_run_grid", "backtest_run", ["grid_id"])
 
 
 def downgrade() -> None:

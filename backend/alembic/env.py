@@ -13,6 +13,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND_DIR)
@@ -20,6 +21,20 @@ sys.path.insert(0, BACKEND_DIR)
 from app.core.config import DATABASE_URL_SYNC  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db import models  # noqa: F401,E402  —— 注册全部表
+
+# 集成测试必须与生产库隔离：显式带 GFNA_TEST_DB=1 时，无论 .env 指向哪里，
+# 都把库名切到以 _test 结尾的独立库。
+if os.getenv("GFNA_TEST_DB", "").strip().lower() in {"1", "true", "yes", "on"}:
+    _test_url = os.getenv("GFNA_TEST_DATABASE_URL_SYNC", "").strip()
+    if _test_url:
+        _url = make_url(_test_url)
+    else:
+        _url = make_url(DATABASE_URL_SYNC).set(
+            database=os.getenv("GFNA_TEST_DATABASE_NAME", "gfna_test").strip()
+        )
+    if not (_url.database or "").endswith("_test"):
+        raise RuntimeError("测试库名必须以 _test 结尾")
+    DATABASE_URL_SYNC = _url.render_as_string(hide_password=False)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL_SYNC)

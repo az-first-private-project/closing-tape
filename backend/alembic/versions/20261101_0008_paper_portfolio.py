@@ -5,6 +5,7 @@ Revises: 0007_backtest_grid
 Create Date: 2026-11-01
 
 一策略一组合；paper_nav 每交易日一行，整体重算后幂等 upsert。
+基线迁移用当前 ORM metadata 建表，fresh DB 可能已包含这些对象，升级必须幂等。
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
+def _create_portfolio() -> None:
     op.create_table(
         "paper_portfolio",
         sa.Column("portfolio_id", sa.String(length=36), primary_key=True),
@@ -40,6 +41,9 @@ def upgrade() -> None:
             nullable=False, server_default=sa.text("now()"),
         ),
     )
+
+
+def _create_nav() -> None:
     op.create_table(
         "paper_nav",
         sa.Column("portfolio_id", sa.String(length=36), nullable=False),
@@ -69,11 +73,22 @@ def upgrade() -> None:
             ["portfolio_id"], ["paper_portfolio.portfolio_id"], ondelete="CASCADE",
         ),
     )
-    op.create_index(
-        "ix_paper_nav_portfolio_date",
-        "paper_nav",
-        ["portfolio_id", sa.text("trade_date DESC")],
-    )
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("paper_portfolio"):
+        _create_portfolio()
+    if not inspector.has_table("paper_nav"):
+        _create_nav()
+    existing = {item["name"] for item in sa.inspect(bind).get_indexes("paper_nav")}
+    if "ix_paper_nav_portfolio_date" not in existing:
+        op.create_index(
+            "ix_paper_nav_portfolio_date",
+            "paper_nav",
+            ["portfolio_id", sa.text("trade_date DESC")],
+        )
 
 
 def downgrade() -> None:
