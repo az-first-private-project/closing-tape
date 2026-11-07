@@ -164,10 +164,11 @@ def test_execute_history_day_order_and_params(monkeypatch) -> None:
     assert summary["days"] == [D1.isoformat()]
 
 
-def test_history_day_steps_include_margin_before_sector_scores() -> None:
-    """两融按日披露，漏跑日只能由该日补；且须早于依赖它的板块情绪评分。"""
+def test_history_day_steps_backfill_margin_after_same_day_outputs() -> None:
+    """两融 T+1 披露：漏跑日必须补采，但不得参与当日评分/日报（未来函数）。"""
     assert "margin" in cu.DAY_STEPS
-    assert cu.DAY_STEPS.index("margin") < cu.DAY_STEPS.index("sector_scores")
+    assert cu.DAY_STEPS.index("margin") > cu.DAY_STEPS.index("sector_scores")
+    assert cu.DAY_STEPS.index("margin") > cu.DAY_STEPS.index("report")
 
 
 def test_execute_today_uses_snapshot_pipeline(monkeypatch) -> None:
