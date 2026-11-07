@@ -267,3 +267,63 @@ def test_daily_pipeline_and_catch_up_include_valuation() -> None:
         catch_up.DAY_STEPS.index("valuation")
         < catch_up.DAY_STEPS.index("scores")
     )
+
+
+def test_run_task_bulk_failures_mark_quality_failed(monkeypatch) -> None:
+    """全市场回补重试后仍有失败：写 quality_failed，返回 partial，不能洗成成功。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return FetchResult(
+            rows=5580, total=5582, failed=2,
+            quality_status="quality_failed",
+            detail={"failed_codes": ["000001", "600000"]},
+        )
+
+    successes: list[dict] = []
+    failures: list[tuple[str, str, dict]] = []
+
+    async def fake_mark_success(*args, **kwargs) -> None:
+        successes.append(kwargs)
+
+    async def fake_mark_failure(db, dataset, error, **kwargs) -> None:
+        failures.append((dataset, error, kwargs))
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_success", fake_mark_success)
+    monkeypatch.setattr(pipeline, "mark_failure", fake_mark_failure)
+
+    out = asyncio.run(pipeline.run_task("history_fast", db=_FakeDB()))
+
+    assert out["status"] == "partial"
+    assert out["failed"] == 2
+    assert successes == []
+    assert failures and failures[0][0] == "stock_daily"
+    assert failures[0][2]["status"] == "quality_failed"
+    assert "2" in failures[0][1]
+    assert "000001" in failures[0][1]
+
+
+def test_run_task_scoped_bulk_partial_keeps_freshness(monkeypatch) -> None:
+    """定向回补部分失败同样不得改写全市场数据集的新鲜度。"""
+
+    async def fake_dispatch(task, **kwargs):
+        return FetchResult(
+            rows=1, total=2, failed=1,
+            quality_status="quality_failed",
+            detail={"failed_codes": ["600000"]},
+        )
+
+    failures: list[tuple[str, str, dict]] = []
+
+    async def fake_mark_failure(db, dataset, error, **kwargs) -> None:
+        failures.append((dataset, error, kwargs))
+
+    monkeypatch.setattr(pipeline, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(pipeline, "mark_failure", fake_mark_failure)
+
+    out = asyncio.run(
+        pipeline.run_task("history_fast", codes="000001", db=_FakeDB())
+    )
+
+    assert out["status"] == "partial"
+    assert failures == []

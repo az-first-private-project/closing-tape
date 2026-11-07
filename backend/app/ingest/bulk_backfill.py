@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,15 @@ DEFAULT_CONCURRENCY = 6
 PRICE_BATCH = 40
 MONEYFLOW_BATCH = 60
 VALUATION_BATCH = 40
+# 单只请求内部已重试 3 次；整轮结束后再对失败代码做 2 轮退避重试，
+# 覆盖「批次内多只同时抖动 / 短暂 DNS 故障」这类跨请求的瞬时问题。
+RETRY_ROUNDS = 2
+RETRY_BACKOFF_SEC = 1.0
+RETRY_BATCH = 20
+# 大批量任务失败比例过高时不再重试：多半是数据源整体不可用或已触发 WAF，
+# 立即重试只会放大请求量。
+RETRY_SKIP_MIN_FAILED = 100
+RETRY_SKIP_RATIO = 0.5
 _UPDATE_CHUNK_ROWS = 500
 _STATE_DIR = Path(config.BACKEND_DIR) / "var"
 
@@ -79,6 +89,53 @@ async def _write(db: AsyncSession | None, fn) -> None:
 def _chunks(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
     for offset in range(0, len(items), size):
         yield items[offset:offset + size]
+
+
+async def _retry_failed(
+    failed: dict[str, str],
+    consume: Callable[[Sequence[str]], Awaitable[None]],
+    *,
+    attempted: int,
+    label: str,
+) -> int:
+    """对失败代码做有限轮次退避重试，返回本轮恢复的代码数。
+
+    ``consume`` 负责重新抓取并落库，成功后必须从 ``failed`` 中移除该代码。
+    失败比例过高时（多半是数据源整体不可用/被 WAF 拦截）直接跳过，
+    避免把一次批量任务变成对数据源的重复冲击。
+    """
+    if not failed:
+        return 0
+    if (
+        attempted >= RETRY_SKIP_MIN_FAILED
+        and len(failed) >= attempted * RETRY_SKIP_RATIO
+    ):
+        logger.warning(
+            "%s 失败比例过高（%d/%d），跳过自动重试，留待下次运行继续补",
+            label, len(failed), attempted,
+        )
+        return 0
+
+    recovered = 0
+    for attempt in range(1, RETRY_ROUNDS + 1):
+        targets = sorted(failed)
+        if not targets:
+            break
+        await asyncio.sleep(RETRY_BACKOFF_SEC * attempt)
+        before = len(failed)
+        logger.info(
+            "%s 自动重试 %d/%d：%d 只（%.0fs 退避后）",
+            label, attempt, RETRY_ROUNDS, len(targets),
+            RETRY_BACKOFF_SEC * attempt,
+        )
+        await consume(targets)
+        gained = max(0, before - len(failed))
+        recovered += gained
+        logger.info(
+            "%s 第 %d 轮重试结束：恢复 %d，仍失败 %d",
+            label, attempt, gained, len(failed),
+        )
+    return recovered
 
 
 def _state_path(kind: str) -> Path:
@@ -362,43 +419,55 @@ async def backfill_prices(
         logger.warning("分红事件获取失败，dv_ttm 回退为腾讯口径：%s", exc)
 
     sources: dict[str, int] = {}
-    for batch in _chunks(pending, PRICE_BATCH):
-        results = await asyncio.gather(*(_one(code) for code in batch))
-        batch_rows: list[dict[str, Any]] = []
-        for code, raw, qfq, source, error in results:
-            if error is not None:
-                failed[code] = error
-                logger.warning("日线回补失败 code=%s：%s", code, error)
-                continue
-            sources[source] = sources.get(source, 0) + 1
-            events = (
-                dividend_events.get(code, ())
-                if dividend_events is not None
-                else None
-            )
-            rows = _price_rows(
-                code, meta.get(code, {}), raw, qfq, start_date, end_date,
-                events, src=source,
-            )
-            if not rows:
-                empty.append(code)
-            else:
-                batch_rows.extend(rows)
-            completed.add(code)
-        if batch_rows:
-            async def _write_rows(session: AsyncSession) -> None:
-                nonlocal written
-                written += await upsert_rows(
-                    session, FactStockDaily, batch_rows, ["code", "trade_date"],
-                    update_columns=update_columns, chunk_size=1000,
+
+    async def _consume(codes_to_fetch: Sequence[str], batch_size: int) -> None:
+        nonlocal written
+        for batch in _chunks(codes_to_fetch, batch_size):
+            results = await asyncio.gather(*(_one(code) for code in batch))
+            batch_rows: list[dict[str, Any]] = []
+            for code, raw, qfq, source, error in results:
+                if error is not None:
+                    failed[code] = error
+                    logger.warning("日线回补失败 code=%s：%s", code, error)
+                    continue
+                sources[source] = sources.get(source, 0) + 1
+                events = (
+                    dividend_events.get(code, ())
+                    if dividend_events is not None
+                    else None
                 )
-            await _write(db, _write_rows)
-        _save_state("prices", end_date, completed)
-        logger.info(
-            "日线进度 %d/%d（写入 %d 行，失败 %d，空 %d）",
-            min(len(completed), len(code_list)), len(code_list),
-            written, len(failed), len(empty),
-        )
+                rows = _price_rows(
+                    code, meta.get(code, {}), raw, qfq, start_date, end_date,
+                    events, src=source,
+                )
+                if not rows:
+                    empty.append(code)
+                else:
+                    batch_rows.extend(rows)
+                completed.add(code)
+                failed.pop(code, None)
+            if batch_rows:
+                async def _write_rows(session: AsyncSession) -> None:
+                    nonlocal written
+                    written += await upsert_rows(
+                        session, FactStockDaily, batch_rows, ["code", "trade_date"],
+                        update_columns=update_columns, chunk_size=1000,
+                    )
+                await _write(db, _write_rows)
+            _save_state("prices", end_date, completed)
+            logger.info(
+                "日线进度 %d/%d（写入 %d 行，失败 %d，空 %d）",
+                min(len(completed), len(code_list)), len(code_list),
+                written, len(failed), len(empty),
+            )
+
+    await _consume(pending, PRICE_BATCH)
+    retry_recovered = await _retry_failed(
+        failed,
+        lambda codes: _consume(codes, RETRY_BATCH),
+        attempted=len(pending),
+        label="日线回补",
+    )
 
     elapsed = int((time.perf_counter() - started) * 1000)
     return FetchResult(
@@ -406,6 +475,7 @@ async def backfill_prices(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
+        quality_status="quality_failed" if failed else "ok",
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
@@ -413,6 +483,8 @@ async def backfill_prices(
             "empty": len(empty),
             "failed_codes": sorted(failed)[:100],
             "sources": sources,
+            "retry_recovered": retry_recovered,
+            "retry_rounds": RETRY_ROUNDS,
         },
     )
 
@@ -490,34 +562,45 @@ async def backfill_moneyflow(
         except Exception as exc:  # noqa: BLE001
             return code, None, f"{type(exc).__name__}: {exc}"
 
-    for batch in _chunks(pending, MONEYFLOW_BATCH):
-        results = await asyncio.gather(*(_one(code) for code in batch))
-        batch_rows: list[dict[str, Any]] = []
-        for code, items, error in results:
-            if error is not None:
-                failed[code] = error
-                logger.warning("资金流回补失败 code=%s：%s", code, error)
-                continue
-            rows = _moneyflow_rows(code, items or [], start_date, end_date)
-            if not rows:
-                empty.append(code)
-            else:
-                batch_rows.extend(rows)
-            completed.add(code)
-        if batch_rows:
-            async def _write_rows(session: AsyncSession) -> None:
-                nonlocal written
-                written += await upsert_rows(
-                    session, FactMoneyflow, batch_rows, ["code", "trade_date"],
-                    chunk_size=1000,
-                )
-            await _write(db, _write_rows)
-        _save_state("moneyflow", end_date, completed)
-        logger.info(
-            "资金流进度 %d/%d（写入 %d 行，失败 %d，空 %d）",
-            min(len(completed), len(code_list)), len(code_list),
-            written, len(failed), len(empty),
-        )
+    async def _consume(codes_to_fetch: Sequence[str], batch_size: int) -> None:
+        nonlocal written
+        for batch in _chunks(codes_to_fetch, batch_size):
+            results = await asyncio.gather(*(_one(code) for code in batch))
+            batch_rows: list[dict[str, Any]] = []
+            for code, items, error in results:
+                if error is not None:
+                    failed[code] = error
+                    logger.warning("资金流回补失败 code=%s：%s", code, error)
+                    continue
+                rows = _moneyflow_rows(code, items or [], start_date, end_date)
+                if not rows:
+                    empty.append(code)
+                else:
+                    batch_rows.extend(rows)
+                completed.add(code)
+                failed.pop(code, None)
+            if batch_rows:
+                async def _write_rows(session: AsyncSession) -> None:
+                    nonlocal written
+                    written += await upsert_rows(
+                        session, FactMoneyflow, batch_rows, ["code", "trade_date"],
+                        chunk_size=1000,
+                    )
+                await _write(db, _write_rows)
+            _save_state("moneyflow", end_date, completed)
+            logger.info(
+                "资金流进度 %d/%d（写入 %d 行，失败 %d，空 %d）",
+                min(len(completed), len(code_list)), len(code_list),
+                written, len(failed), len(empty),
+            )
+
+    await _consume(pending, MONEYFLOW_BATCH)
+    retry_recovered = await _retry_failed(
+        failed,
+        lambda codes: _consume(codes, RETRY_BATCH),
+        attempted=len(pending),
+        label="资金流回补",
+    )
 
     elapsed = int((time.perf_counter() - started) * 1000)
     return FetchResult(
@@ -525,6 +608,7 @@ async def backfill_moneyflow(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
+        quality_status="quality_failed" if failed else "ok",
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
@@ -532,6 +616,8 @@ async def backfill_moneyflow(
             "empty": len(empty),
             "failed_codes": sorted(failed)[:100],
             "source": "sina",
+            "retry_recovered": retry_recovered,
+            "retry_rounds": RETRY_ROUNDS,
         },
     )
 
@@ -640,56 +726,67 @@ async def backfill_valuation(
         except Exception as exc:  # noqa: BLE001
             return code, None, f"{type(exc).__name__}: {exc}"
 
-    for batch in _chunks(pending, VALUATION_BATCH):
-        results = await asyncio.gather(*(_one(code) for code in batch))
-        batch_rows: list[dict[str, Any]] = []
-        share_fills: list[tuple[str, dict[str, Any]]] = []
-        for code, items, error in results:
-            if error is not None:
-                failed[code] = error
-                logger.warning("估值回补失败 code=%s：%s", code, error)
-                continue
-            if items:
-                share_fills.append((code, items[-1]))
-            rows = [
-                {
-                    "code": code,
-                    "trade_date": item["trade_date"],
-                    "pe_ttm": item.get("pe_ttm"),
-                    "pb": item.get("pb"),
-                    "ps_ttm": item.get("ps_ttm"),
-                    "market_cap": item.get("market_cap"),
-                    "float_cap": item.get("float_cap"),
-                }
-                for item in (items or [])
-                if start_date <= item["trade_date"] <= end_date
-                and any(
-                    item.get(key) is not None
-                    for key in ("pe_ttm", "pb", "ps_ttm", "market_cap", "float_cap")
-                )
-            ]
-            if not rows:
-                empty.append(code)
-            else:
-                batch_rows.extend(rows)
-            completed.add(code)
-        if batch_rows or share_fills:
-            async def _write_rows(session: AsyncSession) -> None:
-                nonlocal updated
-                for offset in range(0, len(batch_rows), _UPDATE_CHUNK_ROWS):
-                    chunk = batch_rows[offset:offset + _UPDATE_CHUNK_ROWS]
-                    result = await session.execute(_valuation_update_statement(chunk))
-                    affected = getattr(result, "rowcount", None)
-                    updated += int(affected) if affected and affected > 0 else len(chunk)
-                for code, latest in share_fills:
-                    await _fill_share_capital(session, code, latest)
-            await _write(db, _write_rows)
-        _save_state("valuation", end_date, completed)
-        logger.info(
-            "估值进度 %d/%d（更新 %d 行，失败 %d，空 %d）",
-            min(len(completed), len(code_list)), len(code_list),
-            updated, len(failed), len(empty),
-        )
+    async def _consume(codes_to_fetch: Sequence[str], batch_size: int) -> None:
+        nonlocal updated
+        for batch in _chunks(codes_to_fetch, batch_size):
+            results = await asyncio.gather(*(_one(code) for code in batch))
+            batch_rows: list[dict[str, Any]] = []
+            share_fills: list[tuple[str, dict[str, Any]]] = []
+            for code, items, error in results:
+                if error is not None:
+                    failed[code] = error
+                    logger.warning("估值回补失败 code=%s：%s", code, error)
+                    continue
+                if items:
+                    share_fills.append((code, items[-1]))
+                rows = [
+                    {
+                        "code": code,
+                        "trade_date": item["trade_date"],
+                        "pe_ttm": item.get("pe_ttm"),
+                        "pb": item.get("pb"),
+                        "ps_ttm": item.get("ps_ttm"),
+                        "market_cap": item.get("market_cap"),
+                        "float_cap": item.get("float_cap"),
+                    }
+                    for item in (items or [])
+                    if start_date <= item["trade_date"] <= end_date
+                    and any(
+                        item.get(key) is not None
+                        for key in ("pe_ttm", "pb", "ps_ttm", "market_cap", "float_cap")
+                    )
+                ]
+                if not rows:
+                    empty.append(code)
+                else:
+                    batch_rows.extend(rows)
+                completed.add(code)
+                failed.pop(code, None)
+            if batch_rows or share_fills:
+                async def _write_rows(session: AsyncSession) -> None:
+                    nonlocal updated
+                    for offset in range(0, len(batch_rows), _UPDATE_CHUNK_ROWS):
+                        chunk = batch_rows[offset:offset + _UPDATE_CHUNK_ROWS]
+                        result = await session.execute(_valuation_update_statement(chunk))
+                        affected = getattr(result, "rowcount", None)
+                        updated += int(affected) if affected and affected > 0 else len(chunk)
+                    for code, latest in share_fills:
+                        await _fill_share_capital(session, code, latest)
+                await _write(db, _write_rows)
+            _save_state("valuation", end_date, completed)
+            logger.info(
+                "估值进度 %d/%d（更新 %d 行，失败 %d，空 %d）",
+                min(len(completed), len(code_list)), len(code_list),
+                updated, len(failed), len(empty),
+            )
+
+    await _consume(pending, VALUATION_BATCH)
+    retry_recovered = await _retry_failed(
+        failed,
+        lambda codes: _consume(codes, RETRY_BATCH),
+        attempted=len(pending),
+        label="估值回补",
+    )
 
     elapsed = int((time.perf_counter() - started) * 1000)
     return FetchResult(
@@ -697,6 +794,7 @@ async def backfill_valuation(
         total=len(code_list),
         failed=len(failed),
         elapsed_ms=elapsed,
+        quality_status="quality_failed" if failed else "ok",
         detail={
             "start": start_date.isoformat(),
             "end": end_date.isoformat(),
@@ -704,6 +802,8 @@ async def backfill_valuation(
             "empty": len(empty),
             "failed_codes": sorted(failed)[:100],
             "source": "eastmoney-datacenter",
+            "retry_recovered": retry_recovered,
+            "retry_rounds": RETRY_ROUNDS,
         },
     )
 

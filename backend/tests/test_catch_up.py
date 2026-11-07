@@ -122,7 +122,8 @@ def test_find_incomplete_days_baseline_not_dragged_down() -> None:
 # ============================================================
 # ② _execute_catch_up
 # ============================================================
-def _patch_pipeline(monkeypatch, *, fail_step: str | None = None):
+def _patch_pipeline(monkeypatch, *, fail_step: str | None = None,
+                    partial_step: str | None = None):
     from app import pipeline
 
     calls: list[dict] = []
@@ -133,6 +134,9 @@ def _patch_pipeline(monkeypatch, *, fail_step: str | None = None):
                       "start": start, "end": end})
         if task == fail_step:
             return {"task": task, "status": "failed", "error": "boom"}
+        if task == partial_step:
+            return {"task": task, "status": "partial",
+                    "quality_status": "quality_failed", "failed": 1}
         return {"task": task, "status": "success", "rows": 1}
 
     async def fake_pipeline(day, db=None, steps=None):
@@ -201,6 +205,19 @@ def test_execute_failure_does_not_abort(monkeypatch) -> None:
     assert f"{D1}:sector" in summary["failed"]
     # 失败之后后续步骤仍然执行
     assert calls[-1]["task"] == "signal_perf"
+
+
+def test_execute_range_partial_is_not_reported_as_success(monkeypatch) -> None:
+    """区间回补有代码失败（partial）时，补跑摘要不能写 success。"""
+    _patch_pipeline(monkeypatch, partial_step="history_fast")
+
+    summary = asyncio.run(
+        cu._execute_catch_up([D1], object(), today=D2, snapshot_ok=True)
+    )
+
+    assert summary["status"] == "partial"
+    assert "history_fast" in summary["partial"]
+    assert summary["failed"] == []
 
 
 # ============================================================

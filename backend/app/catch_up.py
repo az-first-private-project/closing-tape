@@ -215,15 +215,24 @@ async def _execute_catch_up(
                 key for key, value in summary["steps"].items()
                 if isinstance(value, dict) and value.get("status") == "failed"
             ]
+            partial = [
+                key for key, value in summary["steps"].items()
+                if isinstance(value, dict) and value.get("status") == "partial"
+            ]
             results[f"{day}:daily_pipeline"] = {
-                "status": "partial" if failed else "success", "failed": failed,
+                "status": "partial" if failed or partial else "success",
+                "failed": failed,
+                "partial": partial,
             }
             continue
         for step in DAY_STEPS:
             outcome = await run_task(step, trade_date=day, db=db)
             results[f"{day}:{step}"] = outcome
-            if outcome.get("status") == "failed":
-                logger.warning("补跑 %s %s 失败：%s", day, step, outcome.get("error"))
+            if outcome.get("status") in {"failed", "partial"}:
+                logger.warning(
+                    "补跑 %s %s %s：%s", day, step, outcome.get("status"),
+                    outcome.get("error") or outcome.get("quality_status") or "见任务详情",
+                )
 
     # 前瞻统计依赖所有补跑日的选股结果，最后统一重算
     results["signal_perf"] = await run_task("signal_perf", trade_date=last, db=db)
@@ -232,10 +241,15 @@ async def _execute_catch_up(
         key for key, value in results.items()
         if isinstance(value, dict) and value.get("status") == "failed"
     ]
+    partial_steps = [
+        key for key, value in results.items()
+        if isinstance(value, dict) and value.get("status") == "partial"
+    ]
     return {
-        "status": "partial" if failed_steps else "success",
+        "status": "partial" if failed_steps or partial_steps else "success",
         "days": [day.isoformat() for day in days],
         "failed": failed_steps,
+        "partial": partial_steps,
     }
 
 

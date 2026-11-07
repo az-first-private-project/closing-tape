@@ -36,6 +36,10 @@ DEFAULT_DAILY_STEPS = (
 # （920 定向回补曾把 stock_daily 写成 rows=355、coverage=0.9916）。
 _SCOPED_TASKS = {"backfill", "history_fast", "moneyflow_history", "valuation_fast", "rebuild"}
 
+# 这些回补函数只返回 FetchResult，不自己写 meta_data_quality；部分失败由编排层补写。
+# 不能让 failed>0 的整轮任务继续走 mark_success —— 那会把缺口洗成绿色。
+_BULK_BACKFILL_TASKS = {"history_fast", "moneyflow_history", "valuation_fast"}
+
 # task -> dataset（写新鲜度用）
 TASK_DATASET = {
     "calendar": "trade_calendar",
@@ -251,8 +255,11 @@ async def run_task(
         # 返回体可能是 FetchResult（采集层）或 dict（引擎层），统一成可序列化摘要
         stats = _summary(payload)
         rows = stats.get("rows")
+        failed_count = int(stats.get("failed") or 0)
         quality_status = str(stats.get("quality_status") or "ok")
         detail = stats.get("detail") if isinstance(stats.get("detail"), dict) else None
+        if failed_count:
+            logger.warning("任务 %s 自动重试后仍有 %d 个标的失败", task, failed_count)
         # FetchResult 没有 coverage 字段，采集层把覆盖率放在 detail 里；
         # 不取出来会把 record_quality 刚写入的精确覆盖率覆盖成 NULL。
         coverage = stats.get("coverage")
@@ -284,9 +291,23 @@ async def run_task(
             else:
                 # 采集层已写入非 ok 状态（如指数部分缺失）：mark_success 会把 stale
                 # 覆盖成 ok，导致监控看不到缺口。保留采集层记录（事务在下方已 commit）。
-                logger.warning(
-                    "任务 %s 质量状态为 %s，保留采集层质量记录", task, quality_status
-                )
+                if task in _BULK_BACKFILL_TASKS and failed_count > 0:
+                    # 回补函数自己不写质量记录：这里补一条 quality_failed，
+                    # 保留 last_success_at，但让监控和前端能看到本轮有代码失败。
+                    sample = (detail or {}).get("failed_codes") or []
+                    suffix = f"：{', '.join(map(str, sample[:10]))}" if sample else ""
+                    try:
+                        await mark_failure(
+                            db, dataset,
+                            f"自动重试后仍有 {failed_count} 个标的失败{suffix}",
+                            status="quality_failed",
+                        )
+                    except Exception:                 # noqa: BLE001 —— 记录失败不能改变任务结果
+                        logger.exception("记录部分失败状态失败 dataset=%s", dataset)
+                else:
+                    logger.warning(
+                        "任务 %s 质量状态为 %s，保留采集层质量记录", task, quality_status
+                    )
         logger.info("任务完成 rows=%s elapsed_ms=%s", rows, elapsed)
         if quality_status != "ok":
             status = "partial"
