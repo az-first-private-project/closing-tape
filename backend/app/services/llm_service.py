@@ -14,6 +14,7 @@ V5 修复的坑：
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from typing import Any
@@ -30,10 +31,55 @@ logger = get_logger(__name__)
 _client = None
 
 
+def _clean_no_proxy(raw: str) -> str:
+    """去掉 NO_PROXY 中的空项、重复项与 IPv6 方括号。
+
+    httpx 会把每个例外项当 URL 解析，``[::1]`` 在 ``normalize_port`` 中报
+    ``Invalid port: ':1]'``；``::1`` 才是它接受的无括号写法。
+    """
+    seen: set[str] = set()
+    items: list[str] = []
+    for part in raw.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if item.startswith("[") and item.endswith("]") and ":" in item:
+            item = item[1:-1]
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+    return ",".join(items)
+
+
+def sanitize_proxy_env() -> bool:
+    """清洗进程内的 NO_PROXY/no_proxy，返回是否发生修改。
+
+    Windows 默认环境常见 ``[::1]`` 与 ``::1`` 并存；不清洗会让 OpenAI/httpx
+    客户端初始化失败，AI 日报静默降级为模板。启动时与客户端懒加载前都会调用。
+    """
+    changed = False
+    for name in ("NO_PROXY", "no_proxy"):
+        raw = os.environ.get(name)
+        if not raw:
+            continue
+        cleaned = _clean_no_proxy(raw)
+        if cleaned != raw:
+            os.environ[name] = cleaned
+            changed = True
+    if changed:
+        logger.warning(
+            "NO_PROXY 含 httpx 无法解析的方括号 IPv6 项，已清洗为: %s",
+            os.environ.get("NO_PROXY"),
+        )
+    return changed
+
+
 def get_client():
     """懒加载 OpenAI 兼容客户端。未配置 Key 时返回 None（调用方必须处理）。"""
     global _client
     if _client is None:
+        sanitize_proxy_env()
         if not DEEPSEEK_API_KEY:
             return None
         try:
@@ -220,5 +266,5 @@ def judge_sentiment(title: str, summary: str | None = None) -> float | None:
 __all__ = [
     "available", "get_client", "chat_text", "chat_json", "generate_summary",
     "generate_batch_summaries", "judge_sentiment", "judge_sentiment_batch",
-    "ErrorCode",
+    "sanitize_proxy_env", "ErrorCode",
 ]

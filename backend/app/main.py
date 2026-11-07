@@ -61,6 +61,11 @@ async def lifespan(app: FastAPI):
     logger.info("GFNA V5 启动中 …")
     logger.info("=" * 56)
 
+    # NO_PROXY 里的 "[::1]" 会让 httpx/openai 初始化报 Invalid port，
+    # AI 日报会静默降级为模板；启动即清洗并留下 warning。
+    from app.services.llm_service import sanitize_proxy_env
+    sanitize_proxy_env()
+
     try:
         async with engine.connect() as conn:
             version = (await conn.execute(text("SELECT version()"))).scalar()

@@ -241,8 +241,15 @@
 ### P1-5 NO_PROXY 固化
 
 - 现状：`NO_PROXY` 含 `[::1]` 会让 httpx/openai 初始化报 `Invalid port`，AI 日报静默退化为模板。
-- 方案：在 `llm_service` 或启动器显式清洗该变量；启动自检发现异常直接记 warning。
-- 验收：在脏 `NO_PROXY` 环境下重启，AI 日报仍走真实模型；日志无降级静默。
+- 已完成（11-07）：
+  - `llm_service.sanitize_proxy_env()` 同时清洗 `NO_PROXY`/`no_proxy`：去掉
+    空项、重复项与 IPv6 方括号（`[::1]` → `::1`），保留其余例外项，变化时记 warning；
+  - `get_client()` 构造 OpenAI 客户端前调用；FastAPI `lifespan` 启动时也调用一次，
+    服务启动即暴露异常，不再等到首次日报；
+  - 新增 `tests/test_llm_proxy.py` 3 个用例（清洗、幂等、脏环境下客户端可构造）。
+- 验收：脏环境下复现 `InvalidURL: Invalid port: ':1]'`；修复后真实
+  `chat_text` 返回正常，重启日志含清洗 warning，`/health` 15/15 数据集新鲜；
+  单测 486 passed / 33 skipped。
 - 代价：0.5 天。
 
 ## 7. P2 详细方案（10 项）
@@ -375,7 +382,7 @@
 | P1-2 | P1 | 信号样本标识 | 0.5d | W2 | — | 待开始 |
 | P1-3 | P1 | 自选隔离与鉴权 | 1h–2d | W3 | 方案确认 | 待决策 |
 | P1-4 | P1 | 任务状态机 | 0.5–3d | W2 | W0-4 | 待开始 |
-| P1-5 | P1 | NO_PROXY 固化 | 0.5d | W1 | — | 待开始 |
+| P1-5 | P1 | NO_PROXY 固化 | 0.5d | W1 | — | 完成（11-07） |
 | P2-1 | P2 | partial 板块提示 | 1h | W3 | P1-1 | 待开始 |
 | P2-2 | P2 | 矩阵复用关联 | 0.5–1d | W4 | — | 待开始 |
 | P2-3 | P2 | 纸面增量重算 | 1–2d | W4 | — | 待开始 |
