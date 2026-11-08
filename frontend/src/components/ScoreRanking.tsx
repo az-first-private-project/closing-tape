@@ -84,7 +84,7 @@ function ScoreSparkline({
     return <span className="inline-block h-[22px] w-[72px]" aria-hidden="true" />
   }
   // 0/1 个有效点画不出走势：统一显示「—」，不渲染灰色假线
-  if (validCount <= 1) {
+  if (!scores || validCount <= 1) {
     return (
       <span
         className="text-[11px] text-muted-foreground"
