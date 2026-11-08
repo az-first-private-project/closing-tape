@@ -59,7 +59,7 @@ async def sync_paper_portfolio_api(
     algo_code: str,
     background_tasks: BackgroundTasks,
 ) -> dict:
-    """手动触发完整区间重算；耗时与区间长度成正比，统一转后台。"""
+    """手动触发重算（水位 + 重叠窗口，每周全量校准）；统一转后台。"""
     code = _ensure_algo(algo_code)
     background_tasks.add_task(sync_paper_background, code)
     return {

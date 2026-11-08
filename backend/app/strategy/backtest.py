@@ -305,6 +305,27 @@ def _as_date(value: Any, *, field_name: str) -> date:
     )
 
 
+def phase_signal_dates(
+    phase_days: Sequence[date],
+    rebalance_days: int,
+    *,
+    signal_from: date,
+    end: date,
+) -> list[date]:
+    """按 ``phase_days[::rebalance_days]`` 的绝对相位取信号日。
+
+    纸面组合的增量窗口必须与全量重算使用同一调仓相位，否则同样的策略参数
+    会在不同日期成交。``signal_from`` 允许从窗口前一个检查点日开始补算信号
+    （其 T+1 成交日正好是窗口第一天）。
+    """
+    step = max(int(rebalance_days), 1)
+    return [
+        phase_days[index]
+        for index in range(0, len(phase_days), step)
+        if signal_from <= phase_days[index] < end
+    ]
+
+
 async def load_trading_days(db: AsyncSession, start: date, end: date) -> tuple[list[date], str]:
     """加载区间交易日序列。
 
@@ -526,6 +547,33 @@ def build_pending_orders(
     return orders
 
 
+def _state_snapshot(
+    day: date,
+    cash: float,
+    positions: Mapping[str, Mapping[str, Any]],
+    last_value: Mapping[str, float],
+    bench_base: float | None,
+    bench_last: float | None,
+) -> dict:
+    """组合内部状态快照（纸面组合检查点续算用，不进入契约响应）。"""
+    return {
+        "date": day.isoformat(),
+        "cash": round(float(cash), _MONEY_DIGITS),
+        "positions": {
+            code: {
+                "name": position.get("name") or code,
+                "shares": int(position.get("shares") or 0),
+                "units": float(position.get("units") or 0.0),
+                "cost_basis": round(float(position.get("cost_basis") or 0.0), _MONEY_DIGITS),
+            }
+            for code, position in positions.items()
+        },
+        "last_value": {code: float(value) for code, value in last_value.items()},
+        "benchmark_base": bench_base,
+        "benchmark_last": bench_last,
+    }
+
+
 def simulate_portfolio(
     trading_days: Sequence[date],
     executions: Mapping[date, Sequence[Mapping[str, Any]]],
@@ -534,6 +582,9 @@ def simulate_portfolio(
     params: BacktestParams,
     *,
     snapshots_out: list[dict] | None = None,
+    initial_state: Mapping[str, Any] | None = None,
+    capture_state_on: date | None = None,
+    state_out: dict | None = None,
 ) -> tuple[list[dict], list[dict], bool]:
     """按"T+1 开盘成交"模拟组合，返回 ``(equity_curve, trades, adjusted)``。
 
@@ -541,17 +592,38 @@ def simulate_portfolio(
       - 每个交易日先看是否调仓日（executions 的键是**成交日**，即信号日的下一个交易日）；
       - 收盘后按后复权价计算净值；
       - 不引入任何 T+1 之后的数据决定 T 的持仓。
+
+    ``initial_state`` 用于纸面组合的检查点续算：从上次水位收盘状态（现金、
+    后复权份额、基准基数）继续模拟，曲线只覆盖传入的交易日。
+    ``capture_state_on`` 指定在哪个交易日收盘落状态（缺省为最后一天），
+    通过 ``state_out`` 返回，供下一次续算使用。
     """
-    cash: float = round(float(params.initial_cash), _MONEY_DIGITS)
-    positions: dict[str, dict[str, Any]] = {}
-    last_value: dict[str, float] = {}
+    seed = dict(initial_state or {})
+    cash: float = round(
+        float(seed["cash"]) if "cash" in seed else float(params.initial_cash), _MONEY_DIGITS
+    )
+    positions: dict[str, dict[str, Any]] = {
+        str(code).zfill(6): dict(position)
+        for code, position in dict(seed.get("positions") or {}).items()
+    }
+    last_value: dict[str, float] = {
+        str(code).zfill(6): float(value)
+        for code, value in dict(seed.get("last_value") or {}).items()
+    }
     trades: list[dict] = []
     curve: list[dict] = []
     adjusted_ok = True
 
     benchmark_data = benchmark_closes or {}
-    bench_base: float | None = None
-    bench_last: float | None = None
+    bench_base: float | None = (
+        float(seed["benchmark_base"]) if seed.get("benchmark_base") is not None else None
+    )
+    bench_last: float | None = (
+        float(seed["benchmark_last"]) if seed.get("benchmark_last") is not None else None
+    )
+    # 有初始状态时基准基数以检查点为准；无状态（全量重算）才用区间首个收盘价
+    seed_bench_base = "benchmark_base" in seed
+    captured = False
 
     def _bar(code: str, day: date) -> Bar | None:
         return (price_book.get(code) or {}).get(day)
@@ -711,7 +783,7 @@ def simulate_portfolio(
         # ---- 基准净值 ----
         raw_benchmark = benchmark_data.get(day)
         if raw_benchmark is not None and raw_benchmark > 0:
-            if bench_base is None:
+            if bench_base is None and not seed_bench_base:
                 bench_base = float(raw_benchmark)
             bench_last = float(raw_benchmark)
         benchmark_nav = None
@@ -760,6 +832,17 @@ def simulate_portfolio(
                 "pending_orders": pending,
             })
 
+        if state_out is not None and capture_state_on is not None and day == capture_state_on:
+            state_out.update(_state_snapshot(
+                day, cash, positions, last_value, bench_base, bench_last,
+            ))
+            captured = True
+
+    if state_out is not None and not captured and curve:
+        state_out.update(_state_snapshot(
+            trading_days[-1], cash, positions, last_value, bench_base, bench_last,
+        ))
+
     return curve, trades, adjusted_ok
 
 
@@ -778,6 +861,11 @@ async def run_backtest(
     *,
     snapshots_out: list[dict] | None = None,
     tag: str | None = None,
+    initial_state: Mapping[str, Any] | None = None,
+    phase_anchor: date | None = None,
+    signal_from: date | None = None,
+    capture_state_on: date | None = None,
+    state_out: dict | None = None,
 ) -> dict:
     """执行回测并落 ``backtest_run``，返回契约 6.1 结构。
 
@@ -785,6 +873,13 @@ async def run_backtest(
     每日重算），用于在同一引擎路径下更新状态，不新增特殊回测分支。
     ``snapshots_out`` 收集每日收盘持仓/现金比/待执行单（T11）；
     ``tag`` 写入 params.source，便于区分纸面组合产生的回测记录。
+
+    检查点续算（纸面组合 P2-3）：
+      - ``initial_state``：上一水位收盘的组合内部状态，从该状态继续；
+      - ``phase_anchor``：调仓相位的绝对起点（组合建仓日），保证增量窗口与
+        全量重算在相同信号日调仓；
+      - ``signal_from``：从哪天开始补算信号（通常是检查点日，其 T+1 是窗口首日）；
+      - ``capture_state_on`` / ``state_out``：在指定交易日收盘落新状态。
     """
     spec = strat.get_spec(algo_code)
     backtest_params = BacktestParams.from_dict(bt_params)
@@ -805,12 +900,18 @@ async def run_backtest(
             db, spec, backtest_params, normalized, start_date, end_date,
             owns_session=False, bt_id=bt_id,
             snapshots_out=snapshots_out, tag=tag,
+            initial_state=initial_state, phase_anchor=phase_anchor,
+            signal_from=signal_from, capture_state_on=capture_state_on,
+            state_out=state_out,
         )
     async with AsyncSessionLocal() as session:
         return await _run_backtest_impl(
             session, spec, backtest_params, normalized, start_date, end_date,
             owns_session=True, bt_id=bt_id,
             snapshots_out=snapshots_out, tag=tag,
+            initial_state=initial_state, phase_anchor=phase_anchor,
+            signal_from=signal_from, capture_state_on=capture_state_on,
+            state_out=state_out,
         )
 
 
@@ -826,6 +927,11 @@ async def _run_backtest_impl(
     bt_id: str | None = None,
     snapshots_out: list[dict] | None = None,
     tag: str | None = None,
+    initial_state: Mapping[str, Any] | None = None,
+    phase_anchor: date | None = None,
+    signal_from: date | None = None,
+    capture_state_on: date | None = None,
+    state_out: dict | None = None,
 ) -> dict:
     """回测实现：落 running → 调仓信号 → 预取行情 → 模拟 → 绩效 → 落库。
 
@@ -882,15 +988,38 @@ async def _run_backtest_impl(
                 detail={"days": len(trading_days)},
             )
 
-        next_trading_day = {
-            trading_days[index]: trading_days[index + 1]
-            for index in range(len(trading_days) - 1)
-        }
-        signal_dates = trading_days[:: backtest_params.rebalance_days]
+        if phase_anchor is not None:
+            # 增量续算：调仓相位必须从建仓日起算，而不是窗口首日
+            phase_days, _ = await load_trading_days(db, phase_anchor, end_date)
+            if not phase_days:
+                raise DataUnavailableError(
+                    f"调仓相位区间 {phase_anchor.isoformat()} ~ {end_date.isoformat()} 无交易日",
+                    next_action="POST /api/v1/admin/ingest/calendar",
+                )
+            next_trading_day = {
+                phase_days[index]: phase_days[index + 1]
+                for index in range(len(phase_days) - 1)
+            }
+            signal_dates = phase_signal_dates(
+                phase_days,
+                backtest_params.rebalance_days,
+                signal_from=signal_from or start_date,
+                end=end_date,
+            )
+        else:
+            next_trading_day = {
+                trading_days[index]: trading_days[index + 1]
+                for index in range(len(trading_days) - 1)
+            }
+            signal_dates = trading_days[:: backtest_params.rebalance_days]
 
         # ---- 2) 逐个调仓日取信号（只使用 T 日及之前数据）----
         executions: dict[date, list[dict]] = {}
-        involved_codes: set[str] = set()
+        # 续算时持仓标的即使不在新信号里，也要预取行情用于估值与卖出
+        involved_codes: set[str] = {
+            str(code).zfill(6)
+            for code in dict((initial_state or {}).get("positions") or {})
+        }
         for signal_day in signal_dates:
             execution_day = next_trading_day.get(signal_day)
             if execution_day is None:
@@ -928,6 +1057,9 @@ async def _run_backtest_impl(
             benchmark_closes,
             backtest_params,
             snapshots_out=snapshots_out,
+            initial_state=initial_state,
+            capture_state_on=capture_state_on,
+            state_out=state_out,
         )
 
         # ---- 5) 绩效 ----
@@ -1066,6 +1198,7 @@ __all__ = [
     "detect_lookahead_usage",
     "assert_no_lookahead",
     "load_trading_days",
+    "phase_signal_dates",
     "load_price_book",
     "load_benchmark_closes",
     "build_pending_orders",

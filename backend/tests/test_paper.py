@@ -9,15 +9,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
 from app.engine import paper as paper_module
-from app.engine.paper import _same_params
-from app.strategy.backtest import (
-    BacktestParams, Bar, build_pending_orders, simulate_portfolio,
+from app.engine.paper import (
+    _incremental_compatible,
+    _same_params,
+    _select_incremental,
+    _series_metrics,
+    _state_valid,
 )
+from app.strategy.backtest import (
+    BacktestParams,
+    Bar,
+    build_pending_orders,
+    phase_signal_dates,
+    simulate_portfolio,
+)
+from app.strategy.metrics import compute_metrics
 from app.worker import run_paper_job
 
 
@@ -166,6 +178,225 @@ def test_snapshot_pending_matches_simulated_limit_up_reason() -> None:
     trade = next(item for item in trades if item["side"] == "buy")
     assert trade["reason"] == "limit_up"
     assert trade["shares"] == 0
+
+
+def _weekdays(count: int, start: date = date(2026, 1, 5)) -> list[date]:
+    days: list[date] = []
+    current = start
+    while len(days) < count:
+        if current.weekday() < 5:
+            days.append(current)
+        current += timedelta(days=1)
+    return days
+
+
+def _synthetic_book(days: list[date]) -> dict[str, dict[date, Bar]]:
+    codes = ["000001", "000002", "000003"]
+    return {
+        code: {
+            day: _bar(10.0 + 0.5 * offset + 0.03 * index, 10.2 + 0.5 * offset + 0.05 * index)
+            for index, day in enumerate(days)
+        }
+        for offset, code in enumerate(codes)
+    }
+
+
+def _synthetic_executions(days: list[date], rebalance_days: int = 5) -> dict[date, list[dict]]:
+    codes = ["000001", "000002", "000003"]
+    signal_days = phase_signal_dates(
+        days, rebalance_days, signal_from=days[0], end=days[-1],
+    )
+    executions: dict[date, list[dict]] = {}
+    for signal_day in signal_days:
+        index = days.index(signal_day)
+        targets = [
+            {"code": codes[(index // rebalance_days + shift) % len(codes)], "name": "测试"}
+            for shift in range(2)
+        ]
+        executions[days[index + 1]] = targets
+    return executions
+
+
+# =====================================================================
+# 检查点续算：必须与全量重算逐日一致
+# =====================================================================
+
+def test_phase_signal_dates_keep_absolute_phase() -> None:
+    days = _weekdays(60)
+    assert phase_signal_dates(days, 20, signal_from=days[20], end=days[-1]) == [
+        days[20], days[40],
+    ]
+    # 检查点落在两个信号日之间时，首个信号仍是绝对相位的 40
+    assert phase_signal_dates(days, 20, signal_from=days[25], end=days[-1]) == [days[40]]
+    # 结束日即使是信号日也没有 T+1，不生成信号
+    assert phase_signal_dates(days, 20, signal_from=days[0], end=days[40]) == [days[0], days[20]]
+
+
+@pytest.mark.parametrize("checkpoint_index", [25, 26, 30])
+def test_resumed_simulation_matches_full_run(checkpoint_index: int) -> None:
+    days = _weekdays(44)
+    price_book = _synthetic_book(days)
+    benchmark = {day: 3000.0 + 2.0 * index for index, day in enumerate(days)}
+    executions = _synthetic_executions(days)
+    params = _params(max_positions=2)
+    checkpoint_day = days[checkpoint_index]
+
+    full_snapshots: list[dict] = []
+    state: dict = {}
+    full_curve, _, _ = simulate_portfolio(
+        days, executions, price_book, benchmark, params,
+        snapshots_out=full_snapshots,
+        capture_state_on=checkpoint_day,
+        state_out=state,
+    )
+    assert state["date"] == checkpoint_day.isoformat()
+    assert _state_valid(state)
+
+    window_days = days[checkpoint_index + 1:]
+    window_executions = {
+        day: targets for day, targets in executions.items()
+        if day >= window_days[0]
+    }
+    window_snapshots: list[dict] = []
+    window_curve, _, _ = simulate_portfolio(
+        window_days, window_executions, price_book, benchmark, params,
+        snapshots_out=window_snapshots,
+        initial_state=state,
+    )
+
+    # 净值、基准、持仓、现金比、待执行清单全部逐日相等
+    assert window_curve == full_curve[checkpoint_index + 1:]
+    assert window_snapshots == full_snapshots[checkpoint_index + 1:]
+
+
+def test_resumed_simulation_without_state_starts_from_initial_cash() -> None:
+    days = _weekdays(10)
+    price_book = _synthetic_book(days)
+    executions = _synthetic_executions(days, rebalance_days=5)
+    params = _params(max_positions=2)
+    snapshots: list[dict] = []
+    curve, _, _ = simulate_portfolio(
+        days, executions, price_book, {}, params, snapshots_out=snapshots,
+    )
+    assert curve[0]["nav"] == 1.0
+    assert snapshots[0]["cash_ratio"] == 1.0
+
+
+# =====================================================================
+# 检查点/全量指标与参数兼容性
+# =====================================================================
+
+def test_series_metrics_matches_compute_metrics() -> None:
+    navs = [1.0, 1.08, 0.96, 1.12, 1.05]
+    benchmarks = [1.0, 1.02, 0.99, 1.04, 1.06]
+    points = list(zip(navs, benchmarks))
+    expected = compute_metrics(
+        pd.Series(navs, dtype="float64"),
+        pd.Series(benchmarks, dtype="float64"),
+        [],
+        1,
+        1_000_000.0,
+    )
+    metrics = _series_metrics(points)
+    for key in ("total_return", "benchmark_return", "excess_return", "max_drawdown"):
+        assert metrics[key] == expected[key]
+
+
+def test_incremental_compatibility_requires_same_params() -> None:
+    bt = _params(max_positions=4)
+    strategy = {"limit": 4, "k_max": 30.0}
+    compatible = {
+        "strategy": {"limit": 4.0, "k_max": 30},
+        "backtest": bt.as_snapshot(),
+    }
+    assert _incremental_compatible(compatible, strategy, bt)
+    assert not _incremental_compatible({}, strategy, bt)
+    assert not _incremental_compatible(
+        {**compatible, "strategy": {"limit": 3}}, strategy, bt,
+    )
+    assert not _incremental_compatible(
+        {**compatible, "backtest": {**bt.as_snapshot(), "rebalance_days": 30}}, strategy, bt,
+    )
+    assert not _state_valid({"date": "2026-01-05", "positions": {}})
+    assert _state_valid({"date": "2026-01-05", "cash": 0.0, "positions": {}})
+
+
+def test_select_incremental_requires_valid_week_and_checkpoint() -> None:
+    days = _weekdays(30)
+    end = days[-1]
+    checkpoint_index = len(days) - 5
+    checkpoint_day = days[checkpoint_index]
+    bt = _params(max_positions=2)
+    strategy = {"limit": 2}
+    state = {"date": checkpoint_day.isoformat(), "cash": 1000.0, "positions": {}}
+    params = {
+        "strategy": strategy,
+        "backtest": bt.as_snapshot(),
+        "incremental": {
+            "checkpoint": {"date": checkpoint_day.isoformat(), "state": state},
+            "calibrated_week": paper_module._week_key(end),
+            "strategy": dict(strategy),
+            "backtest": bt.as_snapshot(),
+        },
+    }
+
+    use, selected_date, index, selected_state = _select_incremental(
+        days, end=end, params=params, strategy_params=strategy, bt=bt, force_full=False,
+    )
+    assert use and selected_date == checkpoint_day and index == checkpoint_index
+    assert selected_state == state
+
+    def _reject(patched: dict, **kwargs) -> None:
+        use, *_ = _select_incremental(
+            days, end=end, params=patched, strategy_params=strategy, bt=bt,
+            force_full=kwargs.get("force_full", False),
+        )
+        assert not use
+
+    _reject(params, force_full=True)
+
+    stale_week = {
+        **params,
+        "incremental": {**params["incremental"], "calibrated_week": "1999-W01"},
+    }
+    _reject(stale_week)
+
+    changed_params = {
+        **params,
+        "incremental": {**params["incremental"], "strategy": {"limit": 3}},
+    }
+    _reject(changed_params)
+
+    bad_state = {
+        **params,
+        "incremental": {
+            **params["incremental"],
+            "checkpoint": {"date": days[5].isoformat(), "state": {"date": days[5].isoformat()}},
+        },
+    }
+    _reject(bad_state)
+
+    weekend_checkpoint = {
+        **params,
+        "incremental": {
+            **params["incremental"],
+            "checkpoint": {"date": "2026-01-10", "state": state},
+        },
+    }
+    _reject(weekend_checkpoint)
+
+    for short_index in (len(days) - 1, len(days) - 2):
+        short = {
+            **params,
+            "incremental": {
+                **params["incremental"],
+                "checkpoint": {
+                    "date": days[short_index].isoformat(),
+                    "state": {**state, "date": days[short_index].isoformat()},
+                },
+            },
+        }
+        _reject(short)
 
 
 def test_snapshots_capture_holdings_cost_and_cash() -> None:

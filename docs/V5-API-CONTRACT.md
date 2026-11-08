@@ -615,8 +615,10 @@ POST `/api/v1/backtest/grid/{grid_id}/retry`：
 
 ### 6.6 纸面组合跟踪（T11）
 
-**口径**：一策略一组合，每次同步把 `start_date → 最新行情日` 用同一个回测引擎**整段重算**
-并覆盖 `paper_nav`（幂等 upsert，不做增量持仓状态机）。佣金/印花税/滑点/整手、T+1 开盘成交、
+**口径**：一策略一组合，默认按「检查点 + 60 个交易日重叠窗口」续算并覆盖窗口内 `paper_nav`
+（幂等 upsert）；每周第一个同步日、以及增量续算失败回退时，对整个区间做一次全量校准。
+检查点（现金/份额/成本/基准基数与参数快照）存于 `paper_portfolio.params.incremental`，
+策略或回测参数变化时自动改走全量。佣金/印花税/滑点/整手、T+1 开盘成交、
 停牌/涨跌停判定与回测完全一致；`start_date` = 策略首个成功**实盘** run 的交易日（不含回测 run），
 因此只代表同口径跟踪，不代表可交易收益。响应统一返回 `caliber` 说明。
 
@@ -688,7 +690,8 @@ POST `/api/v1/paper/portfolio/{algo_code}/sync` → `202` 语义（HTTP 200）�
   "hint": "轮询 GET /api/v1/paper/portfolio/b3 查看结果" }
 ```
 
-- 后台执行完整区间重算，单组合 advisory lock，重复触发时后到者跳过；完成后覆盖 `paper_nav`。
+- 后台执行同步（默认检查点续算，周首个同步日或增量失败时全量校准），单组合 advisory lock，
+  重复触发时后到者跳过；完成后覆盖窗口内 `paper_nav`，并清理结束日之后的多余行。
 - 定时任务：`CronTrigger(hour=17, minute=30)`，位于 `algos`(16:30) 与 `signal_perf`(17:10) 之后；
   非交易日（`trade_calendar.is_open=false`）只记录 skip 日志、不写任何行；单组合失败标记 `failed` 且不影响其余。
 - 同一交易日重复执行是幂等 upsert：`(portfolio_id, trade_date)` 主键，行数不变、无重复。

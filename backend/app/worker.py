@@ -5,7 +5,7 @@
   - 15:36 盘后流水线（真实交易日历判断，节假日不跑）
   - 16:30 选股（等评分与日报就绪）
   - 17:10 信号前瞻统计（依赖 16:30 选股结果）
-  - 17:30 纸面组合（完整区间重算，非交易日跳过）
+  - 17:30 纸面组合（水位 + 60 日重叠窗口，每周全量校准；非交易日跳过）
   - 02:00 历史补齐（断点续传，夜间执行）
   - 每 N 分钟新闻采集（作为情绪因子输入）
 
@@ -93,7 +93,7 @@ async def run_signal_perf_job(db) -> None:
 
 
 async def run_paper_job(db) -> None:
-    """纸面组合整体重算（V6 T11）。非交易日不写行；单组合失败已在引擎内隔离。"""
+    """纸面组合增量重算（V6 T11 / P2-3）。非交易日不写行；单组合失败已在引擎内隔离。"""
     from app.engine.paper import sync_all_paper_portfolios
     from app.ingest.calendar import is_trade_day
 

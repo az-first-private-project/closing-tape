@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select
@@ -24,7 +24,12 @@ from app.db.models.strategy import BacktestRun, PaperNav, PaperPortfolio, StgRun
 from app.db.session import AsyncSessionLocal
 from app.pipeline import advisory_unlock, try_advisory_lock
 from app.strategy import runner as stg_runner
-from app.strategy.backtest import BacktestParams, build_pending_orders, run_backtest
+from app.strategy.backtest import (
+    BacktestParams,
+    build_pending_orders,
+    load_trading_days,
+    run_backtest,
+)
 from app.strategy.strategies import SPECS, get_spec
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,9 @@ CALIBER = (
     "后复权估值；佣金/印花税/滑点/整手与回测引擎完全一致；"
     "起点为策略首个实盘 run 交易日，不代表可交易收益。"
 )
+
+#: 增量续算的重叠交易日数；检查点固定在 end-60，近期数据修订可被每日重算覆盖
+PAPER_OVERLAP_DAYS = 60
 
 
 def enabled_algos() -> list[str]:
@@ -83,6 +91,8 @@ async def _latest_signal_pending(
 ) -> list[dict]:
     """最新一天恰好是调仓信号日时，用当日信号生成明日待执行清单。
 
+    ``trading_days`` 必须是**从建仓日开始的完整序列**，调仓相位按它的下标
+    计算；否则增量窗口会与全量重算在不同日期调仓。
     与回测引擎同一 ``build_pending_orders`` 判定；T+1 行情尚未产生，
     ``fillable`` 返回 null，由前端提示“待开盘校验”。
     """
@@ -179,8 +189,119 @@ async def _vs_backtest(
     }
 
 
+def _week_key(day: date) -> str:
+    iso = day.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _state_valid(state: Any) -> bool:
+    return (
+        isinstance(state, dict)
+        and bool(state.get("date"))
+        and "cash" in state
+        and isinstance(state.get("positions"), dict)
+    )
+
+
+def _incremental_compatible(
+    incremental: dict, strategy_params: dict, bt: BacktestParams,
+) -> bool:
+    """检查点必须由同一套策略/回测参数生成，否则继续用它会算错。"""
+    return (
+        dict(incremental.get("strategy") or {}) == dict(strategy_params)
+        and dict(incremental.get("backtest") or {}) == bt.as_snapshot()
+    )
+
+
+def _series_metrics(points: list[tuple[Any, Any]]) -> dict:
+    """从完整净值序列计算总收益/基准/超额/最大回撤（口径同 compute_metrics）。"""
+    navs = [float(nav) for nav, _ in points if nav is not None]
+    benchmarks = [float(bench) for _, bench in points if bench is not None]
+    total = round(navs[-1] / navs[0] - 1.0, 6) if navs and navs[0] else None
+    benchmark_return = (
+        round(benchmarks[-1] / benchmarks[0] - 1.0, 6) if benchmarks and benchmarks[0] else None
+    )
+    excess = (
+        round(total - benchmark_return, 6)
+        if total is not None and benchmark_return is not None else None
+    )
+    peak = 0.0
+    worst = 0.0
+    for nav in navs:
+        peak = max(peak, nav)
+        if peak:
+            worst = min(worst, nav / peak - 1.0)
+    return {
+        "total_return": total,
+        "benchmark_return": benchmark_return,
+        "excess_return": excess,
+        "max_drawdown": round(worst, 6),
+    }
+
+
+def _select_incremental(
+    full_days: list[date],
+    *,
+    end: date,
+    params: dict,
+    strategy_params: dict,
+    bt: BacktestParams,
+    force_full: bool,
+) -> tuple[bool, date | None, int | None, Any]:
+    """决定本次走增量还是全量，返回 (是否增量, 检查点日, 检查点下标, 状态)。
+
+    增量条件必须全部满足：有可解析的检查点、本周已全量校准、参数一致、
+    检查点之后至少还有 2 个交易日（引擎要求）。任一不满足即全量。
+    """
+    incremental = params.get("incremental")
+    incremental = incremental if isinstance(incremental, dict) else {}
+    checkpoint = incremental.get("checkpoint")
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+    state = checkpoint.get("state")
+    try:
+        checkpoint_date = date.fromisoformat(str(checkpoint.get("date")))
+    except (TypeError, ValueError):
+        checkpoint_date = None
+    checkpoint_index = None
+    if checkpoint_date is not None:
+        try:
+            checkpoint_index = full_days.index(checkpoint_date)
+        except ValueError:
+            checkpoint_index = None
+
+    use_incremental = (
+        not force_full
+        and checkpoint_index is not None
+        and checkpoint_date < end
+        and len(full_days) - checkpoint_index - 1 >= 2
+        and incremental.get("calibrated_week") == _week_key(end)
+        and _state_valid(state)
+        and _incremental_compatible(incremental, strategy_params, bt)
+    )
+    return use_incremental, checkpoint_date, checkpoint_index, state
+
+
+class _IncrementalRecalculate(Exception):
+    """增量窗口失败，需要回滚后改用全量重算。"""
+
+
 async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
-    """整体重算一个策略的纸面组合；调用方负责 commit/rollback。"""
+    """同步一个策略的纸面组合；调用方负责 commit/rollback。
+
+    默认走「检查点 + 60 日重叠窗口」增量续算；每周第一个同步日全量校准，
+    增量失败时回滚并回退一次全量。
+    """
+    try:
+        return await _sync_paper_portfolio(db, algo_code, force_full=False)
+    except _IncrementalRecalculate:
+        logger.warning("纸面组合增量失败，改走全量重算 algo=%s", algo_code)
+        return await _sync_paper_portfolio(db, algo_code, force_full=True)
+
+
+async def _sync_paper_portfolio(
+    db: AsyncSession, algo_code: str, *, force_full: bool,
+) -> dict:
+    """同步实现：选择全量或增量窗口，落净值与检查点。"""
     spec = get_spec(algo_code)
     portfolio = await _get_portfolio(db, algo_code)
     if portfolio is None:
@@ -230,20 +351,72 @@ async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
             "end_date": end.isoformat(), "rows": 0, "pending_orders": 0,
         }
 
-    snapshots: list[dict] = []
-    result = await run_backtest(
-        algo_code=algo_code,
-        start=start,
+    full_days, _ = await load_trading_days(db, start, end)
+    if len(full_days) < 2:
+        raise DataUnavailableError(
+            f"{start.isoformat()} ~ {end.isoformat()} 交易日数量不足，无法重算纸面组合",
+            next_action="POST /api/v1/admin/ingest/calendar",
+            detail={"days": len(full_days)},
+        )
+
+    use_incremental, checkpoint_date, checkpoint_index, state = _select_incremental(
+        full_days,
         end=end,
+        params=params,
         strategy_params=strategy_params,
-        bt_params=params.get("backtest"),
-        bt_id=params.get("bt_id"),
-        snapshots_out=snapshots,
-        tag="paper",
+        bt=bt,
+        force_full=force_full,
     )
+    mode = "incremental" if use_incremental else "full"
+    window_start = full_days[checkpoint_index + 1] if use_incremental else start
+    capture_date: date | None = None
+    checkpoint_out: dict = {}
+    snapshots: list[dict] = []
+    logger.info(
+        "纸面组合开始 algo=%s mode=%s window=%s~%s days=%d",
+        algo_code, mode, window_start, end,
+        len(full_days) - (checkpoint_index + 1 if use_incremental else 0),
+    )
+    try:
+        if use_incremental:
+            result = await run_backtest(
+                algo_code=algo_code,
+                start=window_start,
+                end=end,
+                strategy_params=strategy_params,
+                bt_params=params.get("backtest"),
+                bt_id=params.get("bt_id"),
+                snapshots_out=snapshots,
+                tag="paper",
+                initial_state=state,
+                phase_anchor=start,
+                signal_from=checkpoint_date,
+            )
+        else:
+            capture_date = full_days[max(0, len(full_days) - 1 - PAPER_OVERLAP_DAYS)]
+            result = await run_backtest(
+                algo_code=algo_code,
+                start=start,
+                end=end,
+                strategy_params=strategy_params,
+                bt_params=params.get("backtest"),
+                bt_id=params.get("bt_id"),
+                snapshots_out=snapshots,
+                tag="paper",
+                capture_state_on=capture_date,
+                state_out=checkpoint_out,
+            )
+    except Exception as exc:  # noqa: BLE001 - 增量失败回退一次全量
+        if not use_incremental:
+            raise
+        logger.exception(
+            "纸面组合增量续算失败 algo=%s window=%s~%s", algo_code, window_start, end,
+        )
+        await db.rollback()
+        raise _IncrementalRecalculate() from exc
+
     if params.get("bt_id") != result["bt_id"]:
         params["bt_id"] = result["bt_id"]
-        portfolio.params = params
 
     curve = result.get("equity_curve") or []
     if len(snapshots) != len(curve):
@@ -252,13 +425,26 @@ async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
             algo_code, len(snapshots), len(curve),
         )
 
-    trading_days = [date.fromisoformat(point["date"]) for point in curve]
+    if mode == "full":
+        if capture_date is not None and _state_valid(checkpoint_out):
+            params["incremental"] = {
+                "checkpoint": {"date": checkpoint_out["date"], "state": checkpoint_out},
+                "calibrated_week": _week_key(end),
+                "calibrated_at": datetime.now(timezone.utc).isoformat(),
+                "strategy": dict(strategy_params),
+                "backtest": bt.as_snapshot(),
+            }
+        else:
+            params.pop("incremental", None)
+            logger.warning("纸面组合检查点缺失，下次强制全量 algo=%s", algo_code)
+    portfolio.params = params
+
     latest_holdings = snapshots[-1]["holdings"] if snapshots else []
     pending = await _latest_signal_pending(
         db,
         algo_code=algo_code,
-        latest_day=trading_days[-1],
-        trading_days=trading_days,
+        latest_day=end,
+        trading_days=full_days,
         rebalance_days=int(portfolio.rebalance_days or bt.rebalance_days),
         strategy_params=strategy_params,
         bt_params=bt,
@@ -267,14 +453,26 @@ async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
     if snapshots and pending:
         snapshots[-1]["pending_orders"] = pending
 
-    metrics = result.get("metrics") or {}
+    prior = (await db.execute(
+        select(PaperNav.nav, PaperNav.benchmark)
+        .where(PaperNav.portfolio_id == portfolio.portfolio_id)
+        .where(PaperNav.trade_date < window_start)
+        .order_by(PaperNav.trade_date)
+    )).all()
+    metrics = _series_metrics(
+        [(row[0], row[1]) for row in prior]
+        + [(point.get("nav"), point.get("benchmark")) for point in curve]
+    )
     vs_backtest = await _vs_backtest(
         db, algo_code=algo_code, start=start, end=end, metrics=metrics,
         strategy_params=strategy_params, bt_params=bt,
     )
 
-    rows: list[dict] = []
     peak = 0.0
+    for nav_value, _ in prior:
+        if nav_value is not None:
+            peak = max(peak, float(nav_value))
+    rows: list[dict] = []
     for index, (snapshot, point) in enumerate(zip(snapshots, curve)):
         nav = float(point.get("nav") or 0.0)
         peak = max(peak, nav)
@@ -318,8 +516,9 @@ async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
     portfolio.status = "active"
     await db.flush()
     logger.info(
-        "纸面组合同步完成 algo=%s %s~%s rows=%d nav=%.4f excess=%.4f pending=%d",
-        algo_code, start, end, len(rows),
+        "纸面组合同步完成 algo=%s mode=%s window=%s~%s rows=%d nav=%.4f "
+        "excess=%.4f pending=%d",
+        algo_code, mode, window_start, end, len(rows),
         float(rows[-1]["nav"] or 0.0) if rows else 0.0,
         float(metrics.get("excess_return") or 0.0),
         len(rows[-1]["pending_orders"]) if rows else 0,
@@ -327,7 +526,9 @@ async def sync_paper_portfolio(db: AsyncSession, algo_code: str) -> dict:
     return {
         "algo": algo_code,
         "status": "active",
+        "mode": mode,
         "start_date": start.isoformat(),
+        "window_start": window_start.isoformat(),
         "end_date": end.isoformat(),
         "rows": len(rows),
         "nav": rows[-1]["nav"] if rows else None,
