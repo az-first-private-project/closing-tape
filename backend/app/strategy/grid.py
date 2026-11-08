@@ -215,22 +215,30 @@ async def execute_grid(
     strategy_params: dict | None,
     pending: list[dict[str, Any]],
 ) -> None:
-    """后台逐格执行；单格异常只记录日志（失败状态由回测引擎落库）。"""
+    """后台逐格执行；单格异常只记录日志（失败状态由回测引擎落库）。
+
+    ``pending`` 每项可带 ``strategy`` / ``start_date`` / ``end_date`` 覆盖整批默认值，
+    重试失败格时用它还原该格自己的参数快照，避免 limit 被其他格抬高。
+    """
     semaphore = _grid_semaphore()
     # 与 _cell_snapshot 同口径：limit 至少等于该格 max_positions，否则落库参数与复用比对不一致
     base_strategy = strat._validate_params(algo_code, strategy_params or {})  # noqa: SLF001
 
     async def run_cell(cell: dict[str, Any]) -> None:
+        cell_base = (
+            strat._validate_params(algo_code, cell["strategy"])  # noqa: SLF001
+            if cell.get("strategy") else base_strategy
+        )
         cell_strategy = {
-            **base_strategy,
-            "limit": max(int(base_strategy["limit"]), int(cell["max_positions"])),
+            **cell_base,
+            "limit": max(int(cell_base["limit"]), int(cell["max_positions"])),
         }
         async with semaphore:
             try:
                 await run_backtest(
                     algo_code=algo_code,
-                    start=start,
-                    end=end,
+                    start=cell.get("start_date") or start,
+                    end=cell.get("end_date") or end,
                     strategy_params=cell_strategy,
                     bt_params={
                         "rebalance_days": cell["rebalance_days"],
@@ -249,6 +257,55 @@ async def execute_grid(
     logger.info("参数矩阵开始执行 algo=%s cells=%d", algo_code, len(pending))
     await asyncio.gather(*(run_cell(cell) for cell in pending))
     logger.info("参数矩阵执行结束 algo=%s cells=%d", algo_code, len(pending))
+
+
+async def requeue_failed_cells(
+    db: AsyncSession, grid_id: str
+) -> dict[str, Any]:
+    """把矩阵内 failed 格重置为 queued 并返回待执行清单（T10 重试）。
+
+    只重置 failed：成功格保持原记录，queued/running 说明已有任务在跑，
+    重复调用不会造成同格并发执行。每格带自己的参数快照与起止日，
+    避免用其他格的 ``limit`` 覆盖本格。
+    """
+    rows = (await db.execute(
+        select(BacktestRun)
+        .where(BacktestRun.grid_id == grid_id)
+        .with_for_update()
+    )).scalars().all()
+    if not rows:
+        raise NotFoundError(f"参数矩阵不存在: {grid_id}", detail={"grid_id": grid_id})
+
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        if row.status != "failed":
+            continue
+        meta = _cell_meta(row)
+        row.status = "queued"
+        row.error = None
+        row.elapsed_ms = None
+        row.metrics = None
+        row.equity_curve = None
+        row.trades = None
+        pending.append({
+            "bt_id": row.bt_id,
+            "rebalance_days": meta["rebalance_days"],
+            "max_positions": meta["max_positions"],
+            "start_date": row.start_date,
+            "end_date": row.end_date,
+            "strategy": dict((row.params or {}).get("strategy") or {}),
+        })
+
+    if pending:
+        await db.commit()  # 后台任务在响应后启动，排队状态必须已可见
+
+    return {
+        "grid_id": grid_id,
+        "algo": rows[0].algo_code,
+        "start": min(row.start_date for row in rows),
+        "end": max(row.end_date for row in rows),
+        "pending": pending,
+    }
 
 
 def _cell_meta(row: BacktestRun) -> dict[str, Any]:
@@ -344,5 +401,5 @@ async def get_grid(db: AsyncSession, grid_id: str) -> dict[str, Any]:
 
 __all__ = [
     "MAX_GRID_CELLS", "GRID_CONCURRENCY", "normalize_axes", "create_grid",
-    "execute_grid", "get_grid",
+    "execute_grid", "get_grid", "requeue_failed_cells",
 ]

@@ -81,6 +81,18 @@ async def lifespan(app: FastAPI):
         except Exception as exc:                      # noqa: BLE001
             logger.warning("建表检查失败：%s", exc)
 
+    try:
+        from app.services.task_recovery import recover_stale_tasks
+        async with AsyncSessionLocal() as session:
+            recovered = await recover_stale_tasks(session)
+            await session.commit()
+        logger.info(
+            "启动任务状态检查完成：ingest_job=%d stg_run=%d backtest_run=%d 已标记 failed",
+            recovered["ingest_job"], recovered["stg_run"], recovered["backtest_run"],
+        )
+    except Exception as exc:                          # noqa: BLE001
+        logger.exception("启动清理僵尸任务失败（不阻断启动）：%s", exc)
+
     scheduler = None
     if SCHEDULER_ENABLED:
         from app.worker import start_scheduler

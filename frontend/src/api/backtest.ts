@@ -6,6 +6,7 @@ import type {
   BacktestGridCreateResponse,
   BacktestGridDetail,
   BacktestGridRequest,
+  BacktestGridRetryResponse,
   BacktestOptions,
   BacktestResult,
   BacktestTradesResponse,
@@ -67,4 +68,12 @@ export function createBacktestGrid(
 /** 查询矩阵状态与每格指标（T10） */
 export function fetchBacktestGrid(gridId: string): Promise<BacktestGridDetail> {
   return request<BacktestGridDetail>(`/backtest/grid/${encodeURIComponent(gridId)}`)
+}
+
+/** 重试矩阵内失败格（P1-4）：只重置 failed，成功/运行中的格不受影响 */
+export function retryBacktestGrid(gridId: string): Promise<BacktestGridRetryResponse> {
+  return request<BacktestGridRetryResponse>(
+    `/backtest/grid/${encodeURIComponent(gridId)}/retry`,
+    { method: 'POST' },
+  )
 }

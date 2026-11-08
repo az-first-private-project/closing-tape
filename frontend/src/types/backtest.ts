@@ -203,6 +203,16 @@ export interface BacktestGridCreateResponse {
   elapsed_ms: number
 }
 
+/** POST /api/v1/backtest/grid/{grid_id}/retry 响应（P1-4） */
+export interface BacktestGridRetryResponse {
+  grid_id: string
+  algo: string
+  retried: number
+  queued: number
+  /** 重试只入队，不跑回测，固定为 0 */
+  elapsed_ms: number
+}
+
 /** GET /api/v1/backtest/grid/{grid_id} 响应（T10） */
 export interface BacktestGridDetail {
   grid_id: string

@@ -26,7 +26,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.engine.backtest_view import build_backtest_extras
 from app.strategy.backtest import run_backtest
-from app.strategy.grid import create_grid, execute_grid, get_grid
+from app.strategy.grid import create_grid, execute_grid, get_grid, requeue_failed_cells
 from app.strategy.strategies import SPECS
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["回测"])
@@ -298,6 +298,37 @@ async def create_backtest_grid(
         "total": len(result["cells"]),
         "reused": result["reused"],
         "queued": len(result["pending"]),
+        "elapsed_ms": 0,
+    }
+
+
+@router.post("/grid/{grid_id}/retry")
+async def retry_backtest_grid(
+    grid_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """重试矩阵内失败的格子（T10）。
+
+    只重置 ``failed`` 格；成功格保持原记录，``queued/running`` 说明已有任务在跑，
+    重复调用不会造成同格并发执行。每格按自己的参数快照与起止日重跑。
+    """
+    result = await requeue_failed_cells(db, grid_id)
+    pending = result["pending"]
+    if pending:
+        background_tasks.add_task(
+            execute_grid,
+            algo_code=result["algo"],
+            start=result["start"],
+            end=result["end"],
+            strategy_params=None,
+            pending=pending,
+        )
+    return {
+        "grid_id": result["grid_id"],
+        "algo": result["algo"],
+        "retried": len(pending),
+        "queued": len(pending),
         "elapsed_ms": 0,
     }
 

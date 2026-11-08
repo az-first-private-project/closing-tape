@@ -263,7 +263,25 @@
   1. 启动时把超过 2 小时的 running/queued 标为 failed，错误写明“进程重启遗留”；
   2. T10 任务失败后允许重试；
   3. 中期改为 DB 队列 + `FOR UPDATE SKIP LOCKED` + heartbeat。
-- 验收：服务重启后无僵尸任务；任务监控状态与实际一致；单测覆盖启动清理。
+- 已完成（11-08）：
+  - 新增 `app/services/task_recovery.py`：启动时扫描 `ingest_job`/`backtest_run` 的
+    `running|queued` 与兼容的 `stg_run.running`，把开始时间超过 2 小时的行改为 `failed`，
+    `error` 固定为“进程重启遗留：服务启动时任务仍处于 running/queued 状态，已标记 failed”，
+    并写 `finished_at`/`elapsed_ms`；返回各表清理计数并记 warning。
+  - `app/main.py` lifespan 在建表后、调度器前调用恢复；异常只记录不阻断启动。
+  - T10 新增 `POST /api/v1/backtest/grid/{grid_id}/retry`：只把该矩阵 `failed` 格重置为
+    `queued` 并清空旧指标/净值/成交/错误，后台按每格参数快照（含 `strategy`、起止日）重跑；
+    成功格与运行中的格不动；未知 `grid_id` 返回 404。
+  - `execute_grid` 支持每格 `strategy`/`start_date`/`end_date` 覆盖，避免用单格参数放大
+    其他格子的选股上限。
+  - 前端敏感性矩阵在 `progress.failed > 0` 时显示“重试失败格”，成功后失效矩阵查询并继续轮询。
+- 验收：新增 18 个单测 + 2 个真实 SQL 集成测试通过；完整后端套件 499 passed / 49 skipped；
+  真实重启 PID 73968 → 80396，启动日志 `启动任务状态检查完成：ingest_job=0 stg_run=0
+  backtest_run=0 已标记 failed`，`/health` 200，`/api/v1/meta/jobs` 无 running/queued；
+  成功矩阵重试返回 `retried=0`，未知矩阵 404；前端 `npm run build` 与 `npm run test:sample`
+  通过（主包 1.03MB，沿用既有 >500kB 警告）。
+- 遗留：任务仍由进程内 `BackgroundTasks` 执行，进程被杀时正在跑的任务要等 2 小时阈值才会被
+  下次启动清理；彻底方案为 DB 队列 + `FOR UPDATE SKIP LOCKED` + heartbeat（中期）。
 - 代价：短期 0.5 天，完整 2–3 天。
 
 ### P1-5 NO_PROXY 固化
@@ -409,7 +427,7 @@
 | P1-1 | P1 | 板块名单完整性 | 0.5–1d | W2 | W0-3 | 完成（11-07） |
 | P1-2 | P1 | 信号样本标识 | 0.5d | W2 | — | 完成（11-08） |
 | P1-3 | P1 | 自选隔离与鉴权 | 1h–2d | W3 | 方案确认 | 待决策 |
-| P1-4 | P1 | 任务状态机 | 0.5–3d | W2 | W0-4 | 待开始 |
+| P1-4 | P1 | 任务状态机 | 0.5–3d | W2 | W0-4 | 已完成（11-08，短期方案） |
 | P1-5 | P1 | NO_PROXY 固化 | 0.5d | W1 | — | 完成（11-07） |
 | P2-1 | P2 | partial 板块提示 | 1h | W3 | P1-1 | 待开始 |
 | P2-2 | P2 | 矩阵复用关联 | 0.5–1d | W4 | — | 待开始 |

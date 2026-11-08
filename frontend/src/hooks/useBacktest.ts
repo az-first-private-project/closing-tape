@@ -1,12 +1,13 @@
 /**
  * 回测 Hook（契约第 6 节）
  */
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createBacktestGrid,
   fetchBacktest,
   fetchBacktestGrid,
   fetchBacktestTrades,
+  retryBacktestGrid,
   runBacktest,
 } from '../api/backtest'
 import type { BacktestGridRequest, BacktestOptions } from '../types/backtest'
@@ -53,6 +54,19 @@ export function useBacktestGrid() {
   return useMutation({
     mutationFn: (variables: BacktestGridVariables) =>
       createBacktestGrid(variables.algoCode, variables.request),
+  })
+}
+
+/** 重试矩阵失败格（P1-4）：成功格复用，仅 failed 重新入队；完成后立即刷新矩阵 */
+export function useBacktestGridRetry(gridId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => retryBacktestGrid(gridId as string),
+    onSuccess: () => {
+      if (gridId) {
+        void queryClient.invalidateQueries({ queryKey: ['backtest-grid', gridId] })
+      }
+    },
   })
 }
 

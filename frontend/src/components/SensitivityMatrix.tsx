@@ -7,8 +7,13 @@
  */
 import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { LayoutGrid, Play } from 'lucide-react'
-import { useBacktestDetail, useBacktestGrid, useBacktestGridDetail } from '../hooks/useBacktest'
+import { LayoutGrid, Play, RotateCw } from 'lucide-react'
+import {
+  useBacktestDetail,
+  useBacktestGrid,
+  useBacktestGridDetail,
+  useBacktestGridRetry,
+} from '../hooks/useBacktest'
 import { fetchHealth } from '../api/meta'
 import type { AlgoParams } from '../types/algo'
 import type { BacktestGridCell, BacktestGridMetrics } from '../types/backtest'
@@ -164,6 +169,7 @@ export default function SensitivityMatrix({
 
   const gridMutation = useBacktestGrid()
   const detailQuery = useBacktestGridDetail(gridId, active)
+  const retryMutation = useBacktestGridRetry(gridId)
   const detail = detailQuery.data
   const cellDetail = useBacktestDetail(selectedBtId)
 
@@ -383,6 +389,21 @@ export default function SensitivityMatrix({
               完成 {detail.progress.done}/{detail.progress.total}
               {detail.progress.failed > 0 ? ` · 失败 ${detail.progress.failed}` : ''}
             </span>
+            {detail.progress.failed > 0 && (
+              <button
+                type="button"
+                onClick={() => retryMutation.mutate()}
+                disabled={retryMutation.isPending}
+                title="只重跑失败格；成功格保持原记录，运行中的格不会被重复提交"
+                className="inline-flex items-center gap-1 rounded-md border border-alert/40 bg-alert/10 px-2 py-0.5 text-[11px] text-alert transition-colors hover:bg-alert/15 disabled:opacity-50"
+              >
+                <RotateCw className={`h-3 w-3 ${retryMutation.isPending ? 'animate-spin' : ''}`} />
+                {retryMutation.isPending ? '重试提交中…' : `重试 ${detail.progress.failed} 个失败格`}
+              </button>
+            )}
+            {retryMutation.isError && (
+              <span className="text-[11px] text-alert">重试提交失败，请稍后再试</span>
+            )}
             <span title="复用格计入其历史计算耗时">计算耗时合计 {fmtDuration(detail.total_elapsed_ms)}</span>
             {gridMutation.data?.start_trimmed && (
               <span className="text-warning">

@@ -75,6 +75,11 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   "elapsed_ms": 41234, "error": null }
 ```
 
+> 启动清理：服务启动时会把开始时间超过 2 小时仍处于 `running/queued` 的 `ingest_job`、
+> `backtest_run`（以及兼容的 `stg_run.running`）标记为 `failed`，`error` 为
+> “进程重启遗留：服务启动时任务仍处于 running/queued 状态，已标记 failed”，
+> 同时写 `finished_at`/`elapsed_ms`。清理失败只记日志、不阻断启动。
+
 ## 2. 新闻（保留，字段与 V2 完全兼容）
 
 | 方法 | 路径 | 说明 |
@@ -589,6 +594,16 @@ GET `/api/v1/backtest/grid/{grid_id}`：
 - 每个 `bt_id` 可独立 `GET /api/v1/backtest/{bt_id}`；未知 `grid_id` 返回 404 `NOT_FOUND`。
 - 重发完全相同的矩阵会全部命中复用：`reused=total`、`queued=0`、`elapsed_ms=0`，
   且不新增 `backtest_run` 行。
+
+POST `/api/v1/backtest/grid/{grid_id}/retry`：
+
+- 只重置该矩阵中 `status=failed` 的格为 `queued`，清空旧 `metrics/equity_curve/trades/error/elapsed_ms`；
+  `success` 与运行中的格不动，按每格保存的 `strategy` 与起止日快照在后台重跑（并发上限 2）。
+- 无失败格时返回 `retried=0`，不提交、不启动后台任务；未知 `grid_id` 返回 404 `NOT_FOUND`。
+
+```json
+{ "grid_id": "…", "algo": "a3", "retried": 2, "queued": 2, "elapsed_ms": 0 }
+```
 
 ### 6.6 纸面组合跟踪（T11）
 
