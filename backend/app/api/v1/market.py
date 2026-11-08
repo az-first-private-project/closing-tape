@@ -269,6 +269,10 @@ async def get_sector_detail(
         .limit(200)
     )).all()
 
+    partial_count = (
+        await _query_partial_membership(db, resolved, [sector_code])
+    ).get(sector_code)
+
     member_quotes: list[dict] = []
     if members:
         codes = [m[0] for m in members]
@@ -291,6 +295,8 @@ async def get_sector_detail(
         "sector_code": sector_code,
         "sector_name": daily.sector_name if daily else None,
         "sector_type": daily.sector_type if daily else None,
+        "is_partial": partial_count is not None,
+        "partial_member_count": partial_count,
         "trade_date": resolved.isoformat(),
         "market_data": {
             "close": _f(daily.close) if daily else None,
@@ -462,6 +468,9 @@ async def _query_sectors(db: AsyncSession, trade_date: date,
         select(SectorScore).where(SectorScore.trade_date == trade_date)
     )).scalars().all()
     score_map = {s.sector_code: s for s in scores}
+    partial_map = await _query_partial_membership(
+        db, trade_date, [d.sector_code for d in dailies]
+    )
 
     items: list[dict] = []
     for d in dailies:
@@ -483,6 +492,8 @@ async def _query_sectors(db: AsyncSession, trade_date: date,
             "main_net_inflow": _f(d.main_net_inflow),
             "rs_20d": _f(d.rs_20d),
             "member_count": d.member_count,
+            "is_partial": d.sector_code in partial_map,
+            "partial_member_count": partial_map.get(d.sector_code),
             "technical_score": _f(s.technical_score) if s else None,
             "sentiment_score": _f(s.sentiment_score) if s else None,
             "news_score": _f(s.news_score) if s else None,
@@ -491,6 +502,39 @@ async def _query_sectors(db: AsyncSession, trade_date: date,
             "sentiment_leaders": s.sentiment_leaders if s else None,
         })
     return items
+
+
+async def _query_partial_membership(
+    db: AsyncSession, trade_date: date, sector_codes: list[str] | None = None
+) -> dict[str, int]:
+    """返回「只有 partial 样本名单」的板块及其样本成员数。
+
+    THS 对 pages>10 的板块只暴露前后各 5 页，整份名单入库时标记 is_partial。
+    这类板块的名单不能参与家数/市值聚合，前端必须显式提示「名单不完整」。
+    """
+    if sector_codes is not None and not sector_codes:
+        return {}
+    stmt = (
+        select(
+            DimSectorMember.sector_code,
+            func.count().label("total"),
+            func.count().filter(DimSectorMember.is_partial.is_(True)).label("partial"),
+        )
+        .where(DimSectorMember.effective_from <= trade_date)
+        .where(
+            (DimSectorMember.effective_to.is_(None))
+            | (DimSectorMember.effective_to > trade_date)
+        )
+        .group_by(DimSectorMember.sector_code)
+    )
+    if sector_codes is not None:
+        stmt = stmt.where(DimSectorMember.sector_code.in_(sector_codes))
+    rows = (await db.execute(stmt)).all()
+    return {
+        code: int(partial)
+        for code, total, partial in rows
+        if total and total == partial
+    }
 
 
 async def _query_margin(db: AsyncSession, trade_date: date) -> dict:

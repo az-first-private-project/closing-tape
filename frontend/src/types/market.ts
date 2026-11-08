@@ -96,8 +96,12 @@ export interface SectorQuote {
   main_net_inflow: number | null
   /** 20 日相对沪深300 超额收益（百分点，T4） */
   rs_20d: number | null
-  /** 当日 SCD2 名单成分数（T4；0 表示无名单） */
+  /** 当日 SCD2 名单成分数（T4；0 表示无名单；partial 名单为 null） */
   member_count: number | null
+  /** 名单是否只有 partial 样本（THS pages>10 只暴露前后各 5 页） */
+  is_partial: boolean
+  /** partial 名单的样本成员数；完整名单为 null */
+  partial_member_count: number | null
   /** 0–10 分制；未评分时为 null（不得用 5 兜底） */
   technical_score: number | null
   sentiment_score: number | null
@@ -216,6 +220,10 @@ export interface SectorDetail {
   sector_code: string
   sector_name: string
   sector_type: string | null
+  /** 名单是否只有 partial 样本 */
+  is_partial: boolean
+  /** partial 名单的样本成员数；完整名单为 null */
+  partial_member_count: number | null
   trade_date: string
   market_data: SectorMarketData
   scores: SectorScores

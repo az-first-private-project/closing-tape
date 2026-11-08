@@ -64,6 +64,11 @@ function countText(up: number | null, down: number | null): string {
   return `${up === null ? EMPTY_TEXT : up} / ${down === null ? EMPTY_TEXT : down} 家`
 }
 
+/** partial 名单提示：THS 只暴露前后各 5 页，名单只是样本 */
+function partialLabel(count: number | null | undefined): string {
+  return count != null ? `名单不完整 · 样本 ${count} 只` : '名单不完整 · 样本数未知'
+}
+
 /** 「其他」格子的加权涨跌幅：市值模式按市值加权，等权模式取简单平均 */
 function aggregatePct(rest: SectorQuote[], byCap: boolean): number | null {
   let weighted = 0
@@ -165,6 +170,10 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
 
   const memberTotal = useMemo(
     () => items.reduce((sum, item) => sum + (item.member_count ?? 0), 0),
+    [items],
+  )
+  const partialCount = useMemo(
+    () => items.filter((item) => item.is_partial).length,
     [items],
   )
 
@@ -281,6 +290,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
             {typeLabel} {sectorsQuery.data?.count ?? items.length} 个
             {capMode && ` · 市值覆盖 ${capCovered}/${items.length}`}
             {` · 成分合计 ${memberTotal} 家`}
+            {partialCount > 0 && `（不含 ${partialCount} 个名单不完整板块）`}
             {folded > 0 && ` · 已展示前 ${DEFAULT_TOP_N} 大`}
           </p>
         </div>
@@ -366,7 +376,9 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
                   aria-label={
                     isOthers
                       ? `${cell.name}，点击显示全部`
-                      : `${cell.name} ${pctLabel(cell.pct_chg, 2)}`
+                      : `${cell.name} ${pctLabel(cell.pct_chg, 2)}${
+                          cell.sector?.is_partial ? '，名单不完整' : ''
+                        }`
                   }
                   className="absolute overflow-hidden rounded-[3px] border border-card/80 text-left transition-shadow duration-200 hover:z-10 hover:ring-1 hover:ring-brass/90 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-brass"
                   style={{
@@ -479,6 +491,11 @@ function SectorTooltip({ sector }: { sector: SectorQuote }) {
           {sector.sector_code}
         </span>
       </p>
+      {sector.is_partial && (
+        <p className="mt-1.5 rounded border border-warning/30 bg-warning/[0.07] px-1.5 py-1 text-[10px] leading-snug text-warning">
+          {partialLabel(sector.partial_member_count)}，涨跌家数与市值不可用
+        </p>
+      )}
       <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
         <TooltipRow label="涨跌幅">
           <span className={pctColor(sector.pct_chg)}>{pctLabel(sector.pct_chg, 2)}</span>
@@ -494,8 +511,11 @@ function SectorTooltip({ sector }: { sector: SectorQuote }) {
         <TooltipRow label="三面评分">{scoreText}</TooltipRow>
       </div>
       <p className="mt-1.5 border-t border-border pt-1.5 text-[10px] text-muted-foreground">
-        面积 {fmtAmount(sector.market_cap)} · 成分{' '}
-        {sector.member_count != null ? `${sector.member_count} 家` : EMPTY_TEXT}
+        {sector.is_partial
+          ? `面积 不适用 · ${partialLabel(sector.partial_member_count)}`
+          : `面积 ${fmtAmount(sector.market_cap)} · 成分 ${
+              sector.member_count != null ? `${sector.member_count} 家` : EMPTY_TEXT
+            }`}
         {sector.composite_score !== null && ` · 综合 ${sector.composite_score.toFixed(1)}`}
       </p>
     </>
@@ -514,6 +534,8 @@ function SectorDrawer({
 }) {
   const detailQuery = useSectorDetail(sector.sector_code, tradeDate)
   const detail = detailQuery.data
+  const isPartial = detail?.is_partial ?? sector.is_partial
+  const partialSample = detail?.partial_member_count ?? sector.partial_member_count
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -541,11 +563,16 @@ function SectorDrawer({
           <div className="flex items-start justify-between gap-3">
             <div>
               <span className="eyebrow">Sector Detail</span>
-              <h3 className="mt-1.5 flex items-baseline gap-2 text-[17px] font-semibold tracking-[-0.015em]">
+              <h3 className="mt-1.5 flex flex-wrap items-baseline gap-2 text-[17px] font-semibold tracking-[-0.015em]">
                 {sector.sector_name}
                 <span className="num text-[10px] font-normal text-muted-foreground">
                   {sector.sector_code}
                 </span>
+                {isPartial && (
+                  <span className="rounded border border-warning/40 bg-warning/[0.08] px-1.5 py-0.5 text-[9px] font-normal text-warning">
+                    名单不完整
+                  </span>
+                )}
               </h3>
               <p className="mt-1 text-[10px] text-muted-foreground">
                 {sector.sector_type === 'concept' ? '概念板块' : '行业板块'} · 交易日{' '}
@@ -592,6 +619,12 @@ function SectorDrawer({
           )}
           {detail && (
             <>
+              {isPartial && (
+                <p className="rounded-lg border border-warning/30 bg-warning/[0.07] px-2.5 py-2 text-[11px] leading-relaxed text-warning">
+                  {partialLabel(partialSample)}：同花顺只暴露前后各 5 页，名单仅为样本；
+                  涨跌家数、市值等聚合字段不可用。
+                </p>
+              )}
               <section className="grid grid-cols-2 gap-2">
                 <Stat label="涨跌幅">
                   <span className={pctColor(detail.market_data.pct_chg)}>
@@ -648,7 +681,7 @@ function SectorDrawer({
 
               <section>
                 <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">
-                  成分股（{detail.members.length}）
+                  {isPartial ? '样本成分股' : '成分股'}（{detail.members.length}）
                 </h4>
                 {detail.members.length === 0 ? (
                   <p className="text-xs text-muted-foreground">名单为空</p>

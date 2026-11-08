@@ -328,6 +328,18 @@
 | P2-9 | 单次回测默认结束日取 today | 改为 `min(today, /health.latest_trade_date)` | 周末/数据滞后不直接失败 | 1h |
 | P2-10 | 资金流含无效代码 810011/810013/810014 | 预览后定向删除，并加代码合法性校验 | 三码清零；新数据不再写入 | 15min |
 
+### P2-1 partial 板块提示（已完成 11-08）
+
+- 后端：`/market/sectors`、`/market/dashboard.sectors`、`/market/sector/{code}` 增列
+  `is_partial`（整份名单是否只有 partial 样本）与 `partial_member_count`（样本成员数）；
+  判定基于 `dim_sector_member` 当前有效区间，完整名单与 partial 混合时仍按完整名单处理。
+- 前端：热力图 tooltip/抽屉显示“名单不完整 · 样本 N 只”，家数与面积/市值显示“不适用”；
+  格子 `aria-label` 与头部统计补充 partial 数量，抽屉标题带“名单不完整”徽章。
+- 验收：单测 3 passed、测试库集成 2 passed；真实 API 2026-11-06 概念板块 357 个中
+  12 个 partial（各 100 只），详情返回 `is_partial=true / partial_member_count=100`；
+  前端 build、tooltip/抽屉浏览器验收与禁用文案扫描通过。
+- 代价：约 1 小时。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -444,7 +456,7 @@
 | P1-3 | P1 | 自选隔离与鉴权 | 1h–2d | W3 | 方案确认 | 完成（11-08，单机收口） |
 | P1-4 | P1 | 任务状态机 | 0.5–3d | W2 | W0-4 | 已完成（11-08，短期方案） |
 | P1-5 | P1 | NO_PROXY 固化 | 0.5d | W1 | — | 完成（11-07） |
-| P2-1 | P2 | partial 板块提示 | 1h | W3 | P1-1 | 待开始 |
+| P2-1 | P2 | partial 板块提示 | 1h | W3 | P1-1 | 完成（11-08） |
 | P2-2 | P2 | 矩阵复用关联 | 0.5–1d | W4 | — | 待开始 |
 | P2-3 | P2 | 纸面增量重算 | 1–2d | W4 | — | 待开始 |
 | P2-4 | P2 | 回测异步化 | 1–2d | W4 | P2-2 | 待开始 |

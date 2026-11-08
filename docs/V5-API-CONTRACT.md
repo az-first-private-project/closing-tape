@@ -135,6 +135,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   "stats": { "scored_sectors": 30, "total_sectors": 86, "signal_count": 0 }
 }
 ```
+- `sectors[]` / `top_sectors[]` / `bottom_sectors[]` 与 3.5 的 `items` 同结构（含 T4 的 `market_cap / member_count / is_partial / partial_member_count` 等字段）。
 - 无数据时返回 200 + `sectors: []` + `freshness` 里 `status=unknown`，**不要 500**。
 - `report` 为 `null` 表示尚未生成。
 - `indices[]` / `us_indices[]` 的 `ret_1d/5d/20d/60d/ytd` 为**百分数**（-5.48 表示 -5.48%），按交易日窗口计算；历史长度不足该窗口时为 `null`，**不返回 0**。
@@ -144,6 +145,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 ### 3.2 GET `/api/v1/market/sector/{sector_code}?trade_date=`
 ```json
 { "sector_code": "BK1036", "sector_name": "半导体", "sector_type": "industry",
+  "is_partial": false, "partial_member_count": null,
   "trade_date": "2026-10-21",
   "market_data": { "close": 1234.5, "pct_chg": 3.2, "volume": 0, "amount": 5.1e10,
                    "turnover_rate": 2.4, "up_count": 45, "down_count": 12,
@@ -157,7 +159,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   "members": [ { "code": "688981", "name": "中芯国际", "pct_chg": 5.8 } ] }
 ```
 - `members` 按当日 SCD2 名单返回，最多 200 条；`name` 取自 `dim_stock`，名称缺失时为 `null`，`pct_chg` 缺失时也为 `null`。
-- 名单不完整（THS `pages > 10`，仅开放前后各 5 页）时返回已抓取的部分，不补 0；可用 3.5 的 `member_count=null` 判定。
+- 名单不完整（THS `pages > 10`，仅开放前后各 5 页）时返回已抓取的部分，不补 0；`is_partial=true`，`partial_member_count` 为样本成员数（当前约 100 只），完整名单时分别为 `false / null`。
 
 ### 3.3 GET `/api/v1/market/indices?trade_date=&days=`
 - `days=1`（默认）：`{ "trade_date": "2026-10-26", "items": [ /* 与 dashboard.indices 同结构，含多周期收益与相对300字段 */ ] }`
@@ -198,7 +200,8 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
                "leading_stock": "达瑞电子", "leading_stock_pct": 20.0,
                "market_cap": 2637834474066.67, "float_cap": 2399042204473.82,
                "main_net_inflow": -690026326.24, "rs_20d": -3.907,
-               "member_count": 96, "technical_score": 4.04,
+               "member_count": 96, "is_partial": false, "partial_member_count": null,
+               "technical_score": 4.04,
                "sentiment_score": 4.96, "news_score": 5.0, "composite_score": 4.6,
                "strength_leaders": [ … ], "sentiment_leaders": [ … ] } ] }
 ```
@@ -207,6 +210,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `main_net_inflow`：成分股 `fact_moneyflow.main_net_t0` 合计（元）；与市值同样受成分数 < 3 与名单完整性限制。
 - `rs_20d`：板块 20 交易日收益 − 沪深300 同窗口收益（百分点）；任一侧不足 21 个交易日为 `null`。
 - `member_count`：当日 SCD2 **完整**名单成分数；`0` 表示该板块没有名单（概念板块常见）；`null` 表示名单不完整（THS 只开放前后各 5 页），此时市值/资金流同 `null`，前端按「数据不足」显示。
+- `is_partial` / `partial_member_count`：名单是否仅为 partial 样本，以及该样本的成员数（完整名单为 `false / null`）。partial 板块的 `up_count/down_count/market_cap` 不可用，前端必须显示「名单不完整 · 样本 N 只」并用「不适用」代替家数/市值，不能把样本数当成完整家数。
 - `up_count` / `down_count` 在部分同花顺概念板块上恒为 `null`（源头不提供），前端显示「不适用」，**不得**按 0 渲染。
 
 ## 4. 个股（E4）
