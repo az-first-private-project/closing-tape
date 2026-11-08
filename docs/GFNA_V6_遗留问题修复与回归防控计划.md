@@ -523,6 +523,51 @@
   schema 1，仅表示写入版本，不产生依据缺失提示。
 - 代价：约 0.5 天。
 
+### P2-8 测试隔离与残留清理（已完成 11-08）
+
+- 问题（两条叠加）：
+  1. `test_api_v5.py` / `test_paper_api.py` / `test_sector_score_sparkline.py` /
+     `test_ingest.py` 用 `os.getenv("GFNA_TEST_DB")` 裸判断，设 `GFNA_TEST_DB=0`
+     仍会运行；且这些用例通过 `app.db.session` 默认连 `DATABASE_URL`，本地一旦
+     开启测试库也会写生产库。
+  2. `backend/.env` 以 `override=True` 加载，且含 `POSTGRES_DATABASE=gfna_db`，
+     只设置同名环境变量无法把测试进程切到 `gfna_test`。
+- 方案：新增 `tests/conftest.py`，在导入 `app.db.session` 之前直接改写
+  `app.core.config` 的 `POSTGRES_DATABASE / DATABASE_URL / DATABASE_URL_SYNC`：
+  - 测试库取 `GFNA_TEST_DATABASE_URL`，否则把库名替换为 `GFNA_TEST_DATABASE_NAME`
+    （默认 `gfna_test`）；库名不以 `_test` 结尾直接抛错终止，失败即关闭；
+  - 若 `app.db.session` 已先行导入（引擎已绑定生产库）同样抛错；
+  - 测试进程强制 `SCHEDULER_ENABLED=0`、`AUTO_CREATE_TABLES=0`；
+  - session 级 autouse 夹具断言 config 两条 URL、异步/同步引擎均指向 `_test`。
+- 开关：四个文件的裸 `os.getenv` 改为真值集合 `{"1","true","yes","on"}`，
+  `GFNA_TEST_DB=0` 正确跳过。
+- 自清理：`test_backtest_grid_marks_failed_cells` 在 `finally` 中删除自己创建的
+  矩阵、2 条失败回测与关联行，不再每次运行都向库内累计残留。
+- 残留清理（用户确认精确 SQL，单事务 + rowcount 守卫，不符即回滚）：
+  - 归档 10 条 2026-11-07/11-08 产生的周末区间失败回测（`status='failed'` →
+    `archived`，`error LIKE '%交易日数量不足%'`），期望 10 / 实际 10；
+  - 删除 5 个仅含上述失败格的测试矩阵：`backtest_grid_cell` 10 行、
+    `backtest_grid` 5 行，期望/实际一致；清理后 `failed` 且“交易日数量不足”= 0，
+    `backtest_grid` 34→29、`backtest_grid_cell` 88→78。
+- 新增 `tests/integration/test_test_db_isolation.py`（3 例）：config 两条 URL 与
+  `POSTGRES_DATABASE`、全局异步/同步引擎、以及 `TestClient` 完整启动后
+  `select current_database()` 实际连接均以 `_test` 结尾。
+- 验收：
+  - 单测（不设 `GFNA_TEST_DB`）：541 passed / 61 skipped；
+  - 集成（`GFNA_TEST_DB=1`）：25 passed；
+  - 写库类用例（`test_paper_api`、`test_ingest` 幂等、5 个 `test_api_v5` 用例）
+    连 `gfna_test`：11 passed / 1 skipped；运行后 `gfna_test` 的
+    `backtest_run / backtest_grid / backtest_grid_cell / trade_calendar(2100-01-01)`
+    全部为 0，证明测试不再写生产库且能自清理；
+  - CI 单元 job 不设 `GFNA_TEST_DB`（DB 用例跳过），集成 job 只跑
+    `tests/integration` 并显式指向 `gfna_test`，均不连生产库；
+  - `check_invariants.py` 退出码 0，`/health` 200、database=connected。
+- 遗留：完整 `test_api_v5` 与 sparkline 端到端用例仍要求 `gfna_test` 先迁移并
+  灌入 demo/features/scores/sector_scores/algos（文件头已注明），本次只跑了
+  不依赖演示数据的子集；此前手工验收产生的成功回测/矩阵保留为审计数据，
+  不在本次失败残留清理范围。
+- 代价：约 1 小时。
+
 ### P2-9 回测默认结束日（已完成 11-08）
 
 - 问题：`POST /api/v1/backtest/{algo_code}` 省略 `end` 时取 `date.today()`，与契约
@@ -805,7 +850,7 @@
 | P2-5 | P2 | 共识榜批量 kline | 0.5d | W4 | — | 完成（11-08） |
 | P2-6 | P2 | 移动端命令面板 | 1h | W3 | — | 完成（11-08） |
 | P2-7 | P2 | 历史 run 元数据标注 | 0.5–1d | W4 | — | 完成（11-08） |
-| P2-8 | P2 | 测试隔离与残留清理 | 0.5d | W3 | W0-5 | 待授权 |
+| P2-8 | P2 | 测试隔离与残留清理 | 0.5d | W3 | W0-5 | 完成（11-08） |
 | P2-9 | P2 | 回测默认结束日 | 1h | W3 | — | 完成（11-08） |
 | P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 完成（11-08） |
 | P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 完成（11-08） |

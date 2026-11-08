@@ -1,4 +1,6 @@
-"""纸面组合 API 集成测试（需要真实 PostgreSQL；无库时跳过）。
+"""纸面组合 API 集成测试（需要独立 gfna_test；未开启时跳过）。
+
+测试进程由 `tests/conftest.py` 强制连接 `_test` 库，不会写生产库。
 
     set GFNA_TEST_DB=1
     set SCHEDULER_ENABLED=0
@@ -10,9 +12,13 @@ import os
 
 import pytest
 
+TEST_DB_ENABLED = os.getenv("GFNA_TEST_DB", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
 pytestmark = pytest.mark.skipif(
-    not os.getenv("GFNA_TEST_DB"),
-    reason="需要 PostgreSQL；设置 GFNA_TEST_DB=1 后运行",
+    not TEST_DB_ENABLED,
+    reason="需要独立 _test 库；设置 GFNA_TEST_DB=1 后运行",
 )
 
 os.environ.setdefault("SCHEDULER_ENABLED", "0")

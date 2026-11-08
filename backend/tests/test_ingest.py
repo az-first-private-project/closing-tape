@@ -10,8 +10,8 @@
     ④ 质量校验能发现越界 pct_chg、重复行、缺日、OHLC 非法；
     ⑤ ``adj_factor = 后复权收盘 / 不复权收盘``（raw 无效日跳过）。
 
-DB 用例需要显式设置 ``GFNA_TEST_DB`` 环境变量（指向可连的 PostgreSQL 测试库），
-默认跳过 —— 采集单测不应该依赖数据库。
+DB 用例需要显式设置 ``GFNA_TEST_DB`` 环境变量；``tests/conftest.py`` 会把连接
+强制路由到独立 ``gfna_test``，默认跳过 —— 采集单测不应该依赖数据库。
 """
 from __future__ import annotations
 
@@ -53,7 +53,9 @@ from app.ingest.base import (  # noqa: E402
 )
 from app.ingest.quality import check_daily_frame, check_snapshot  # noqa: E402
 
-REQUIRE_DB = bool(os.getenv("GFNA_TEST_DB"))
+REQUIRE_DB = os.getenv("GFNA_TEST_DB", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 
 # ============================================================

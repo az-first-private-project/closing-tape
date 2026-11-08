@@ -8,6 +8,9 @@ V5 API 集成测试（需要真实 PostgreSQL + 演示数据）
     set SCHEDULER_ENABLED=0
     ..\\.venv\\Scripts\\python.exe -m pytest tests\\test_api_v5.py -q -p no:cacheprovider
 
+测试进程由 `tests/conftest.py` 强制连接独立 `gfna_test`（库名必须以 `_test` 结尾），
+不会写生产库。
+
 前提数据：`python scripts/pipeline_cli.py demo` + `features/scores/sector_scores/algos`。
 
 覆盖的验收点（来自方案 8）：
@@ -30,9 +33,13 @@ from datetime import date, timedelta
 
 import pytest
 
+TEST_DB_ENABLED = os.getenv("GFNA_TEST_DB", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
 pytestmark = pytest.mark.skipif(
-    not os.getenv("GFNA_TEST_DB"),
-    reason="需要 PostgreSQL 与演示数据；设置 GFNA_TEST_DB=1 后运行",
+    not TEST_DB_ENABLED,
+    reason="需要独立 _test 库与演示数据；设置 GFNA_TEST_DB=1 后运行",
 )
 
 os.environ.setdefault("SCHEDULER_ENABLED", "0")
@@ -728,12 +735,26 @@ def test_backtest_grid_marks_failed_cells(client):
     })
     assert resp.status_code == 200, resp.text
     grid = resp.json()
-    detail = client.get(f"/api/v1/backtest/grid/{grid['grid_id']}").json()
-    assert detail["progress"] == {"done": 2, "total": 2, "failed": 2}
-    for cell in detail["cells"]:
-        assert cell["status"] == "failed"
-        assert cell["metrics"] is None
-        assert "交易日数量不足" in (cell["error"] or "")
+    bt_ids = [cell["bt_id"] for cell in grid["cells"]]
+    try:
+        detail = client.get(f"/api/v1/backtest/grid/{grid['grid_id']}").json()
+        assert detail["progress"] == {"done": 2, "total": 2, "failed": 2}
+        for cell in detail["cells"]:
+            assert cell["status"] == "failed"
+            assert cell["metrics"] is None
+            assert "交易日数量不足" in (cell["error"] or "")
+    finally:
+        with Session(sync_engine) as session:
+            session.execute(
+                delete(BacktestGridCell).where(
+                    BacktestGridCell.grid_id == grid["grid_id"]
+                )
+            )
+            session.execute(delete(BacktestRun).where(BacktestRun.bt_id.in_(bt_ids)))
+            session.execute(
+                delete(BacktestGrid).where(BacktestGrid.grid_id == grid["grid_id"])
+            )
+            session.commit()
 
 
 def test_backtest_grid_marks_unaligned_cells(client):

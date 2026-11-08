@@ -1,6 +1,7 @@
 """板块评分 sparkline 接口（P3-2）测试。
 
-纯函数测试始终运行；端到端用例需要真实 PostgreSQL，设置 GFNA_TEST_DB=1 后运行。
+纯函数测试始终运行；端到端用例需要已灌入评分数据的独立 `gfna_test`
+（`tests/conftest.py` 强制路由），设置 GFNA_TEST_DB=1 后运行。
 """
 from __future__ import annotations
 
@@ -57,8 +58,8 @@ def test_align_sector_scores_keeps_empty_code_series() -> None:
 
 
 @pytest.mark.skipif(
-    not os.getenv("GFNA_TEST_DB"),
-    reason="需要 PostgreSQL 与真实评分数据；设置 GFNA_TEST_DB=1 后运行",
+    os.getenv("GFNA_TEST_DB", "").strip().lower() not in {"1", "true", "yes", "on"},
+    reason="需要独立 _test 库与真实评分数据；设置 GFNA_TEST_DB=1 后运行",
 )
 def test_sector_score_sparkline_matches_dashboard() -> None:
     from fastapi.testclient import TestClient
