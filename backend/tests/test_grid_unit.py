@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 from app.core.errors import InvalidParamError, NotFoundError
-from app.db.models.strategy import BacktestRun
+from app.db.models.strategy import BacktestGrid, BacktestGridCell, BacktestRun
 from app.strategy import grid as grid_module
 from app.strategy.grid import (
-    MAX_GRID_CELLS, _cell_snapshot, _params_match, normalize_axes,
+    MAX_GRID_CELLS, _cell_snapshot, _params_match, get_grid, normalize_axes,
     requeue_failed_cells,
 )
 
@@ -135,21 +135,37 @@ class _FakeResult:
     def all(self):
         return list(self._rows)
 
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
+
 
 class _FakeGridSession:
-    def __init__(self, rows):
-        self._rows = rows
+    """按 execute 调用顺序返回预置结果（矩阵主表查询 → 关联查询）。"""
+
+    def __init__(self, *results):
+        self._results = list(results)
         self.committed = False
 
     async def execute(self, _stmt):
-        return _FakeResult(self._rows)
+        return _FakeResult(self._results.pop(0))
 
     async def commit(self):
         self.committed = True
 
 
-def _grid_row(bt_id: str, status: str, rb: int = 20, mp: int = 20,
-              strategy: dict | None = None) -> BacktestRun:
+def _grid_row(algo: str = "a3") -> BacktestGrid:
+    return BacktestGrid(
+        grid_id="g1",
+        algo_code=algo,
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 6, 1),
+        axes={"rebalance_days": [20, 40], "max_positions": [20, 50]},
+        created_at=datetime(2025, 6, 2, 9, 0, 0),
+    )
+
+
+def _run_row(bt_id: str, status: str, rb: int = 20, mp: int = 20,
+             strategy: dict | None = None) -> BacktestRun:
     return BacktestRun(
         bt_id=bt_id,
         algo_code="a3",
@@ -161,21 +177,26 @@ def _grid_row(bt_id: str, status: str, rb: int = 20, mp: int = 20,
             "strategy": strategy or {"limit": mp, "min_score": 6.0},
         },
         status=status,
-        grid_id="g1",
-        grid_cell={
-            "rebalance_days": rb, "max_positions": mp,
-            "start_date": "2025-01-01", "end_date": "2025-06-01",
-        },
         error="boom" if status == "failed" else None,
         metrics={"total_return": 0.1} if status == "success" else None,
     )
 
 
+def _link(bt_id: str, rb: int = 20, mp: int = 20, reused: bool = False) -> BacktestGridCell:
+    return BacktestGridCell(
+        grid_id="g1", bt_id=bt_id,
+        rebalance_days=rb, max_positions=mp, reused=reused,
+    )
+
+
 def test_requeue_failed_cells_only_resets_failed():
-    failed = _grid_row("bt-f", "failed", rb=40, mp=50,
-                       strategy={"limit": 50, "min_score": 7.0})
-    success = _grid_row("bt-s", "success")
-    session = _FakeGridSession([failed, success])
+    failed = _run_row("bt-f", "failed", rb=40, mp=50,
+                      strategy={"limit": 50, "min_score": 7.0})
+    success = _run_row("bt-s", "success")
+    session = _FakeGridSession(
+        [_grid_row()],
+        [(failed, _link("bt-f", rb=40, mp=50)), (success, _link("bt-s"))],
+    )
 
     result = asyncio.run(requeue_failed_cells(session, "g1"))
 
@@ -200,8 +221,8 @@ def test_requeue_failed_cells_only_resets_failed():
 
 
 def test_requeue_without_failed_does_not_commit():
-    success = _grid_row("bt-s", "success")
-    session = _FakeGridSession([success])
+    success = _run_row("bt-s", "success")
+    session = _FakeGridSession([_grid_row()], [(success, _link("bt-s"))])
 
     result = asyncio.run(requeue_failed_cells(session, "g1"))
 
@@ -213,3 +234,31 @@ def test_requeue_without_failed_does_not_commit():
 def test_requeue_unknown_grid_raises_not_found():
     with pytest.raises(NotFoundError):
         asyncio.run(requeue_failed_cells(_FakeGridSession([]), "missing"))
+
+
+def test_get_grid_reads_membership_from_association():
+    """同一回测出现在两个矩阵时，各自链接都能读到完整格子与复用标记。"""
+    success = _run_row("bt-s", "success")
+    failed = _run_row("bt-f", "failed", rb=40, mp=50)
+    session = _FakeGridSession(
+        [_grid_row()],
+        [(success, _link("bt-s", reused=True)), (failed, _link("bt-f", rb=40, mp=50))],
+    )
+
+    body = asyncio.run(get_grid(session, "g1"))
+
+    assert body["grid_id"] == "g1"
+    assert body["algo"] == "a3"
+    assert body["axes"] == {"rebalance_days": [20, 40], "max_positions": [20, 50]}
+    assert body["progress"] == {"done": 2, "total": 2, "failed": 1}
+    by_key = {(c["rebalance_days"], c["max_positions"]): c for c in body["cells"]}
+    assert by_key[(20, 20)]["reused"] is True
+    assert by_key[(40, 50)]["reused"] is False
+    assert by_key[(40, 50)]["error"] == "boom"
+    assert by_key[(20, 20)]["metrics"]["total_return"] == 0.1
+    assert body["created_at"] == "2025-06-02T09:00:00"
+
+
+def test_get_grid_unknown_raises_not_found():
+    with pytest.raises(NotFoundError):
+        asyncio.run(get_grid(_FakeGridSession([]), "missing"))

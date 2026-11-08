@@ -134,16 +134,57 @@ class BacktestRun(Base):
     status: Mapped[str] = mapped_column(String(16), default="success")
     error: Mapped[str | None] = mapped_column(Text)
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
-    grid_id: Mapped[str | None] = mapped_column(String(36), comment="参数敏感性矩阵 ID（T10）")
-    grid_cell: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, comment="矩阵坐标 {rebalance_days,max_positions,start_date,end_date,reused}"
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
         Index("ix_backtest_run_algo", "algo_code", "created_at"),
-        Index("ix_backtest_run_grid", "grid_id"),
     )
+
+
+class BacktestGrid(Base):
+    """参数敏感性矩阵主表（T10 / P2-2）。
+
+    矩阵身份与回测行解耦：复用只新增 ``backtest_grid_cell`` 关联，
+    不再改写 ``backtest_run``，旧矩阵链接不会因复用而丢格或 404。
+    """
+
+    __tablename__ = "backtest_grid"
+
+    grid_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    algo_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    axes: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment='{"rebalance_days": [...], "max_positions": [...]}'
+    )
+    strategy_params: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="策略参数快照（未含每格 limit 调整）"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_backtest_grid_created", "created_at"),
+    )
+
+
+class BacktestGridCell(Base):
+    """矩阵格与回测行的关联（T10 / P2-2）；同一回测可被多个矩阵复用。"""
+
+    __tablename__ = "backtest_grid_cell"
+    __table_args__ = (
+        PrimaryKeyConstraint("grid_id", "bt_id", name="pk_backtest_grid_cell"),
+        Index("ix_backtest_grid_cell_bt", "bt_id"),
+    )
+
+    grid_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("backtest_grid.grid_id", ondelete="CASCADE"), nullable=False
+    )
+    bt_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("backtest_run.bt_id", ondelete="CASCADE"), nullable=False
+    )
+    rebalance_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_positions: Mapped[int] = mapped_column(Integer, nullable=False)
+    reused: Mapped[bool] = mapped_column(Boolean, default=False, comment="该格是否复用已有回测")
 
 
 class PaperPortfolio(Base):
@@ -200,5 +241,6 @@ class PaperNav(Base):
 
 __all__ = [
     "StgRun", "StgSignal", "StgSignalPerf", "BacktestRun",
+    "BacktestGrid", "BacktestGridCell",
     "PaperPortfolio", "PaperNav",
 ]

@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 
 from app.db.models.meta import IngestJob
-from app.db.models.strategy import BacktestRun, StgRun
+from app.db.models.strategy import BacktestGrid, BacktestGridCell, BacktestRun, StgRun
 from app.services.task_recovery import RESTART_ERROR, recover_stale_tasks
 from app.strategy.grid import requeue_failed_cells
 
@@ -31,16 +31,14 @@ def _run(status: str, created_at: datetime) -> StgRun:
     )
 
 
-def _backtest(status: str, created_at: datetime, *, grid_id: str | None = None,
+def _backtest(status: str, created_at: datetime, *,
               error: str | None = None) -> BacktestRun:
     return BacktestRun(
         bt_id=str(uuid4()), algo_code="a3",
         start_date=date(2026, 1, 1), end_date=date(2026, 6, 1),
         params={"rebalance_days": 20, "max_positions": 20,
                 "strategy": {"limit": 20, "min_score": 6.0}},
-        status=status, created_at=created_at, grid_id=grid_id, error=error,
-        grid_cell={"rebalance_days": 20, "max_positions": 20,
-                   "start_date": "2026-01-01", "end_date": "2026-06-01"},
+        status=status, created_at=created_at, error=error,
     )
 
 
@@ -75,10 +73,20 @@ async def test_recover_stale_tasks_updates_real_rows(db_session):
 
 async def test_requeue_failed_cells_updates_real_rows(db_session):
     grid_id = str(uuid4())
-    failed = _backtest("failed", datetime.now(timezone.utc), grid_id=grid_id,
-                       error="旧失败")
-    success = _backtest("success", datetime.now(timezone.utc), grid_id=grid_id)
+    failed = _backtest("failed", datetime.now(timezone.utc), error="旧失败")
+    success = _backtest("success", datetime.now(timezone.utc))
+    db_session.add(BacktestGrid(
+        grid_id=grid_id, algo_code="a3",
+        start_date=date(2026, 1, 1), end_date=date(2026, 6, 1),
+        axes={"rebalance_days": [20], "max_positions": [20]},
+    ))
     db_session.add_all([failed, success])
+    await db_session.flush()
+    db_session.add_all([
+        BacktestGridCell(grid_id=grid_id, bt_id=row.bt_id,
+                         rebalance_days=20, max_positions=20, reused=False)
+        for row in (failed, success)
+    ])
     await db_session.flush()
 
     result = await requeue_failed_cells(db_session, grid_id)

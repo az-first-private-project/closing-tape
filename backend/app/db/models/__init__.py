@@ -16,7 +16,8 @@ from app.db.models.meta import AlgoMeta, IngestJob, MetaDataQuality, TradeCalend
 from app.db.models.news import CrawlLog, NewsArticle, NewsSource
 from app.db.models.state import WatchlistState
 from app.db.models.strategy import (
-    BacktestRun, PaperNav, PaperPortfolio, StgRun, StgSignal, StgSignalPerf,
+    BacktestGrid, BacktestGridCell, BacktestRun, PaperNav, PaperPortfolio,
+    StgRun, StgSignal, StgSignalPerf,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "TradeCalendar", "MetaDataQuality", "IngestJob", "AlgoMeta",
     # 策略
     "StgRun", "StgSignal", "StgSignalPerf", "BacktestRun",
+    "BacktestGrid", "BacktestGridCell",
     "PaperPortfolio", "PaperNav",
     # 应用状态
     "WatchlistState",

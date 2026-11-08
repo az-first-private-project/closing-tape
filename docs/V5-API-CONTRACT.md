@@ -567,7 +567,8 @@ POST `/api/v1/backtest/{algo_code}/grid`，body：
 - 每个格子是一次独立回测（`backtest_run`，`status: queued → running → success|failed`），
   各自独立事务，单格失败不影响其余格；后台并发上限 2。
 - **复用**：`(algo, start, end)` 相同且参数子集一致、状态为 success 的既有回测直接复用，
-  不重新计算。复用行会挂到新 `grid_id`（旧 `grid_id` 不再可查，只有最新矩阵持有该行）。
+  不重新计算。复用只在 `backtest_grid_cell` 新增关联，不改写回测行；同一 `bt_id`
+  可同时属于多个矩阵，旧 `grid_id` 始终可查。
 - 立即返回（`elapsed_ms` 恒为 0），计算在后台进行：
 
 ```json

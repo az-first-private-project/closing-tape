@@ -6,8 +6,8 @@
 并发与事务：
   - 全局信号量上限 2，逐格独立会话/事务；单格失败只标记该格 failed；
   - 复用判定只看 ``status='success'`` 且 (algo, start, end, 参数) 完全一致，
-    命中后直接挂到新矩阵，不重算；
-  - 复用会把该记录 ``grid_id`` 改挂到最新矩阵（列式存储的已知取舍）。
+    命中后只在 ``backtest_grid_cell`` 新增关联，不重算、不改写回测行；
+  - 矩阵身份在 ``backtest_grid`` 主表，同一回测可同时属于多个矩阵。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InvalidParamError, NotFoundError
-from app.db.models.strategy import BacktestRun
+from app.db.models.strategy import BacktestGrid, BacktestGridCell, BacktestRun
 from app.strategy import strategies as strat
 from app.strategy.backtest import BacktestParams, run_backtest
 
@@ -145,21 +145,30 @@ async def create_grid(
     grid_id = str(uuid.uuid4())
     cells: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
+    links: list[BacktestGridCell] = []
     reused = 0
+
+    db.add(BacktestGrid(
+        grid_id=grid_id,
+        algo_code=algo_code,
+        start_date=start,
+        end_date=end,
+        axes={"rebalance_days": rbs, "max_positions": mps},
+        strategy_params=dict(strategy_params or {}),
+    ))
 
     for rb in rbs:
         for mp in mps:
             expected = _cell_snapshot(algo_code, rb, mp, strategy_params)
-            cell_meta = {
-                "rebalance_days": rb,
-                "max_positions": mp,
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-            }
             existing = await _find_reusable(db, algo_code, start, end, expected)
             if existing is not None:
-                existing.grid_id = grid_id
-                existing.grid_cell = {**cell_meta, "reused": True}
+                links.append(BacktestGridCell(
+                    grid_id=grid_id,
+                    bt_id=existing.bt_id,
+                    rebalance_days=rb,
+                    max_positions=mp,
+                    reused=True,
+                ))
                 reused += 1
                 cells.append({
                     "bt_id": existing.bt_id,
@@ -179,8 +188,13 @@ async def create_grid(
                 end_date=end,
                 params={**expected},
                 status="queued",
+            ))
+            links.append(BacktestGridCell(
                 grid_id=grid_id,
-                grid_cell={**cell_meta, "reused": False},
+                bt_id=bt_id,
+                rebalance_days=rb,
+                max_positions=mp,
+                reused=False,
             ))
             pending.append({"bt_id": bt_id, "rebalance_days": rb, "max_positions": mp})
             cells.append({
@@ -192,6 +206,8 @@ async def create_grid(
                 "reused": False,
             })
 
+    await db.flush()  # 先落主表与新回测行，再写关联，保证外键可见
+    db.add_all(links)
     await db.commit()  # 后台任务在响应后启动，排队行必须已可见
     cells.sort(key=lambda item: (item["rebalance_days"], item["max_positions"]))
     logger.info(
@@ -268,19 +284,23 @@ async def requeue_failed_cells(
     重复调用不会造成同格并发执行。每格带自己的参数快照与起止日，
     避免用其他格的 ``limit`` 覆盖本格。
     """
-    rows = (await db.execute(
-        select(BacktestRun)
-        .where(BacktestRun.grid_id == grid_id)
-        .with_for_update()
-    )).scalars().all()
-    if not rows:
+    grid = (await db.execute(
+        select(BacktestGrid).where(BacktestGrid.grid_id == grid_id)
+    )).scalar_one_or_none()
+    if grid is None:
         raise NotFoundError(f"参数矩阵不存在: {grid_id}", detail={"grid_id": grid_id})
 
+    rows = (await db.execute(
+        select(BacktestRun, BacktestGridCell)
+        .join(BacktestGridCell, BacktestGridCell.bt_id == BacktestRun.bt_id)
+        .where(BacktestGridCell.grid_id == grid_id)
+        .with_for_update()
+    )).all()
+
     pending: list[dict[str, Any]] = []
-    for row in rows:
+    for row, link in rows:
         if row.status != "failed":
             continue
-        meta = _cell_meta(row)
         row.status = "queued"
         row.error = None
         row.elapsed_ms = None
@@ -289,8 +309,8 @@ async def requeue_failed_cells(
         row.trades = None
         pending.append({
             "bt_id": row.bt_id,
-            "rebalance_days": meta["rebalance_days"],
-            "max_positions": meta["max_positions"],
+            "rebalance_days": link.rebalance_days,
+            "max_positions": link.max_positions,
             "start_date": row.start_date,
             "end_date": row.end_date,
             "strategy": dict((row.params or {}).get("strategy") or {}),
@@ -301,36 +321,30 @@ async def requeue_failed_cells(
 
     return {
         "grid_id": grid_id,
-        "algo": rows[0].algo_code,
-        "start": min(row.start_date for row in rows),
-        "end": max(row.end_date for row in rows),
+        "algo": grid.algo_code,
+        "start": grid.start_date,
+        "end": grid.end_date,
         "pending": pending,
-    }
-
-
-def _cell_meta(row: BacktestRun) -> dict[str, Any]:
-    meta = row.grid_cell or {}
-    params = row.params or {}
-    return {
-        "rebalance_days": int(meta.get("rebalance_days") or params.get("rebalance_days") or 0),
-        "max_positions": int(meta.get("max_positions") or params.get("max_positions") or 0),
-        "start_date": str(meta.get("start_date") or row.start_date.isoformat()),
-        "end_date": str(meta.get("end_date") or row.end_date.isoformat()),
-        "reused": bool(meta.get("reused")),
     }
 
 
 async def get_grid(db: AsyncSession, grid_id: str) -> dict[str, Any]:
     """矩阵状态 + 每格指标摘要 + 进度；不重算任何回测。"""
-    rows = (await db.execute(
-        select(BacktestRun).where(BacktestRun.grid_id == grid_id)
-    )).scalars().all()
-    if not rows:
+    grid = (await db.execute(
+        select(BacktestGrid).where(BacktestGrid.grid_id == grid_id)
+    )).scalar_one_or_none()
+    if grid is None:
         raise NotFoundError(f"参数矩阵不存在: {grid_id}", detail={"grid_id": grid_id})
 
+    rows = (await db.execute(
+        select(BacktestRun, BacktestGridCell)
+        .join(BacktestGridCell, BacktestGridCell.bt_id == BacktestRun.bt_id)
+        .where(BacktestGridCell.grid_id == grid_id)
+    )).all()
+    runs = [row for row, _ in rows]
+
     cells: list[dict[str, Any]] = []
-    for row in rows:
-        meta = _cell_meta(row)
+    for row, link in rows:
         metrics = row.metrics if row.status == "success" else None
         summary = {
             key: (metrics or {}).get(key) for key in _METRIC_KEYS
@@ -338,28 +352,28 @@ async def get_grid(db: AsyncSession, grid_id: str) -> dict[str, Any]:
         cells.append({
             "bt_id": row.bt_id,
             "params": {
-                "rebalance_days": meta["rebalance_days"],
-                "max_positions": meta["max_positions"],
+                "rebalance_days": link.rebalance_days,
+                "max_positions": link.max_positions,
             },
-            "rebalance_days": meta["rebalance_days"],
-            "max_positions": meta["max_positions"],
+            "rebalance_days": link.rebalance_days,
+            "max_positions": link.max_positions,
             "status": row.status,
-            "reused": meta["reused"],
+            "reused": bool(link.reused),
             "metrics": summary,
             "elapsed_ms": row.elapsed_ms,
             "error": (row.error or "")[:300] or None,
-            "_start_date": meta["start_date"],
-            "_end_date": meta["end_date"],
+            "_start_date": row.start_date.isoformat(),
+            "_end_date": row.end_date.isoformat(),
         })
     cells.sort(key=lambda item: (item["rebalance_days"], item["max_positions"]))
 
     start_counter = Counter(item["_start_date"] for item in cells)
     end_counter = Counter(item["_end_date"] for item in cells)
-    canonical_start = start_counter.most_common(1)[0][0]
-    canonical_end = end_counter.most_common(1)[0][0]
+    canonical_start = start_counter.most_common(1)[0][0] if cells else grid.start_date.isoformat()
+    canonical_end = end_counter.most_common(1)[0][0] if cells else grid.end_date.isoformat()
     calendar_by_bt = {
         row.bt_id: str((row.params or {}).get("calendar_source") or "db")
-        for row in rows if row.status == "success"
+        for row in runs if row.status == "success"
     }
     calendar_counter = Counter(calendar_by_bt.values())
     canonical_calendar = calendar_counter.most_common(1)[0][0] if calendar_counter else None
@@ -381,16 +395,23 @@ async def get_grid(db: AsyncSession, grid_id: str) -> dict[str, Any]:
     failed = sum(1 for item in cells if item["status"] == "failed")
     done = sum(1 for item in cells if item["status"] in ("success", "failed"))
     elapsed = [item["elapsed_ms"] for item in cells if item["elapsed_ms"] is not None]
-    created = min((row.created_at for row in rows if row.created_at), default=None)
+    axes = grid.axes or {}
+    created = grid.created_at
 
     return {
         "grid_id": grid_id,
-        "algo": rows[0].algo_code,
+        "algo": grid.algo_code,
         "start_date": canonical_start,
         "end_date": canonical_end,
         "axes": {
-            "rebalance_days": sorted({item["rebalance_days"] for item in cells}),
-            "max_positions": sorted({item["max_positions"] for item in cells}),
+            "rebalance_days": sorted(
+                int(value) for value in axes.get("rebalance_days")
+                or {item["rebalance_days"] for item in cells}
+            ),
+            "max_positions": sorted(
+                int(value) for value in axes.get("max_positions")
+                or {item["max_positions"] for item in cells}
+            ),
         },
         "cells": cells,
         "progress": {"done": done, "total": total, "failed": failed},

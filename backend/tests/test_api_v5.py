@@ -41,7 +41,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from app.db.models.strategy import BacktestRun, StgRun, StgSignal  # noqa: E402
+from app.db.models.strategy import (  # noqa: E402
+    BacktestGrid, BacktestGridCell, BacktestRun, StgRun, StgSignal,
+)
 from app.db.session import sync_engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.strategy.strategies import SPECS  # noqa: E402
@@ -562,6 +564,7 @@ def test_backtest_grid_end_to_end_and_reuse(client):
     assert all(cell["aligned"] for cell in body["cells"])
 
     by_key = {(c["rebalance_days"], c["max_positions"]): c for c in body["cells"]}
+    first_reused = {c["bt_id"]: c["reused"] for c in body["cells"]}
     default_cell = by_key[(20, 20)]
     assert default_cell["bt_id"] == base["bt_id"], "默认参数格必须复用同一行回测"
     for key in ("total_return", "excess_return", "max_drawdown", "sharpe",
@@ -595,6 +598,16 @@ def test_backtest_grid_end_to_end_and_reuse(client):
     for cell in again_detail["cells"]:
         assert cell["reused"] is True
         assert cell["elapsed_ms"] == first_elapsed[cell["bt_id"]], "复用不得重算耗时"
+
+    # P2-2：复用只新增关联，旧矩阵链接仍须可打开且保持原样
+    old_detail = client.get(f"/api/v1/backtest/grid/{grid['grid_id']}")
+    assert old_detail.status_code == 200, old_detail.text
+    old_body = old_detail.json()
+    assert old_body["progress"] == {"done": 4, "total": 4, "failed": 0}
+    assert {c["bt_id"] for c in old_body["cells"]} == set(first_elapsed)
+    assert {c["bt_id"]: c["reused"] for c in old_body["cells"]} == first_reused
+    for cell in old_body["cells"]:
+        assert cell["elapsed_ms"] == first_elapsed[cell["bt_id"]]
 
 
 def test_backtest_grid_rejects_invalid_axes(client):
@@ -658,6 +671,13 @@ def test_backtest_grid_marks_unaligned_cells(client):
     ids = [f"BT-GRID-{uuid.uuid4().hex[:10]}" for _ in range(3)]
     try:
         with Session(sync_engine) as session:
+            session.add(BacktestGrid(
+                grid_id=grid_id,
+                algo_code="a3",
+                start_date=date(2019, 12, 1),
+                end_date=date.fromisoformat(latest),
+                axes={"rebalance_days": [10, 20, 30], "max_positions": [5]},
+            ))
             cells = (
                 (10, latest, start),
                 (20, latest, start),
@@ -675,11 +695,15 @@ def test_backtest_grid_marks_unaligned_cells(client):
                              "win_rate": 0.5, "trade_count": 3},
                     status="success",
                     elapsed_ms=100 * (index + 1),
-                    grid_id=grid_id,
-                    grid_cell={"rebalance_days": rb, "max_positions": 5,
-                               "start_date": cell_start, "end_date": cell_end,
-                               "reused": False},
                 ))
+            session.flush()
+            session.add_all([
+                BacktestGridCell(
+                    grid_id=grid_id, bt_id=ids[index],
+                    rebalance_days=rb, max_positions=5, reused=False,
+                )
+                for index, (rb, _cell_end, _cell_start) in enumerate(cells)
+            ])
             session.commit()
 
         body = client.get(f"/api/v1/backtest/grid/{grid_id}").json()
@@ -692,4 +716,5 @@ def test_backtest_grid_marks_unaligned_cells(client):
     finally:
         with Session(sync_engine) as session:
             session.execute(delete(BacktestRun).where(BacktestRun.bt_id.in_(ids)))
+            session.execute(delete(BacktestGrid).where(BacktestGrid.grid_id == grid_id))
             session.commit()
