@@ -557,6 +557,38 @@
   接口按评分日取点而非自然日，跨长假时相邻点间隔会变大。
 - 代价：约 1.5 小时。
 
+### P3-1 前端路由分包（已完成 11-08）
+
+- 问题：所有页面静态导入，入口包 1030.70 kB（gzip 302.55 kB）；`lightweight-charts`、
+  `recharts`、`framer-motion` 全部进入首屏包，首页也要下载只有个股/盘后页才用的图表库。
+- 方案：
+  - `App.tsx` 全部页面改为 `React.lazy(() => import(...))`；`Layout` 常驻，`Suspense`
+    边界放在 `main > Outlet` 外侧，懒加载时导航、命令面板与背景不消失，内容区显示
+    `SkeletonCard` 骨架。
+  - `vite.config.ts` 增加 `manualChunks`：`vendor-react` / `vendor-motion` /
+    `vendor-icons` / `vendor-charts` / `vendor-kline`，第三方库按用途独立缓存。
+- 构建结果（`npm run build`，无 chunk 体积告警）：
+  - 入口 `index-*.js` **47.39 kB / gzip 16.84 kB**（原 1030.70 / 302.55，降幅约 95%）；
+  - 页面 chunk：DashboardPage 49.25、AlgoCenter 77.44、PaperPage 16.63、
+    StockDetailPage 13.07、KlineChart 13.43（kB）；
+  - vendor：charts 422.19 / gzip 111.91、kline 181.94 / 58.79、react 211.60、
+    motion 114.46、icons 23.98（kB）。
+- 验收（Playwright Chromium，`vite preview` 生产产物 `localhost:4173`，9 条路由各用独立上下文）：
+  - 首页只加载 `HomePage` + react/motion/icons，不含任何图表库或其它页面 chunk；
+  - `/dashboard`、`/algo-center`、`/paper` 加载各自页面 chunk 与 `vendor-charts`，
+    不加载 `vendor-kline`；`/stocks/600519` 加载 `KlineChart` + `vendor-kline`
+    （`AlgoRadarChart` 真实使用 recharts，故同时加载 `vendor-charts`）；
+  - watchlist / jobs / about / 404 只加载自身 chunk，跨页零泄漏；
+  - SPA 点击导航（把 DashboardPage chunk 延迟 800ms）：内容区出现 2 个骨架、
+    导航保持可见，随后仅新增 Dashboard 相关 chunk，`performance.navigation` 仍为
+    单次 `navigate`（无整页刷新），URL 正确；
+  - 全部路由 Console **0 error**；截图 `backend/var/p3_1_dashboard_lazy.png`。
+- 遗留：首次进入 dashboard/paper 仍需下载 `vendor-charts`（gzip 约 112 kB），分包只优化
+  首屏与跨页缓存，不减少单页真实依赖；发版后旧标签页再点懒加载路由可能命中已删除的
+  hash chunk，目前没有自动重载/错误边界，刷新页面即可恢复（如需可后续补 chunk 加载失败
+  兜底）；构建产物必须整体部署，不能只替换 `index.html`。
+- 代价：约 1 小时。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -683,7 +715,7 @@
 | P2-8 | P2 | 测试隔离与残留清理 | 0.5d | W3 | W0-5 | 待授权 |
 | P2-9 | P2 | 回测默认结束日 | 1h | W3 | — | 完成（11-08） |
 | P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 待授权 |
-| P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 待开始 |
+| P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 完成（11-08） |
 | P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 完成（11-08） |
 | P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 完成（11-08） |
 | P3-4 | P3 | 视口与生产验收 | 1d | W5 | P3-1 | 待开始 |

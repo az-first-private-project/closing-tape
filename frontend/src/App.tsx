@@ -11,19 +11,24 @@
  * /jobs        任务监控
  * /about       关于
  * *            404
+ *
+ * P3-1：页面全部按路由懒加载，重图表页面（dashboard/algo-center/paper/stocks）
+ * 不再进入入口包；Layout 常驻，Suspense 边界在 Layout 的 Outlet 外侧。
  */
+import { lazy } from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
-import HomePage from './pages/HomePage'
-import DetailPage from './pages/DetailPage'
-import DashboardPage from './pages/DashboardPage'
-import AlgoCenter from './pages/AlgoCenter'
-import PaperPage from './pages/PaperPage'
-import StockDetailPage from './pages/StockDetailPage'
-import WatchlistPage from './pages/WatchlistPage'
-import JobsPage from './pages/JobsPage'
-import AboutPage from './pages/AboutPage'
-import NotFoundPage from './pages/NotFoundPage'
+
+const HomePage = lazy(() => import('./pages/HomePage'))
+const DetailPage = lazy(() => import('./pages/DetailPage'))
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const AlgoCenter = lazy(() => import('./pages/AlgoCenter'))
+const PaperPage = lazy(() => import('./pages/PaperPage'))
+const StockDetailPage = lazy(() => import('./pages/StockDetailPage'))
+const WatchlistPage = lazy(() => import('./pages/WatchlistPage'))
+const JobsPage = lazy(() => import('./pages/JobsPage'))
+const AboutPage = lazy(() => import('./pages/AboutPage'))
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 
 export default function App() {
   return (

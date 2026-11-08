@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { ThemeProvider } from './ThemeProvider'
 import Navbar from './Navbar'
@@ -6,6 +6,17 @@ import Footer from './Footer'
 import CommandPalette from './CommandPalette'
 import AmbientBackdrop from './AmbientBackdrop'
 import IntroCurtain, { shouldPlayIntro } from './IntroCurtain'
+import { SkeletonCard } from './StateViews'
+
+/** 路由懒加载占位：保持导航可见，只替换内容区（P3-1） */
+function PageFallback() {
+  return (
+    <div className="mx-auto max-w-7xl space-y-3 px-4 py-6 sm:px-6 lg:px-8" role="status" aria-live="polite">
+      <SkeletonCard lines={2} />
+      <SkeletonCard lines={4} />
+    </div>
+  )
+}
 
 export default function Layout() {
   /**
@@ -47,7 +58,9 @@ export default function Layout() {
         <Navbar />
         <CommandPalette />
         <main className="flex-1">
-          <Outlet />
+          <Suspense fallback={<PageFallback />}>
+            <Outlet />
+          </Suspense>
         </main>
         <Footer />
       </div>
