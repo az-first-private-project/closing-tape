@@ -4,7 +4,7 @@
  * useStock / useKline / useStockSignals（最近一次 run 中该股是否被选中）。
  */
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { fetchKline, fetchStock } from '../api/stock'
+import { fetchKline, fetchSparklineBatch, fetchStock } from '../api/stock'
 import { fetchAlgoRuns, fetchAlgoRunDetail } from '../api/algo'
 import { useAlgoList } from './useAlgo'
 import type { AlgoStockRow } from '../types/algo'
@@ -26,6 +26,23 @@ export function useKline(code: string, limit = 250, end?: string) {
     queryKey: ['kline', code, limit, end || 'latest'],
     queryFn: () => fetchKline(code, { limit, end }),
     enabled: !!code,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (previousData) => previousData,
+  })
+}
+
+/** 批量近 N 日收盘（P2-5）：整页 sparkline 一次请求，按代码集合缓存 5 分钟 */
+export function useSparklineBatch(
+  codes: string[],
+  days = 30,
+  end?: string,
+  enabled = true,
+) {
+  const unique = [...new Set(codes.filter(Boolean))].sort()
+  return useQuery({
+    queryKey: ['sparkline-batch', unique, days, end || 'latest'],
+    queryFn: () => fetchSparklineBatch(unique, { days, end }),
+    enabled: enabled && unique.length > 0,
     staleTime: 5 * 60 * 1000,
     placeholderData: (previousData) => previousData,
   })

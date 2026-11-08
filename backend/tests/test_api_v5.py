@@ -175,6 +175,56 @@ def test_stock_detail_and_kline(client):
         assert field in kline_body["items"][0]
 
 
+def test_sparkline_batch_matches_single_kline(client):
+    """P2-5：整页批量收盘序列必须与逐股 kline 的 close 完全一致。"""
+    latest = client.get("/api/v1/market/dashboard").json()
+    sectors = latest["sectors"]
+    codes: list[str] = []
+    for sector in sectors[:3]:
+        detail = client.get(f"/api/v1/market/sector/{sector['sector_code']}").json()
+        codes = [member["code"] for member in (detail.get("members") or [])]
+        if len(codes) >= 2:
+            break
+    if not codes:
+        pytest.skip("演示数据无板块成分")
+
+    picked = codes[:2]
+    resp = client.get("/api/v1/stocks/sparkline/batch", params={
+        "codes": ",".join(picked),
+        "days": 30,
+        "end": latest["trade_date"],
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["end"] == latest["trade_date"]
+    assert body["days"] == 30
+    assert body["adjust_basis"] == "raw"
+    assert [item["code"] for item in body["items"]] == [c.zfill(6) for c in picked]
+
+    by_code = {item["code"]: item["closes"] for item in body["items"]}
+    for code in picked:
+        kline = client.get(f"/api/v1/stocks/{code}/kline", params={
+            "limit": 30,
+            "end": latest["trade_date"],
+        }).json()
+        expected = [item["close"] for item in kline["items"]]
+        assert by_code[code.zfill(6)] == expected, (
+            f"{code} 批量收盘序列必须与单股 kline 一致"
+        )
+        assert len(expected) <= 30
+
+
+def test_sparkline_batch_validation(client):
+    invalid = client.get("/api/v1/stocks/sparkline/batch", params={"codes": "600519,abc"})
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "INVALID_PARAM"
+
+    too_many = ",".join(f"{i:06d}" for i in range(201))
+    resp = client.get("/api/v1/stocks/sparkline/batch", params={"codes": too_many})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_PARAM"
+
+
 def test_stock_not_found_uses_unified_error(client):
     resp = client.get("/api/v1/stocks/999999")
     assert resp.status_code == 404

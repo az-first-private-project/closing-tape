@@ -11,7 +11,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, Info, Star } from 'lucide-react'
 import { useConsensus, useLadder } from '../hooks/useAlgo'
-import { useKline } from '../hooks/useStock'
+import { useSparklineBatch } from '../hooks/useStock'
 import type { ConsensusAlgoHit, ConsensusItem, LadderHorizonStats } from '../types/algo'
 import { summarizeSample } from '../lib/sample'
 import { getWatchlist, toggleWatch, MAX_WATCHLIST } from '../lib/watchlist'
@@ -48,18 +48,25 @@ function HitBadge({ hits, total }: { hits: number; total: number }) {
   )
 }
 
-/** 个股 30 日收盘走势：按 code 走 react-query 缓存，展开榜单才请求 */
-function StockSparkline({ code, tradeDate }: { code: string; tradeDate?: string }) {
-  const query = useKline(code, 30, tradeDate)
-  if (query.isLoading) {
+/** 个股 30 日收盘走势：数据由整页批量接口一次取回，单行不再发请求 */
+function StockSparkline({
+  code,
+  closes,
+  loading,
+}: {
+  code: string
+  closes?: (number | null)[]
+  loading: boolean
+}) {
+  if (loading) {
     return <span className="inline-block h-[24px] w-[84px]" aria-hidden="true" />
   }
-  if (query.isError || !query.data || query.data.items.length === 0) {
+  if (!closes || closes.length === 0) {
     return <span className="text-[11px] text-muted-foreground">—</span>
   }
   return (
     <Sparkline
-      values={query.data.items.map((item) => item.close)}
+      values={closes}
       days={30}
       width={84}
       height={24}
@@ -196,6 +203,17 @@ export default function ConsensusBoard({
     return map
   }, [ladder.data])
 
+  // 整页走势一次批量请求（P2-5），替代逐股 kline 的 N 次请求
+  const sparkCodes = useMemo(() => items.map((item) => item.code), [items])
+  const sparkQuery = useSparklineBatch(sparkCodes, 30, data?.trade_date, open && !!data)
+  const sparkCloses = useMemo(() => {
+    const map = new Map<string, (number | null)[]>()
+    for (const entry of sparkQuery.data?.items ?? []) {
+      map.set(entry.code, entry.closes)
+    }
+    return map
+  }, [sparkQuery.data])
+
   const handleWatch = (code: string) => {
     const result = toggleWatch(code)
     setWatchlist(getWatchlist())
@@ -330,7 +348,11 @@ export default function ConsensusBoard({
                             {fmtPct(item.pct_chg)}
                           </td>
                           <td className="py-2.5 px-2 text-right">
-                            <StockSparkline code={item.code} tradeDate={data?.trade_date} />
+                            <StockSparkline
+                              code={item.code}
+                              closes={sparkCloses.get(item.code)}
+                              loading={sparkQuery.isLoading && !sparkQuery.data}
+                            />
                           </td>
                           <td className="py-2.5 px-2 text-right num">{fmtScore(item.composite_score)}</td>
                           <td className="py-2.5 px-2 text-right">
@@ -398,7 +420,7 @@ export default function ConsensusBoard({
 
           <p className="border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
             各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。
-            共识只说明多策略同时选中，不代表更强收益。30 日走势为未复权收盘价，按个股缓存 5 分钟。
+            共识只说明多策略同时选中，不代表更强收益。30 日走势为未复权收盘价，整页一次批量请求并缓存 5 分钟。
           </p>
         </div>
       )}

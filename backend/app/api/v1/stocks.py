@@ -2,6 +2,7 @@
 个股 API（方案 E4：个股详情页）
 ==============================
 GET /api/v1/stocks/search?q=        代码/名称模糊搜索
+GET /api/v1/stocks/sparkline/batch  批量近 N 日收盘（共识榜/评分榜走势）
 GET /api/v1/stocks/{code}           个股快照：行情 + 指标 + 因子评分 + 所属板块
 GET /api/v1/stocks/{code}/kline      K 线序列（含均线，供前端画图）
 """
@@ -14,7 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidParamError, NotFoundError
 from app.db.models import (
     DimSectorMember, DimStock, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
     MarketIndex,
@@ -62,6 +63,74 @@ async def search_stocks(
              "is_st": bool(r[4]), "status": r[5]}
             for r in rows
         ]
+    }
+
+
+#: 批量走势一次最多覆盖的股票数（共识榜前端默认 100 条）
+_MAX_BATCH_CODES = 200
+
+
+def _parse_batch_codes(raw: str) -> list[str]:
+    """逗号分隔代码 → 去重保序的 6 位代码；非法或超量直接 422。"""
+    codes: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit() or len(part) > 6:
+            raise InvalidParamError(f"无效股票代码: {part!r}", detail={"code": part})
+        code = part.zfill(6)
+        if code not in seen:
+            seen.add(code)
+            codes.append(code)
+    if not codes:
+        raise InvalidParamError("codes 至少包含 1 个股票代码")
+    if len(codes) > _MAX_BATCH_CODES:
+        raise InvalidParamError(
+            f"codes 最多 {_MAX_BATCH_CODES} 个，收到 {len(codes)} 个"
+        )
+    return codes
+
+
+@router.get("/sparkline/batch")
+async def get_sparkline_batch(
+    codes: str = Query(..., description="逗号分隔的股票代码（最多 200 个）"),
+    days: int = Query(30, ge=5, le=120),
+    end: Optional[date] = Query(None, description="截止交易日，默认最新行情日"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量近 N 日收盘序列，口径与 4.2 的 kline 一致（未复权、时间升序）。
+
+    一次查询覆盖整页标的，替代前端逐股请求；缺失/停牌代码返回空数组，
+    由前端显示「—」，不参与补齐或插值。
+    """
+    wanted = _parse_batch_codes(codes)
+    target = end or await _latest_trade_date(db)
+    series: dict[str, list[float | None]] = {code: [] for code in wanted}
+    if target is not None:
+        # 多取日历天以覆盖节假日，按代码各保留最近 days 个交易日
+        floor = target - timedelta(days=days * 2 + 10)
+        rows = (await db.execute(
+            select(FactStockDaily.code, FactStockDaily.trade_date, FactStockDaily.close)
+            .where(
+                FactStockDaily.code.in_(wanted),
+                FactStockDaily.trade_date >= floor,
+                FactStockDaily.trade_date <= target,
+            )
+            .order_by(FactStockDaily.code, FactStockDaily.trade_date.desc())
+        )).all()
+        for code, _trade_date, close in rows:
+            bucket = series[code]
+            if len(bucket) < days:
+                bucket.append(_f(close))
+        for code in wanted:
+            series[code].reverse()
+    return {
+        "end": target.isoformat() if target else None,
+        "days": days,
+        "adjust_basis": "raw",
+        "items": [{"code": code, "closes": series[code]} for code in wanted],
     }
 
 

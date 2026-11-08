@@ -113,6 +113,20 @@ export interface KlineResponse {
   items: KlineItem[]
 }
 
+/** 批量走势项（P2-5）：closes 为未复权收盘，时间升序，可能不足 days 个 */
+export interface SparklineBatchItem {
+  code: string
+  closes: (number | null)[]
+}
+
+/** GET /api/v1/stocks/sparkline/batch 响应（P2-5） */
+export interface SparklineBatchResponse {
+  end: string | null
+  days: number
+  adjust_basis?: 'raw' | 'hfq'
+  items: SparklineBatchItem[]
+}
+
 /** 股票搜索结果项（4.3） */
 export interface StockSearchItem {
   code: string

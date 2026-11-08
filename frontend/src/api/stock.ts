@@ -2,7 +2,12 @@
  * 个股 API（契约第 4 节）
  */
 import { request } from './client'
-import type { KlineResponse, StockProfile, StockSearchResponse } from '../types/stock'
+import type {
+  KlineResponse,
+  SparklineBatchResponse,
+  StockProfile,
+  StockSearchResponse,
+} from '../types/stock'
 
 /** 个股概览（4.1）：基础信息 + 行情 + 技术指标 + 因子评分 + 所属板块 */
 export function fetchStock(code: string, tradeDate?: string): Promise<StockProfile> {
@@ -20,6 +25,20 @@ export function fetchKline(
     query: {
       limit: options.limit ?? 250,
       start: options.start || undefined,
+      end: options.end || undefined,
+    },
+  })
+}
+
+/** 批量近 N 日收盘（P2-5），一次请求覆盖整页 sparkline */
+export function fetchSparklineBatch(
+  codes: string[],
+  options: { days?: number; end?: string } = {},
+): Promise<SparklineBatchResponse> {
+  return request<SparklineBatchResponse>('/stocks/sparkline/batch', {
+    query: {
+      codes: codes.join(','),
+      days: options.days ?? 30,
       end: options.end || undefined,
     },
   })
