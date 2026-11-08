@@ -73,10 +73,16 @@ export function useAlgoRunDetail(runId: string | null) {
 }
 
 /** 策略天梯（1 分钟缓存；窗口/horizon 切换即换 queryKey） */
-export function useLadder(window: number, horizon: number, tradeDate?: string) {
+export function useLadder(
+  window: number,
+  horizon: number,
+  tradeDate?: string,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: ['algo-ladder', window, horizon, tradeDate ?? ''],
     queryFn: () => fetchLadder(window, horizon, tradeDate),
+    enabled: options.enabled ?? true,
     staleTime: 60 * 1000,
   })
 }

@@ -7,12 +7,13 @@
  * - 命中策略可展开查看该票在各策略里的名次、排序值与 metrics（每策略前 3 项）；
  * - **不展示跨策略平均分**：各策略 score 量纲不同，混算会误导。
  */
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronDown, Info, Star } from 'lucide-react'
-import { useConsensus } from '../hooks/useAlgo'
+import { useConsensus, useLadder } from '../hooks/useAlgo'
 import { useKline } from '../hooks/useStock'
-import type { ConsensusAlgoHit, ConsensusItem } from '../types/algo'
+import type { ConsensusAlgoHit, ConsensusItem, LadderHorizonStats } from '../types/algo'
+import { summarizeSample } from '../lib/sample'
 import { getWatchlist, toggleWatch, MAX_WATCHLIST } from '../lib/watchlist'
 import { fmtMetricValue, fmtNumber, fmtPct, fmtScore, pctColor } from '../lib/format'
 import { EmptyState, ErrorState } from './StateViews'
@@ -69,13 +70,50 @@ function StockSparkline({ code, tradeDate }: { code: string; tradeDate?: string 
   )
 }
 
+/** 命中策略的历史样本状态：有效样本、成熟进度与低样本标识 */
+function SampleBadge({
+  stats,
+  loading,
+  error,
+}: {
+  stats?: LadderHorizonStats
+  loading: boolean
+  error: boolean
+}) {
+  if (loading) {
+    return <span className="text-[11px] text-muted-foreground">样本统计加载中…</span>
+  }
+  const summary = summarizeSample(error ? null : stats)
+  const toneClass =
+    summary.tone === 'low'
+      ? 'border-warning/40 bg-warning/10 text-warning'
+      : 'border-border bg-muted text-muted-foreground'
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+      <span
+        className={`shrink-0 rounded border px-1.5 py-0.5 ${toneClass}`}
+        title="有效样本 = 已成熟且 T+1 可成交；有效样本少于 30 条为低样本"
+      >
+        {summary.label}
+      </span>
+      <span className="num text-muted-foreground">{summary.detail}</span>
+    </div>
+  )
+}
+
 /** 展开后的逐策略指标卡 */
 function HitDetails({
   item,
   onOpenAlgo,
+  ladderStats,
+  statsLoading,
+  statsError,
 }: {
   item: ConsensusItem
   onOpenAlgo?: (algoCode: string) => void
+  ladderStats: Record<string, LadderHorizonStats | undefined>
+  statsLoading: boolean
+  statsError: boolean
 }) {
   return (
     <div className="space-y-2">
@@ -100,6 +138,11 @@ function HitDetails({
                 </button>
               )}
             </div>
+            <SampleBadge
+              stats={ladderStats[hit.algo_code]}
+              loading={statsLoading}
+              error={statsError}
+            />
             {Object.keys(hit.metrics).length === 0 ? (
               <p className="text-[11px] text-muted-foreground">该策略未附带指标</p>
             ) : (
@@ -141,6 +184,17 @@ export default function ConsensusBoard({
   const data = query.data
   const items = data?.items ?? []
   const totalAlgos = data?.total_algos_evaluated ?? 0
+
+  const ladder = useLadder(60, 20, data?.trade_date, {
+    enabled: open && !!data,
+  })
+  const ladderStats = useMemo(() => {
+    const map: Record<string, LadderHorizonStats | undefined> = {}
+    for (const item of ladder.data?.items ?? []) {
+      map[item.algo_code] = item.horizons['20']
+    }
+    return map
+  }, [ladder.data])
 
   const handleWatch = (code: string) => {
     const result = toggleWatch(code)
@@ -213,6 +267,11 @@ export default function ConsensusBoard({
             <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
               <Info className="w-3 h-3" />
               同一策略当日多次参数 run 命中同一票只算一次
+            </span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Info className="w-3 h-3" />
+              样本口径：近 60 日信号 · 20 日成熟窗口
+              {ladder.data?.trade_date ? `（截至 ${ladder.data.trade_date}）` : ''}
             </span>
           </div>
 
@@ -317,7 +376,13 @@ export default function ConsensusBoard({
                         {isExpanded && (
                           <tr className="border-b border-border/60 bg-muted/20">
                             <td colSpan={8} className="p-3">
-                              <HitDetails item={item} onOpenAlgo={onOpenAlgo} />
+                              <HitDetails
+                                item={item}
+                                onOpenAlgo={onOpenAlgo}
+                                ladderStats={ladderStats}
+                                statsLoading={ladder.isLoading}
+                                statsError={ladder.isError}
+                              />
                             </td>
                           </tr>
                         )}

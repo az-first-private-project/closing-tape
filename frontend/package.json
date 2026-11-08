@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test:treemap": "node --test src/lib/treemap.test.mjs",
     "test:sparkline": "node --test src/lib/sparkline.test.mjs",
-    "test:palette": "node --test src/lib/palette.test.mjs"
+    "test:palette": "node --test src/lib/palette.test.mjs",
+    "test:sample": "node --test src/lib/sample.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.0",
