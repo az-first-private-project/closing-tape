@@ -1,19 +1,30 @@
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, ExternalLink, Calendar, User, Sparkles } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Calendar, User, Sparkles } from 'lucide-react'
 import { useArticle } from '../hooks/useArticles'
 import { useDelayedFlag } from '../hooks/useDelayedFlag'
-import { SkeletonLine } from '../components/StateViews'
+import { ErrorState, SkeletonLine } from '../components/StateViews'
+import PageHeader from '../components/PageHeader'
+import RangeNotice from '../components/RangeNotice'
 import { formatTime, getSourceColor } from '../lib/utils'
+
+const EXCERPT_LENGTH = 3000
 
 /**
  * 新闻详情：单栏编辑排版
  * 标题字重与行高按长文阅读优化（约 68 个字符宽度），AI 摘要单独成块。
+ * 长文不再硬截断：默认展示前 3000 字，可展开全文（U03）。
  */
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>()
-  const { data: article, isLoading, isError } = useArticle(Number(id))
+  const { data: article, isLoading, isError, error, refetch } = useArticle(Number(id))
   const showSkeleton = useDelayedFlag(isLoading)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [id])
 
   if (isLoading) {
     return (
@@ -41,14 +52,22 @@ export default function DetailPage() {
 
   if (isError || !article) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-24 text-center sm:px-6">
-        <p className="text-[15px] text-alert">文章加载失败</p>
-        <Link
-          to="/"
-          className="mt-4 inline-block text-[13px] text-brass-strong underline-offset-4 hover:underline dark:text-brass"
-        >
-          返回首页
-        </Link>
+      <div className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
+        <ErrorState
+          title="文章加载失败"
+          error={error}
+          onRetry={() => {
+            void refetch()
+          }}
+        />
+        <div className="mt-5 text-center">
+          <Link
+            to="/"
+            className="text-[13px] text-brass-strong underline-offset-4 hover:underline dark:text-brass"
+          >
+            返回新闻列表
+          </Link>
+        </div>
       </div>
     )
   }
@@ -56,6 +75,9 @@ export default function DetailPage() {
   const sourceColor = getSourceColor(article.source_name)
   const publishTime = formatTime(article.publish_time)
   const crawlTime = formatTime(article.crawl_time)
+  const content = article.content || ''
+  const truncated = content.length > EXCERPT_LENGTH
+  const visibleContent = expanded || !truncated ? content : content.slice(0, EXCERPT_LENGTH)
 
   return (
     <motion.article
@@ -74,39 +96,38 @@ export default function DetailPage() {
       </Link>
 
       {/* 刊头 */}
-      <header className="mt-7">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[10px] font-semibold"
-            style={{
-              backgroundColor: sourceColor + '12',
-              borderColor: sourceColor + '33',
-              color: sourceColor,
-            }}
-          >
-            <span aria-hidden="true" className="h-1 w-1 rounded-full" style={{ backgroundColor: sourceColor }} />
-            {article.source_name || '未知来源'}
-          </span>
-          <span className="num text-[10px] tracking-wide text-muted-foreground">{publishTime}</span>
-        </div>
-
-        <h1 className="mt-4 text-[26px] font-semibold leading-[1.3] tracking-[-0.025em] sm:text-[32px]">
-          {article.title}
-        </h1>
-
-        <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border/70 pb-5 text-[11px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            <Calendar className="h-3 w-3" />
-            抓取: <span className="num">{crawlTime}</span>
-          </span>
-          {article.author && (
-            <span className="inline-flex items-center gap-1.5">
-              <User className="h-3 w-3" />
-              {article.author}
+      <PageHeader
+        size="compact"
+        eyebrow="News Article · 新闻详情"
+        title={article.title}
+        className="mt-7 border-b border-border/70 pb-5"
+        meta={
+          <div className="mt-3.5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-muted-foreground">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] font-semibold"
+              style={{
+                backgroundColor: sourceColor + '12',
+                borderColor: sourceColor + '33',
+                color: sourceColor,
+              }}
+            >
+              <span aria-hidden="true" className="h-1 w-1 rounded-full" style={{ backgroundColor: sourceColor }} />
+              {article.source_name || '未知来源'}
             </span>
-          )}
-        </div>
-      </header>
+            <span className="num tracking-wide">{publishTime}</span>
+            <span className="inline-flex items-center gap-1.5">
+              <Calendar className="h-3 w-3" />
+              抓取: <span className="num">{crawlTime}</span>
+            </span>
+            {article.author && (
+              <span className="inline-flex items-center gap-1.5">
+                <User className="h-3 w-3" />
+                {article.author}
+              </span>
+            )}
+          </div>
+        }
+      />
 
       {/* AI 摘要 */}
       <section className="mt-8">
@@ -126,22 +147,42 @@ export default function DetailPage() {
 
       {/* 原文 */}
       <section className="mt-9">
-        <h2 className="mb-3 flex items-center gap-2 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground">
+        <h2 className="mb-3 flex items-center gap-2 text-[12px] font-semibold tracking-[0.12em] text-muted-foreground">
           <span aria-hidden="true" className="h-px w-5 bg-border" />
           原文内容
         </h2>
-        <div className="whitespace-pre-wrap text-[13.5px] leading-[1.95] text-foreground/75">
-          {article.content
-            ? article.content.length > 3000
-              ? article.content.slice(0, 3000) + '...'
-              : article.content
-            : '正文内容不可用'}
+        <div id="article-content" className="whitespace-pre-wrap text-[13.5px] leading-[1.95] text-foreground/75">
+          {visibleContent || '正文内容不可用'}
         </div>
+        {truncated && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+            <RangeNotice
+              shown={expanded ? content.length : EXCERPT_LENGTH}
+              total={content.length}
+              unit="字"
+              note={expanded ? '已展开全文' : '长文默认折叠'}
+            />
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-controls="article-content"
+              className="btn btn-sm"
+            >
+              {expanded ? '收起全文' : '展开全文'}
+              {expanded ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+        )}
       </section>
 
       {/* 原文链接 */}
       <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
-        <span className="text-[10px] text-muted-foreground">内容版权归原始来源所有</span>
+        <span className="text-[12px] text-muted-foreground">内容版权归原始来源所有</span>
         <a
           href={article.url}
           target="_blank"

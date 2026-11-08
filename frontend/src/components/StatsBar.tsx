@@ -101,7 +101,7 @@ export default function StatsBar() {
               全球财经新闻聚合与 AI 中文摘要，叠加本地行情库的盘后复盘、板块评分与量化选股信号。
             </p>
 
-            <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-muted-foreground">
+            <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
                 <span aria-hidden="true" className="h-1 w-1 rounded-full bg-brass" />
                 新闻聚合 · AI 摘要
@@ -126,14 +126,14 @@ export default function StatsBar() {
               >
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   <card.icon className="h-3 w-3" strokeWidth={1.8} aria-hidden="true" />
-                  <span className="text-[11px] font-medium tracking-wide">{card.label}</span>
+                  <span className="text-[12px] font-medium tracking-wide">{card.label}</span>
                 </div>
 
                 <div className="mt-2.5 overflow-hidden">
                   <AnimatedNumber value={card.value} />
                 </div>
 
-                <p className="mt-2 font-mono text-[10px] tracking-[0.08em] text-muted-foreground/80">
+                <p className="mt-2 font-mono text-[12px] tracking-[0.08em] text-muted-foreground/80">
                   {card.note}
                 </p>
               </div>

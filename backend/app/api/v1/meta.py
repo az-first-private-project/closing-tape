@@ -9,12 +9,13 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AdminDep
 from app.core.config import INGEST_NETWORK_ENABLED, SNAPSHOT_READY_HOUR, SNAPSHOT_READY_MINUTE
 from app.core.logging import get_logger
+from app.core.pagination import pagination_meta
 from app.db.models import IngestJob, TradeCalendar
 from app.db.session import get_db
 from app.services.freshness import get_freshness_items
@@ -61,6 +62,7 @@ async def get_trade_calendar(
 @router.get("/jobs")
 async def list_jobs(
     limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0, description="分页偏移（C1）"),
     task: Optional[str] = Query(None, description="任务名过滤"),
     status: Optional[str] = Query(None, description="状态过滤"),
     db: AsyncSession = Depends(get_db),
@@ -68,14 +70,26 @@ async def list_jobs(
     """采集/选股任务运行记录（任务监控页）。
 
     归档记录（W0-5）默认不出现在监控页；显式传 status=archived 仍可审计查询。
+    C1：追加 ``total / has_more / page / page_size``，``count`` 由前端按返回条数计算。
     """
-    stmt = select(IngestJob).order_by(IngestJob.started_at.desc()).limit(limit)
+    filters = []
     if task:
-        stmt = stmt.where(IngestJob.task == task)
+        filters.append(IngestJob.task == task)
     if status:
-        stmt = stmt.where(IngestJob.status == status)
+        filters.append(IngestJob.status == status)
     else:
-        stmt = stmt.where(IngestJob.status != "archived")
+        filters.append(IngestJob.status != "archived")
+
+    total = (await db.execute(
+        select(func.count()).select_from(IngestJob).where(*filters)
+    )).scalar_one()
+    stmt = (
+        select(IngestJob)
+        .where(*filters)
+        .order_by(IngestJob.started_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
 
     rows = (await db.execute(stmt)).scalars().all()
     return {
@@ -96,7 +110,8 @@ async def list_jobs(
                 "error": r.error,
             }
             for r in rows
-        ]
+        ],
+        **pagination_meta(total=total, limit=limit, offset=offset, returned=len(rows)),
     }
 
 

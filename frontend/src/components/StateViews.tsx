@@ -146,6 +146,11 @@ export function ErrorState({
       : null
   const nextActionText =
     typeof nextAction === 'string' && nextAction.trim() ? nextAction.trim() : null
+  // C2：优先用后端 suggestion，其次 detail.next_action，最后给统一兜底
+  const suggestionText =
+    apiError?.suggestion?.trim() ||
+    nextActionText ||
+    '请稍后重试；若持续失败，请携带错误码与请求 ID 反馈。'
 
   return (
     <div className={`card flex flex-col items-center gap-3 px-6 py-10 text-center ${className}`}>
@@ -154,18 +159,21 @@ export function ErrorState({
       </span>
       <p className="text-[15px] font-semibold">{title}</p>
       {apiError?.code && (
-        <span className="rounded border border-alert/25 bg-alert/[0.06] px-2 py-0.5 font-mono text-[10px] tracking-wide text-alert">
+        <span className="rounded border border-alert/25 bg-alert/[0.06] px-2 py-0.5 font-mono text-[12px] tracking-wide text-alert">
           {apiError.code}
         </span>
       )}
       <p className="max-w-md break-words text-[12px] leading-relaxed text-muted-foreground">{message}</p>
-      {nextActionText && (
-        <p className="max-w-md text-[11px] text-muted-foreground/80">建议：{nextActionText}</p>
+      <p className="max-w-md text-[12px] leading-relaxed text-muted-foreground/80">建议：{suggestionText}</p>
+      {apiError?.requestId && (
+        <p className="font-mono text-[11px] tracking-wide text-muted-foreground/60">
+          请求 ID：{apiError.requestId}
+        </p>
       )}
       {apiError?.detail !== null && apiError?.detail !== undefined && (
-        <details className="max-w-md text-[11px] text-muted-foreground">
+        <details className="max-w-md text-[12px] text-muted-foreground">
           <summary className="cursor-pointer transition-colors hover:text-foreground">查看错误详情</summary>
-          <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg border border-border/70 bg-muted/40 p-2.5 text-left font-mono text-[10px]">
+          <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg border border-border/70 bg-muted/40 p-2.5 text-left font-mono text-[12px]">
             {JSON.stringify(apiError.detail, null, 2)}
           </pre>
         </details>

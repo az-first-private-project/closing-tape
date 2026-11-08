@@ -16,6 +16,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InvalidParamError, NotFoundError
+from app.core.pagination import pagination_meta
 from app.db.models import (
     DimSectorMember, DimStock, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
     MarketIndex,
@@ -46,15 +47,21 @@ async def _latest_trade_date(db: AsyncSession) -> date | None:
 async def search_stocks(
     q: str = Query(..., min_length=1, max_length=32, description="代码或名称片段"),
     limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0, description="分页偏移（C1）"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """代码前缀或名称包含匹配。停牌/退市标的也返回，但带 status 标记。"""
     pattern = f"%{q}%"
+    filters = or_(DimStock.code.like(f"{q}%"), DimStock.name.like(pattern))
+    total = (await db.execute(
+        select(func.count()).select_from(DimStock).where(filters)
+    )).scalar_one()
     rows = (await db.execute(
         select(DimStock.code, DimStock.name, DimStock.industry_l1, DimStock.board,
                DimStock.is_st, DimStock.status)
-        .where(or_(DimStock.code.like(f"{q}%"), DimStock.name.like(pattern)))
+        .where(filters)
         .order_by(DimStock.code)
+        .offset(offset)
         .limit(limit)
     )).all()
     return {
@@ -62,7 +69,8 @@ async def search_stocks(
             {"code": r[0], "name": r[1], "industry_l1": r[2], "board": r[3],
              "is_st": bool(r[4]), "status": r[5]}
             for r in rows
-        ]
+        ],
+        **pagination_meta(total=total, limit=limit, offset=offset, returned=len(rows)),
     }
 
 
@@ -177,6 +185,7 @@ async def get_stock_detail(
 
     # 当前所属板块（SCD2 有效区间）
     sectors = []
+    sectors_total = 0
     if resolved:
         rows = (await db.execute(
             select(DimSectorMember.sector_code, DimSectorMember.sector_name)
@@ -184,9 +193,10 @@ async def get_stock_detail(
             .where(DimSectorMember.effective_from <= resolved)
             .where((DimSectorMember.effective_to.is_(None)) |
                    (DimSectorMember.effective_to > resolved))
-            .limit(20)
         )).all()
-        sectors = [{"sector_code": r[0], "sector_name": r[1]} for r in rows]
+        sectors_total = len(rows)
+        # C1：响应仍最多 20 条，全量命中数由 sectors_total_matching 提供
+        sectors = [{"sector_code": r[0], "sector_name": r[1]} for r in rows[:20]]
 
     return {
         "code": dim.code,
@@ -247,6 +257,7 @@ async def get_stock_detail(
             "detail": score.detail,
         } if score else None,
         "sectors": sectors,
+        "sectors_total_matching": sectors_total,
         "freshness": await get_freshness_items(db, ["stock_daily", "stock_features", "stock_scores"]),
     }
 

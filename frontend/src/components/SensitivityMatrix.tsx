@@ -285,7 +285,7 @@ export default function SensitivityMatrix({
       <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <LayoutGrid className="h-3.5 w-3.5 text-brass" />
         参数敏感性矩阵
-        <span className="text-[11px] font-normal text-muted-foreground">
+        <span className="text-[12px] font-normal text-muted-foreground">
           每格独立回测（同一引擎），用于观察稳健性；策略参数沿用左侧面板当前值
         </span>
       </div>
@@ -395,14 +395,14 @@ export default function SensitivityMatrix({
                 onClick={() => retryMutation.mutate()}
                 disabled={retryMutation.isPending}
                 title="只重跑失败格；成功格保持原记录，运行中的格不会被重复提交"
-                className="inline-flex items-center gap-1 rounded-md border border-alert/40 bg-alert/10 px-2 py-0.5 text-[11px] text-alert transition-colors hover:bg-alert/15 disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border border-alert/40 bg-alert/10 px-2 py-0.5 text-[12px] text-alert transition-colors hover:bg-alert/15 disabled:opacity-50"
               >
                 <RotateCw className={`h-3 w-3 ${retryMutation.isPending ? 'animate-spin' : ''}`} />
                 {retryMutation.isPending ? '重试提交中…' : `重试 ${detail.progress.failed} 个失败格`}
               </button>
             )}
             {retryMutation.isError && (
-              <span className="text-[11px] text-alert">重试提交失败，请稍后再试</span>
+              <span className="text-[12px] text-alert">重试提交失败，请稍后再试</span>
             )}
             <span title="复用格计入其历史计算耗时">计算耗时合计 {fmtDuration(detail.total_elapsed_ms)}</span>
             {gridMutation.data?.start_trimmed && (
@@ -420,7 +420,7 @@ export default function SensitivityMatrix({
                 return (
                   <span
                     key={cell.bt_id}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px]"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12px]"
                     title={cell.error || `${cell.rebalance_days} 日 / ${cell.max_positions} 只`}
                   >
                     <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
@@ -442,7 +442,7 @@ export default function SensitivityMatrix({
                     type="button"
                     onClick={() => setMetric(option.key)}
                     aria-pressed={metric === option.key}
-                    className={`px-2 py-1 rounded-md border text-[11px] transition-colors ${
+                    className={`px-2 py-1 rounded-md border text-[12px] transition-colors ${
                       metric === option.key
                         ? 'border-brass/60 bg-brass/[0.08] text-brass-strong dark:text-brass'
                         : 'border-border text-muted-foreground hover:bg-muted'
@@ -451,7 +451,7 @@ export default function SensitivityMatrix({
                     {option.label}
                   </button>
                 ))}
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[12px] text-muted-foreground">
                   格内第一行 = 当前指标，第二行 = {metric === 'drawdown' ? '超额' : '回撤'}；点击查看完整回测
                 </span>
               </div>
@@ -465,13 +465,13 @@ export default function SensitivityMatrix({
                 >
                   <div />
                   {detail.axes.rebalance_days.map((rb) => (
-                    <div key={`head-${rb}`} className="text-center text-[11px] text-muted-foreground num">
+                    <div key={`head-${rb}`} className="text-center text-[12px] text-muted-foreground num">
                       {rb} 日
                     </div>
                   ))}
                   {detail.axes.max_positions.map((mp) => (
                     <Fragment key={`row-${mp}`}>
-                      <div className="flex items-center justify-end pr-1 text-[11px] text-muted-foreground num">
+                      <div className="flex items-center justify-end pr-1 text-[12px] text-muted-foreground num">
                         {mp} 只
                       </div>
                       {detail.axes.rebalance_days.map((rb) => {
@@ -505,25 +505,25 @@ export default function SensitivityMatrix({
                                 <span className="block text-xs font-semibold num">
                                   {metricText(metric, cell.metrics as BacktestGridMetrics)}
                                 </span>
-                                <span className="block text-[10px] num opacity-80">
+                                <span className="block text-[12px] num opacity-80">
                                   {metric === 'drawdown'
                                     ? `超额 ${pctText(cell.metrics?.excess_return)}`
                                     : `回撤 ${pctText(cell.metrics?.max_drawdown)}`}
                                 </span>
-                                <span className="mt-1 flex items-center justify-center gap-1 text-[9px] opacity-60">
+                                <span className="mt-1 flex items-center justify-center gap-1 text-[12px] opacity-60">
                                   {cell.reused && <span>复用</span>}
                                   <span className="num">{fmtDuration(cell.elapsed_ms)}</span>
                                 </span>
                               </>
                             ) : (
-                              <span className="flex h-full flex-col items-center justify-center gap-1 text-[11px]">
+                              <span className="flex h-full flex-col items-center justify-center gap-1 text-[12px]">
                                 <span className="flex items-center gap-1">
                                   <span className={`h-1.5 w-1.5 rounded-full ${statusMeta(cell?.status ?? 'queued').dot}`} />
                                   {statusMeta(cell?.status ?? 'queued').label}
                                 </span>
-                                {cell?.status === 'failed' && <span className="text-[9px] text-alert">查看原因见提示</span>}
+                                {cell?.status === 'failed' && <span className="text-[12px] text-alert">查看原因见提示</span>}
                                 {cell && cell.status === 'success' && !cell.aligned && (
-                                  <span className="text-[9px] text-warning">区间/日历不一致</span>
+                                  <span className="text-[12px] text-warning">区间/日历不一致</span>
                                 )}
                               </span>
                             )}
@@ -536,14 +536,14 @@ export default function SensitivityMatrix({
               </div>
 
               {unaligned.length > 0 && (
-                <p className="text-[11px] text-warning">
+                <p className="text-[12px] text-warning">
                   有 {unaligned.length} 格与矩阵主区间/日历不一致，已从对比中剔除（仍可点击查看单格回测）。
                 </p>
               )}
 
               {/* 过拟合提示 */}
               {overfit && (
-                <div className="rounded-lg border border-border bg-muted/30 p-3 text-[11px] space-y-1">
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-[12px] space-y-1">
                   {overfit.defaultCell ? (
                     <>
                       <p>
@@ -571,7 +571,7 @@ export default function SensitivityMatrix({
                 </div>
               )}
 
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[12px] text-muted-foreground">
                 矩阵只展示已成功且区间对齐的 {alignedCells.length} 格；单格失败不影响其余格，失败原因见格子提示。
               </p>
             </div>
@@ -584,10 +584,10 @@ export default function SensitivityMatrix({
                 <h4 className="text-sm font-medium">
                   格详情 · {selectedCell.rebalance_days} 日 / {selectedCell.max_positions} 只
                   {selectedCell.reused && (
-                    <span className="ml-1.5 text-[11px] text-muted-foreground">（复用已有回测）</span>
+                    <span className="ml-1.5 text-[12px] text-muted-foreground">（复用已有回测）</span>
                   )}
                 </h4>
-                <span className="text-[11px] text-muted-foreground num">
+                <span className="text-[12px] text-muted-foreground num">
                   单格耗时 {fmtDuration(selectedCell.elapsed_ms)}
                 </span>
               </div>

@@ -400,7 +400,7 @@ export default function CommandPalette() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <kbd className="hidden rounded border border-border/80 bg-muted/40 px-1.5 py-0.5 font-mono text-[9px] tracking-wide text-muted-foreground sm:inline">
+          <kbd className="hidden rounded border border-border/80 bg-muted/40 px-1.5 py-0.5 font-mono text-[12px] tracking-wide text-muted-foreground sm:inline">
             ESC
           </kbd>
         </div>
@@ -415,7 +415,7 @@ export default function CommandPalette() {
             <section key={group.key} role="group" aria-labelledby={`palette-group-${group.key}`}>
               <div
                 id={`palette-group-${group.key}`}
-                className="flex items-center gap-1.5 px-3 pb-1 pt-3 font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80"
+                className="flex items-center gap-1.5 px-3 pb-1 pt-3 font-mono text-[12px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80"
               >
                 {group.key === 'recent' && <Clock className="h-3 w-3" />}
                 {GROUP_LABELS[group.key]}
@@ -453,7 +453,7 @@ export default function CommandPalette() {
                         <Highlight text={item.label} query={group.key === 'recent' ? '' : trimmedQuery} />
                       </span>
                       {item.sublabel && (
-                        <span className="block truncate text-[11px] text-muted-foreground">
+                        <span className="block truncate text-[12px] text-muted-foreground">
                           <Highlight text={item.sublabel} query={group.key === 'recent' ? '' : trimmedQuery} />
                         </span>
                       )}
@@ -475,7 +475,7 @@ export default function CommandPalette() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/70 bg-muted/25 px-4 py-2 text-[9px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/70 bg-muted/25 px-4 py-2 text-[12px] text-muted-foreground">
           <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">↑</kbd> <kbd className="rounded border border-border/80 bg-card px-1 font-mono">↓</kbd> 选择</span>
           <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">Tab</kbd> 切换分组</span>
           <span><kbd className="rounded border border-border/80 bg-card px-1 font-mono">↵</kbd> 打开</span>

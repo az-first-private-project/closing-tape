@@ -7,10 +7,13 @@
  *
  * 视觉：像一张策略索引卡——类型标签、等宽编号、底部读数条；
  * 选中态用铜色左侧标识 + 细框，而不是粗 ring。
+ * 可访问性：卡片主体为 role=button，Tab 聚焦后 Enter / Space 选中；
+ * 底部链接与按钮独立于按钮区，避免嵌套交互元素。
  */
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { LineChart } from 'lucide-react'
+import type { KeyboardEvent } from 'react'
 import type { AlgoMeta } from '../types/algo'
 import { cn } from '../lib/utils'
 
@@ -44,17 +47,25 @@ interface Props {
 export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Props) {
   const enabled = algo.is_active !== false
 
+  const select = () => {
+    if (enabled) onSelect(algo.algo_code)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!enabled) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onSelect(algo.algo_code)
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-      onClick={() => {
-        if (enabled) onSelect(algo.algo_code)
-      }}
       className={cn(
         'card card-lift group relative flex h-full flex-col p-4',
-        enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-55',
+        !enabled && 'cursor-not-allowed opacity-55',
         isActive && 'card-selected',
       )}
     >
@@ -63,10 +74,22 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
         <span aria-hidden="true" className="absolute inset-y-3 left-0 w-[2px] rounded-full bg-brass" />
       )}
 
+      <div
+        role="button"
+        tabIndex={enabled ? 0 : -1}
+        aria-pressed={isActive}
+        aria-disabled={!enabled}
+        onClick={select}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          'flex flex-1 flex-col rounded-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          enabled && 'cursor-pointer',
+        )}
+      >
       {/* 标题行 */}
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground/70">
+          <p className="font-mono text-[12px] uppercase tracking-[0.16em] text-muted-foreground/70">
             {algo.algo_code}
           </p>
           <h3 className="mt-1 truncate text-[13.5px] font-semibold" title={algo.algo_name}>
@@ -75,7 +98,7 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
         </div>
         <span
           className={cn(
-            'shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium text-foreground',
+            'shrink-0 rounded-full border px-2 py-0.5 text-[12px] font-medium text-foreground',
             TYPE_COLORS[algo.algo_type] ?? 'border-border bg-muted text-muted-foreground',
           )}
         >
@@ -84,13 +107,12 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
       </div>
 
       {/* 描述 */}
-      <p className="mb-3 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground" title={algo.short_desc}>
+      <p className="mb-3 line-clamp-2 text-[12px] leading-relaxed text-muted-foreground" title={algo.short_desc}>
         {algo.short_desc}
       </p>
 
-      {/* 底部：读数 + 操作 */}
-      <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
-        <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground">
+        {/* 读数 */}
+        <div className="mt-auto flex items-center gap-2.5 text-[12px] text-muted-foreground">
           <span className="inline-flex items-baseline gap-1">
             信号
             <span className="num text-[12px] font-semibold text-foreground">
@@ -100,13 +122,16 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
           <span aria-hidden="true" className="h-2.5 w-px bg-border/80" />
           <span className="num">参数 {algo.params_schema.length}</span>
         </div>
+      </div>
+
+      {/* 底部操作：不嵌套在按钮区内 */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
         <div className="flex items-center gap-1.5">
           {enabled && (
             <Link
               to={`/paper?algo=${algo.algo_code}`}
-              onClick={(event) => event.stopPropagation()}
               className="inline-flex items-center gap-1 rounded-md border border-transparent px-1.5 py-1
-                text-[10px] text-muted-foreground transition-colors
+                text-[12px] text-muted-foreground transition-colors
                 hover:border-border/70 hover:bg-muted/60 hover:text-foreground"
               title={`查看「${algo.algo_name}」的纸面组合跟踪`}
             >
@@ -114,20 +139,23 @@ export default function AlgoCard({ algo, signalCount, isActive, onSelect }: Prop
               纸面跟踪
             </Link>
           )}
-          <button
-            type="button"
-            disabled={!enabled}
-            className={cn(
-              'rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
-              isActive
-                ? 'bg-brass/15 text-brass-strong ring-1 ring-brass/40 dark:text-brass'
-                : 'border border-border/80 text-foreground hover:border-brass/40 hover:bg-muted/60',
-              'disabled:opacity-50',
-            )}
-          >
-            {enabled ? (isActive ? '已选中' : '查看详情') : '未启用'}
-          </button>
         </div>
+        <button
+          type="button"
+          disabled={!enabled}
+          onClick={select}
+          aria-pressed={isActive}
+          className={cn(
+            'rounded-md px-2 py-1 text-[12px] font-medium transition-colors',
+            isActive
+              ? 'bg-brass/15 text-brass-strong ring-1 ring-brass/40 dark:text-brass'
+              : 'border border-border/80 text-foreground hover:border-brass/40 hover:bg-muted/60',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'disabled:opacity-50',
+          )}
+        >
+          {enabled ? (isActive ? '已选中' : '查看详情') : '未启用'}
+        </button>
       </div>
     </motion.div>
   )

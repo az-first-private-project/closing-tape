@@ -76,7 +76,7 @@ export function useStockSignals(code: string) {
 
   const detailQueries = useQueries({
     queries: latestRunQueries.map((runQuery) => {
-      const summary = runQuery.data?.[0]
+      const summary = runQuery.data?.items[0]
       return {
         queryKey: ['algo-run', summary?.run_id ?? null],
         queryFn: () => fetchAlgoRunDetail(summary?.run_id as string),
@@ -89,7 +89,7 @@ export function useStockSignals(code: string) {
   const signals: StockSignal[] = []
   detailQueries.forEach((detailQuery, index) => {
     const algo = activeAlgos[index]
-    const summary = latestRunQueries[index]?.data?.[0]
+    const summary = latestRunQueries[index]?.data?.items[0]
     const detail = detailQuery.data
     if (!algo || !summary || !detail || !Array.isArray(detail.data)) return
     const row = detail.data.find((item) => item.code === code)

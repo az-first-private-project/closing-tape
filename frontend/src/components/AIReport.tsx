@@ -51,7 +51,7 @@ export default function AIReport({ report }: Props) {
           <span className="eyebrow eyebrow-brass">AI Review · {report.model ?? 'DeepSeek'}</span>
           <h3 className="mt-1.5 text-[17px] font-semibold tracking-[-0.015em]">AI 复盘报告</h3>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           {report.model && (
             <span className="rounded border border-border/70 bg-muted/40 px-2 py-0.5 font-mono tracking-wide">
               {report.model}
@@ -76,7 +76,7 @@ export default function AIReport({ report }: Props) {
 
       <div className="mt-5 flex items-start gap-2 border-t border-border/60 pt-3.5">
         <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0 text-warning/80" aria-hidden="true" />
-        <p className="text-[10px] leading-relaxed text-muted-foreground">
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
           此报告由 AI 基于量化模型自动生成，引用数据请以页面展示为准，不构成投资建议。投资有风险，入市需谨慎。
         </p>
       </div>

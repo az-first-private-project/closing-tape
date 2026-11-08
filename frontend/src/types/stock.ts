@@ -79,6 +79,8 @@ export interface StockProfile {
   features: StockFeatures | null
   scores: StockScores | null
   sectors: StockSectorRef[]
+  /** C1：当日 SCD2 全量归属数；`sectors` 最多返回 20 条 */
+  sectors_total_matching?: number | null
   /**
    * 后端实际返回 Freshness[]，契约 4.1 写的是单个对象；
    * 前端两种形态都兼容（见 StockDetailPage 的归一化）。

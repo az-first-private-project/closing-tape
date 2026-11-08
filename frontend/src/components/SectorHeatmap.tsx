@@ -13,12 +13,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
-import { X } from 'lucide-react'
+import { RefreshCw, X } from 'lucide-react'
 import { useSectorDetail, useSectors } from '../hooks/useSectors'
 import type { LeaderStock, SectorQuote, SectorType } from '../types/market'
 import { squarify } from '../lib/treemap'
 import { trendHeat } from '../lib/color'
 import { SkeletonChart, SkeletonLine } from './StateViews'
+import RangeNotice from './RangeNotice'
 import {
   EMPTY_TEXT,
   fmtAmount,
@@ -129,7 +130,7 @@ function Segment({
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+          className={`rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-all duration-300 ${
             value === option.value
               ? 'bg-card text-brass-strong shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70 dark:text-brass'
               : 'text-muted-foreground hover:text-foreground'
@@ -269,6 +270,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
   }
 
   const typeLabel = sectorType === 'industry' ? '行业' : '概念'
+  const shownCount = Math.max(0, items.length - folded - excluded)
   const tooltipLeft = Math.max(4, Math.min(pointer.x + 12, Math.max(4, width - TOOLTIP_W - 4)))
   const tooltipTop =
     pointer.y + 12 + TOOLTIP_H > height
@@ -282,17 +284,30 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
         <div>
           <div className="flex items-baseline gap-2">
             <h3 className="text-[15px] font-semibold tracking-[-0.01em]">板块热力图</h3>
-            <span className="font-mono text-[10px] tracking-[0.12em] text-muted-foreground">
+            <span className="font-mono text-[12px] tracking-[0.12em] text-muted-foreground">
               面积 = {capMode ? '市值' : '等权'} · ±5% 饱和
             </span>
           </div>
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground/85">
+          <p className="mt-1 font-mono text-[12px] text-muted-foreground/85">
             {typeLabel} {sectorsQuery.data?.count ?? items.length} 个
             {capMode && ` · 市值覆盖 ${capCovered}/${items.length}`}
             {` · 成分合计 ${memberTotal} 家`}
             {partialCount > 0 && `（不含 ${partialCount} 个名单不完整板块）`}
-            {folded > 0 && ` · 已展示前 ${DEFAULT_TOP_N} 大`}
           </p>
+          {(folded > 0 || excluded > 0) && (
+            <RangeNotice
+              shown={shownCount}
+              total={items.length}
+              unit="个板块"
+              note={[
+                folded > 0 ? `其余 ${folded} 个折叠为「其他」` : '',
+                excluded > 0 ? `已剔除 ${excluded} 个（数据不足）` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              className="mt-1.5 block"
+            />
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Segment
@@ -322,14 +337,21 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
               {showAll ? '只看前 80' : '显示全部'}
             </button>
           ) : null}
-          {sectorsQuery.isFetching && (
-            <span className="skeleton h-3.5 w-3.5 rounded-full" aria-label="加载中" />
-          )}
+          <button
+            type="button"
+            onClick={() => sectorsQuery.refetch()}
+            disabled={sectorsQuery.isFetching}
+            className="btn btn-sm"
+            title="重新加载当前板块行情"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${sectorsQuery.isFetching ? 'animate-spin' : ''}`} />
+            刷新{sectorsQuery.isFetching ? '中…' : ''}
+          </button>
         </div>
       </div>
 
       {autoFallback && (
-        <p className="mb-2 rounded-md border border-warning/30 bg-warning/[0.07] px-2 py-1 text-[10px] text-warning">
+        <p className="mb-2 rounded-md border border-warning/30 bg-warning/[0.07] px-2 py-1 text-[12px] text-warning">
           当前板块无市值数据，已自动回退等权面积（{items.length} 个板块）。
         </p>
       )}
@@ -407,8 +429,8 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
                 >
                   {canLabel && (
                     <span className="flex h-full flex-col justify-between gap-0.5 p-1">
-                      <span className="truncate text-[10.5px] leading-tight opacity-90">{cell.name}</span>
-                      <span className="num text-[11px] font-semibold leading-tight">
+                      <span className="truncate text-[12px] leading-tight opacity-90">{cell.name}</span>
+                      <span className="num text-[12px] font-semibold leading-tight">
                         {pctLabel(cell.pct_chg)}
                       </span>
                     </span>
@@ -437,7 +459,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
             )}
 
             {excluded > 0 && (
-              <span className="absolute bottom-1.5 right-1.5 z-10 rounded border border-border bg-card/90 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <span className="absolute bottom-1.5 right-1.5 z-10 rounded border border-border bg-card/90 px-1.5 py-0.5 text-[12px] text-muted-foreground">
                 已剔除 {excluded} 个（数据不足）
               </span>
             )}
@@ -446,7 +468,7 @@ export default function SectorHeatmap({ tradeDate }: { tradeDate?: string }) {
       </motion.div>
 
       {/* ========== 图例 ========== */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5 text-[10px] text-muted-foreground">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2.5 text-[12px] text-muted-foreground">
         <div className="flex items-center gap-2">
           <span className="text-down">跌</span>
           <span
@@ -487,12 +509,12 @@ function SectorTooltip({ sector }: { sector: SectorQuote }) {
     <>
       <p className="text-sm font-medium">
         {sector.sector_name}
-        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+        <span className="ml-1.5 text-[12px] font-normal text-muted-foreground">
           {sector.sector_code}
         </span>
       </p>
       {sector.is_partial && (
-        <p className="mt-1.5 rounded border border-warning/30 bg-warning/[0.07] px-1.5 py-1 text-[10px] leading-snug text-warning">
+        <p className="mt-1.5 rounded border border-warning/30 bg-warning/[0.07] px-1.5 py-1 text-[12px] leading-snug text-warning">
           {partialLabel(sector.partial_member_count)}，涨跌家数与市值不可用
         </p>
       )}
@@ -510,7 +532,7 @@ function SectorTooltip({ sector }: { sector: SectorQuote }) {
         </TooltipRow>
         <TooltipRow label="三面评分">{scoreText}</TooltipRow>
       </div>
-      <p className="mt-1.5 border-t border-border pt-1.5 text-[10px] text-muted-foreground">
+      <p className="mt-1.5 border-t border-border pt-1.5 text-[12px] text-muted-foreground">
         {sector.is_partial
           ? `面积 不适用 · ${partialLabel(sector.partial_member_count)}`
           : `面积 ${fmtAmount(sector.market_cap)} · 成分 ${
@@ -536,17 +558,65 @@ function SectorDrawer({
   const detail = detailQuery.data
   const isPartial = detail?.is_partial ?? sector.is_partial
   const partialSample = detail?.partial_member_count ?? sector.partial_member_count
+  const [showAllMembers, setShowAllMembers] = useState(false)
+  const drawerRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const MEMBER_PREVIEW = 40
+  const memberTotal = detail?.members_total_matching ?? detail?.members.length ?? 0
+  const visibleMembers = detail
+    ? showAllMembers
+      ? detail.members
+      : detail.members.slice(0, MEMBER_PREVIEW)
+    : []
 
   useEffect(() => {
+    const previousActive = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    closeButtonRef.current?.focus()
+
+    const focusable = () => {
+      const node = drawerRef.current
+      if (!node) return []
+      return Array.from(
+        node.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null)
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        event.preventDefault()
+        drawerRef.current?.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      const inside = drawerRef.current?.contains(active as Node | null) ?? false
+      if (event.shiftKey) {
+        if (!inside || active === first) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (!inside || active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', onKeyDown)
+      previousActive?.focus()
     }
   }, [onClose])
 
@@ -554,10 +624,12 @@ function SectorDrawer({
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
       <aside
+        ref={drawerRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={`${sector.sector_name} 板块详情`}
-        className="relative flex h-full w-full max-w-md flex-col overflow-hidden border-l border-border bg-card/98 shadow-[var(--shadow-3)] backdrop-blur-md"
+        className="relative flex h-full w-full max-w-md flex-col overflow-hidden border-l border-border bg-card/98 shadow-[var(--shadow-3)] backdrop-blur-md focus:outline-none"
       >
         <header className="border-b border-border/70 p-4">
           <div className="flex items-start justify-between gap-3">
@@ -565,25 +637,26 @@ function SectorDrawer({
               <span className="eyebrow">Sector Detail</span>
               <h3 className="mt-1.5 flex flex-wrap items-baseline gap-2 text-[17px] font-semibold tracking-[-0.015em]">
                 {sector.sector_name}
-                <span className="num text-[10px] font-normal text-muted-foreground">
+                <span className="num text-[12px] font-normal text-muted-foreground">
                   {sector.sector_code}
                 </span>
                 {isPartial && (
-                  <span className="rounded border border-warning/40 bg-warning/[0.08] px-1.5 py-0.5 text-[9px] font-normal text-warning">
+                  <span className="rounded border border-warning/40 bg-warning/[0.08] px-1.5 py-0.5 text-[12px] font-normal text-warning">
                     名单不完整
                   </span>
                 )}
               </h3>
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 {sector.sector_type === 'concept' ? '概念板块' : '行业板块'} · 交易日{' '}
                 {detail?.trade_date ?? tradeDate ?? '最新'}
               </p>
             </div>
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
               aria-label="关闭"
-              className="rounded-lg border border-transparent p-1.5 text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
+              className="rounded-lg border border-transparent p-1.5 text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X className="h-4 w-4" />
             </button>
@@ -620,7 +693,7 @@ function SectorDrawer({
           {detail && (
             <>
               {isPartial && (
-                <p className="rounded-lg border border-warning/30 bg-warning/[0.07] px-2.5 py-2 text-[11px] leading-relaxed text-warning">
+                <p className="rounded-lg border border-warning/30 bg-warning/[0.07] px-2.5 py-2 text-[12px] leading-relaxed text-warning">
                   {partialLabel(partialSample)}：同花顺只暴露前后各 5 页，名单仅为样本；
                   涨跌家数、市值等聚合字段不可用。
                 </p>
@@ -649,7 +722,7 @@ function SectorDrawer({
               </section>
 
               <section>
-                <h4 className="mb-2 font-mono text-[10px] tracking-[0.14em] text-muted-foreground">
+                <h4 className="mb-2 font-mono text-[12px] tracking-[0.14em] text-muted-foreground">
                   三面评分（0–10）
                 </h4>
                 <div className="grid grid-cols-4 gap-2 text-center">
@@ -667,7 +740,7 @@ function SectorDrawer({
                           : 'border-border/60 bg-muted/25'
                       }`}
                     >
-                      <p className="text-[10px] text-muted-foreground">{score.label}</p>
+                      <p className="text-[12px] text-muted-foreground">{score.label}</p>
                       <p className="num mt-1 text-[13px] font-semibold">
                         {score.value === null ? EMPTY_TEXT : score.value.toFixed(1)}
                       </p>
@@ -681,22 +754,49 @@ function SectorDrawer({
 
               <section>
                 <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">
-                  {isPartial ? '样本成分股' : '成分股'}（{detail.members.length}）
+                  {isPartial ? '样本成分股' : '成分股'}
                 </h4>
                 {detail.members.length === 0 ? (
                   <p className="text-xs text-muted-foreground">名单为空</p>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {detail.members.slice(0, 40).map((member) => (
-                      <span
-                        key={member.code}
-                        title={`${member.code} ${fmtPct(member.pct_chg)}`}
-                        className={`rounded border px-1.5 py-0.5 text-[11px] num ${priceBgClass(member.pct_chg)}`}
-                      >
-                        {member.name || member.code} {fmtPct(member.pct_chg, 1)}
-                      </span>
-                    ))}
-                  </div>
+                  <>
+                    <div id="sector-members" className="flex flex-wrap gap-1.5">
+                      {visibleMembers.map((member) => (
+                        <span
+                          key={member.code}
+                          title={`${member.code} ${fmtPct(member.pct_chg)}`}
+                          className={`rounded border px-1.5 py-0.5 text-[12px] num ${priceBgClass(member.pct_chg)}`}
+                        >
+                          {member.name || member.code} {fmtPct(member.pct_chg, 1)}
+                        </span>
+                      ))}
+                    </div>
+                    {(detail.members.length > MEMBER_PREVIEW || memberTotal > detail.members.length) && (
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <RangeNotice
+                          shown={visibleMembers.length}
+                          total={memberTotal}
+                          unit="只"
+                          note={
+                            memberTotal > detail.members.length
+                              ? `接口最多返回 ${detail.members.length} 只`
+                              : undefined
+                          }
+                        />
+                        {detail.members.length > MEMBER_PREVIEW && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllMembers((value) => !value)}
+                            aria-expanded={showAllMembers}
+                            aria-controls="sector-members"
+                            className="btn btn-sm"
+                          >
+                            {showAllMembers ? '收起名单' : `展开全部 ${detail.members.length} 只`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </section>
             </>
@@ -710,7 +810,7 @@ function SectorDrawer({
 function Stat({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="rounded-lg border border-border/60 bg-muted/25 px-2.5 py-2">
-      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="text-[12px] text-muted-foreground">{label}</p>
       <p className="num mt-1 text-[12px] font-medium">{children}</p>
     </div>
   )
@@ -720,7 +820,7 @@ function LeaderList({ title, leaders }: { title: string; leaders: LeaderStock[] 
   if (!leaders.length) return null
   return (
     <section>
-      <h4 className="mb-1.5 font-mono text-[10px] tracking-[0.14em] text-muted-foreground">{title}</h4>
+      <h4 className="mb-1.5 font-mono text-[12px] tracking-[0.14em] text-muted-foreground">{title}</h4>
       <ul>
         {leaders.slice(0, 5).map((leader) => (
           <li
@@ -729,7 +829,7 @@ function LeaderList({ title, leaders }: { title: string; leaders: LeaderStock[] 
           >
             <span className="min-w-0 truncate">
               {leader.name}
-              <span className="num ml-1.5 text-[10px] text-muted-foreground">{leader.code}</span>
+              <span className="num ml-1.5 text-[12px] text-muted-foreground">{leader.code}</span>
             </span>
             <span className={`num shrink-0 ${pctColor(leader.change_pct)}`}>
               {fmtPct(leader.change_pct, 1)}
@@ -737,6 +837,9 @@ function LeaderList({ title, leaders }: { title: string; leaders: LeaderStock[] 
           </li>
         ))}
       </ul>
+      {leaders.length > 5 && (
+        <RangeNotice shown={5} total={leaders.length} unit="只" note="仅展示前 5 名" className="mt-1 block" />
+      )}
     </section>
   )
 }

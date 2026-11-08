@@ -1,7 +1,7 @@
 /**
  * 选股相关类型 —— 严格对齐 docs/V5-API-CONTRACT.md 第 5 节
  */
-import type { Freshness } from './common'
+import type { Freshness, PaginationMeta } from './common'
 
 /** 参数值快照（run.params 中可能出现数字/字符串/布尔/null） */
 export type AlgoParamValue = number | string | boolean | null
@@ -181,8 +181,8 @@ export interface WatchHit {
   hit_id: string
 }
 
-/** POST /api/v1/algo/hits（5.6） */
-export interface WatchHitsResponse {
+/** POST /api/v1/algo/hits（5.6，C1 追加分页元信息） */
+export interface WatchHitsResponse extends PaginationMeta {
   items: WatchHit[]
   latest_signal_date: string | null
   freshness: Freshness | null
@@ -201,8 +201,8 @@ export interface MarketGate {
   threshold?: number | null
 }
 
-/** GET /api/v1/algo/{algo_code} 响应（5.2） */
-export interface AlgoResult {
+/** GET /api/v1/algo/{algo_code} 响应（5.2，C1 追加分页元信息） */
+export interface AlgoResult extends PaginationMeta {
   algo: string
   algo_name: string
   trade_date: string
@@ -210,6 +210,7 @@ export interface AlgoResult {
   /** B4/B5 的市场环境要求（其他策略不返回） */
   market_gate?: MarketGate | null
   from_cache: boolean
+  /** 本次返回条数（分页后），全量命中数见 total */
   count: number
   data: AlgoStockRow[]
 }
@@ -270,8 +271,8 @@ export interface LadderItem extends LadderHorizonStats {
   horizons: Record<string, LadderHorizonStats>
 }
 
-/** GET /api/v1/algo/ladder（5.4） */
-export interface LadderResponse {
+/** GET /api/v1/algo/ladder（5.4，C1 追加分页元信息） */
+export interface LadderResponse extends PaginationMeta {
   trade_date: string
   window: number
   horizon: number
@@ -309,8 +310,8 @@ export interface ConsensusItem {
   algos: ConsensusAlgoHit[]
 }
 
-/** GET /api/v1/algo/consensus（5.5） */
-export interface ConsensusResponse {
+/** GET /api/v1/algo/consensus（5.5，C1 追加分页元信息） */
+export interface ConsensusResponse extends PaginationMeta {
   trade_date: string
   min_count: number
   total_algos_evaluated: number

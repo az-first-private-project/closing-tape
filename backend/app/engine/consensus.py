@@ -102,6 +102,7 @@ def build_consensus(
     *,
     min_count: int = 2,
     limit: int = 100,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """把扁平的命中行聚合成共识榜。
 
@@ -177,9 +178,18 @@ def build_consensus(
         })
 
     items.sort(key=_sort_key)
+    total_matching = len(items)
+    start = max(0, int(offset))
+    size = max(0, int(limit))
+    paged = items[start:start + size]
     return {
-        "items": items[: max(0, limit)],
+        "items": paged,
         "total_algos_evaluated": total_algos,
+        # C1：total 为通过 min_count 的全量标的数（分页前），count 由前端按 items 长度计算
+        "total": total_matching,
+        "has_more": start + len(paged) < total_matching,
+        "page": start // max(1, size) + 1,
+        "page_size": size,
     }
 
 
@@ -204,6 +214,7 @@ async def consensus_signals(
     min_count: int = 2,
     sector_type: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """读取某交易日的多策略共识榜（默认最新行情日）。"""
     # 延迟导入：避免 engine 层在 import 时就加载 pandas；同时只认当前启用的策略
@@ -306,7 +317,7 @@ async def consensus_signals(
 
     result = await session.execute(stmt)
     rows = [ConsensusSignalRow(**mapping) for mapping in result.mappings()]
-    payload = build_consensus(rows, min_count=min_count, limit=limit)
+    payload = build_consensus(rows, min_count=min_count, limit=limit, offset=offset)
     return {"trade_date": target, **payload}
 
 

@@ -6,18 +6,18 @@
  *   2) ?intro=1 强制重播（评审/演示用）；?intro=0 强制关闭；
  *   3) sessionStorage 记录已播放，同一标签页刷新不再打扰。
  *
- * 时间轴（内容段 3.3s + 出场段 0.7s，合计 4.0s）：
- *   0.28s  铜色发丝线从中线向两侧展开（1.70s）
- *   0.75s  字标遮罩上移揭示（2.10s）
- *   1.00s  右下角读数 000 → 100 滚动（100 步 / 23ms，3.30s 走满）
- *   1.20s  副标题淡入（1.40s）
- *   3.30s  幕布上下分离（0.68s，与原版同速），页面同步归位
- *   4.00s  幕布卸载，交还滚动与焦点
+ * U08：首屏不再被开场阻塞 —— 幕布 pointer-events:none，页面立即可交互，
+ * 也绝不锁定 body 滚动；整体时长压到约 1.6s。
  *
- * 内容段约为初版的 2.5 倍，出场保持初版速度 ——
- * 进场从容、离场干脆；读数走满 100 的那一帧正好开幕。
+ * 时间轴：
+ *   0.05s  铜色发丝线展开（0.90s）
+ *   0.10s  字标遮罩上移揭示（0.80s）
+ *   0.35s  副标题淡入（0.50s）
+ *   0.40s  右下角读数 000 → 100 滚动（7ms/步，1.10s 走满）
+ *   1.10s  幕布上下分离（0.42s）
+ *   1.55s  幕布卸载
  *
- * 交互：点击 / 任意键 / Esc 立即跳过，直接进入分离阶段。
+ * 交互：点击任意处 / 任意键立即跳过，直接进入分离阶段。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -26,11 +26,11 @@ import { motion } from 'framer-motion'
 const INTRO_FLAG = 'gfna-intro-seen'
 
 /** 幕布开始分离的时刻（毫秒） */
-const SPLIT_AT = 3300
+const SPLIT_AT = 1100
 /** 幕布完全卸载的时刻（毫秒） */
-const FINISH_AT = 4000
+const FINISH_AT = 1550
 /** 跳过时的收尾时长 */
-const SKIP_FINISH = 700
+const SKIP_FINISH = 450
 
 const EASE = [0.16, 1, 0.3, 1] as const
 
@@ -61,13 +61,11 @@ function markIntroSeen() {
 }
 
 interface IntroCurtainProps {
-  /** 幕布开始分离：页面在此刻开始归位 */
-  onReveal: () => void
-  /** 幕布卸载：交还滚动 */
+  /** 幕布卸载 */
   onFinish: () => void
 }
 
-export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) {
+export default function IntroCurtain({ onFinish }: IntroCurtainProps) {
   const [splitting, setSplitting] = useState(false)
   const [percent, setPercent] = useState(0)
   const splittingRef = useRef(false)
@@ -80,19 +78,18 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
     onFinish()
   }, [onFinish])
 
-  /** 进入分离阶段：页面同步开始揭示 */
+  /** 进入分离阶段 */
   const beginSplit = useCallback(
     (immediate = false) => {
       if (splittingRef.current) return
       splittingRef.current = true
       setSplitting(true)
-      onReveal()
-      window.setTimeout(finish, immediate ? SKIP_FINISH : 700)
+      window.setTimeout(finish, immediate ? SKIP_FINISH : 450)
     },
-    [finish, onReveal],
+    [finish],
   )
 
-  // 读数滚动：1.00s 起计，100 步 × 23ms，正好在 3.30s 走满，与幕布分离同一帧
+  // 读数滚动：0.40s 起计，100 步 × 7ms，在 1.10s 走满，与幕布分离同一帧
   useEffect(() => {
     if (splitting) return
     let value = 0
@@ -102,8 +99,8 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
         value = Math.min(100, value + 1)
         setPercent(value)
         if (value >= 100) window.clearInterval(timer)
-      }, 23)
-    }, 1000)
+      }, 7)
+    }, 400)
     return () => {
       window.clearTimeout(startTimer)
       window.clearInterval(timer)
@@ -120,46 +117,35 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
     }
   }, [beginSplit, finish])
 
-  // 开场期间锁定滚动，结束后还原
+  // 不锁滚动；点击穿透到页面，同时借窗口捕获阶段跳过开场
   useEffect(() => {
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previous
-    }
-  }, [])
-
-  // 键盘任意键跳过
-  useEffect(() => {
+    const onPointerDown = () => beginSplit(true)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return
       beginSplit(true)
     }
+    window.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true })
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true })
+      window.removeEventListener('keydown', onKeyDown)
+    }
   }, [beginSplit])
 
-  const skip = () => beginSplit(true)
-
   return (
-    <div
-      className="intro-curtain"
-      role="presentation"
-      onPointerDown={skip}
-      aria-hidden="true"
-    >
+    <div className="intro-curtain" role="presentation" aria-hidden="true">
       {/* 幕布上下两片：分离时沿中缝推开 */}
       <motion.div
         className="intro-panel intro-panel--top"
         initial={false}
         animate={splitting ? { y: '-101%' } : { y: '0%' }}
-        transition={{ duration: 0.68, ease: EASE }}
+        transition={{ duration: 0.42, ease: EASE }}
       />
       <motion.div
         className="intro-panel intro-panel--bottom"
         initial={false}
         animate={splitting ? { y: '101%' } : { y: '0%' }}
-        transition={{ duration: 0.68, ease: EASE }}
+        transition={{ duration: 0.42, ease: EASE }}
       />
 
       {/* 中央字标 */}
@@ -172,7 +158,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
           className="intro-eyebrow"
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1.6, delay: 0.16, ease: EASE }}
+          transition={{ duration: 0.5, delay: 0.05, ease: EASE }}
         >
           A-SHARE INTELLIGENCE
         </motion.p>
@@ -182,7 +168,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
             className="intro-wordmark-inner"
             initial={{ y: '112%' }}
             animate={{ y: '0%' }}
-            transition={{ duration: 2.1, delay: 0.75, ease: EASE }}
+            transition={{ duration: 0.8, delay: 0.1, ease: EASE }}
           >
             GFNA<span className="intro-dot">.</span>
           </motion.span>
@@ -192,7 +178,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
           className="intro-subline"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 1.4, delay: 1.2 }}
+          transition={{ duration: 0.5, delay: 0.35 }}
         >
           A 股盘后情报终端 · 盘后分析 / 量化选股 / 纸面跟踪
         </motion.p>
@@ -203,7 +189,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
             className="intro-rule"
             initial={{ scaleX: 0 }}
             animate={{ scaleX: 1 }}
-            transition={{ duration: 1.7, delay: 0.28, ease: EASE }}
+            transition={{ duration: 0.9, delay: 0.05, ease: EASE }}
           />
         </div>
 
@@ -211,7 +197,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
           className="intro-meta"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 1.3, delay: 1 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
         >
           <span>MARKET CLOSE</span>
           <span className="num">{String(percent).padStart(3, '0')}</span>
@@ -222,7 +208,7 @@ export default function IntroCurtain({ onReveal, onFinish }: IntroCurtainProps) 
         className="intro-skip"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ duration: 1.6, delay: 1.3 }}
+        transition={{ duration: 0.5, delay: 0.4 }}
       >
         点击任意处跳过
       </motion.span>

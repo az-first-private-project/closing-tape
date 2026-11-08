@@ -14,6 +14,9 @@ import { markHitsSeen } from '../lib/watchlist'
 import { fmtDate } from '../lib/format'
 import WatchlistPanel from '../components/WatchlistPanel'
 import FreshnessBadge from '../components/FreshnessBadge'
+import PageHeader from '../components/PageHeader'
+import RangeNotice from '../components/RangeNotice'
+import Disclaimer from '../components/Disclaimer'
 import { EmptyState, ErrorState, SkeletonTable } from '../components/StateViews'
 import { useDelayedFlag } from '../hooks/useDelayedFlag'
 
@@ -37,30 +40,23 @@ export default function WatchlistPage() {
       transition={{ duration: 0.3 }}
       className="max-w-5xl mx-auto px-4 py-6 space-y-6"
     >
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="rise">
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="h-px w-6 bg-brass" />
-            <span className="eyebrow">Watchlist</span>
-          </div>
-          <h1 className="page-title mt-2.5 flex items-center gap-2">
-            自选股
-            <Star className="h-4 w-4 text-brass" aria-hidden="true" />
-          </h1>
-          <p className="mt-2 max-w-2xl text-[12px] leading-relaxed text-muted-foreground">
-            名单与已读水位同步到本机后端（localStorage 仅作缓存）；每 60 秒检查一次近 {DAYS} 个交易日的策略命中。
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => query.refetch()}
-          disabled={query.isFetching}
-          className="btn btn-sm h-9"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${query.isFetching ? 'animate-spin' : ''}`} />
-          刷新命中{query.isFetching ? '中…' : ''}
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="Watchlist"
+        title="自选股"
+        titleAddon={<Star className="h-4 w-4 text-brass" aria-hidden="true" />}
+        description={`名单与已读水位同步到本机后端（localStorage 仅作缓存）；每 60 秒检查一次近 ${DAYS} 个交易日的策略命中。`}
+        actions={
+          <button
+            type="button"
+            onClick={() => query.refetch()}
+            disabled={query.isFetching}
+            className="btn btn-sm h-9"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${query.isFetching ? 'animate-spin' : ''}`} />
+            刷新命中{query.isFetching ? '中…' : ''}
+          </button>
+        }
+      />
 
       {data?.freshness && <FreshnessBadge items={[data.freshness]} title="选股任务" />}
 
@@ -80,9 +76,9 @@ export default function WatchlistPage() {
             近期命中明细
           </h2>
           {data && (
-            <span className="text-[11px] text-muted-foreground">
-              共 <span className="num text-foreground">{items.length}</span> 条 · 最近信号日{' '}
-              <span className="num text-foreground">{data.latest_signal_date ?? '—'}</span>
+            <span className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
+              <RangeNotice shown={items.length} total={data.total ?? items.length} unit="条命中" />
+              <span>· 最近信号日 <span className="num text-foreground">{data.latest_signal_date ?? '—'}</span></span>
             </span>
           )}
         </div>
@@ -115,7 +111,7 @@ export default function WatchlistPage() {
           <div className="card overflow-x-auto">
             <table className="w-full min-w-[640px] text-[12px]">
               <thead>
-                <tr className="border-b border-border/70 bg-muted/30 font-mono text-[10px] tracking-[0.06em] text-muted-foreground">
+                <tr className="border-b border-border/70 bg-muted/30 font-mono text-[12px] tracking-[0.06em] text-muted-foreground">
                   <th className="py-2.5 pl-4 text-left font-medium">日期</th>
                   <th className="px-2 py-2.5 text-left font-medium">策略</th>
                   <th className="px-2 py-2.5 text-left font-medium">代码 / 名称</th>
@@ -126,14 +122,14 @@ export default function WatchlistPage() {
               <tbody>
                 {items.map((hit) => (
                   <tr key={`${hit.hit_id}:${hit.code}`} className="table-row border-b border-border/50 last:border-0">
-                    <td className="num whitespace-nowrap py-2.5 pl-4 text-[11px]">{fmtDate(hit.signal_date)}</td>
+                    <td className="num whitespace-nowrap py-2.5 pl-4 text-[12px]">{fmtDate(hit.signal_date)}</td>
                     <td className="py-2.5 px-2">
                       <span className="font-mono uppercase text-xs text-foreground">{hit.algo_code}</span>
                       <span className="ml-1.5 text-xs text-muted-foreground">{hit.algo_name}</span>
                     </td>
                     <td className="py-2.5 px-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <Link to={`/stocks/${hit.code}`} className="font-mono text-[10px] text-brass-strong hover:underline dark:text-brass">
+                        <Link to={`/stocks/${hit.code}`} className="font-mono text-[12px] text-brass-strong hover:underline dark:text-brass">
                           {hit.code}
                         </Link>
                         <span className="truncate">{hit.name}</span>
@@ -141,7 +137,7 @@ export default function WatchlistPage() {
                     </td>
                     <td className="py-2.5 px-2 text-right num">{hit.rank ?? '—'}</td>
                     <td className="py-2.5 pr-4 text-right">
-                      <Link to={`/stocks/${hit.code}`} className="text-[10px] text-brass-strong hover:underline dark:text-brass">
+                      <Link to={`/stocks/${hit.code}`} className="text-[12px] text-brass-strong hover:underline dark:text-brass">
                         查看个股
                       </Link>
                     </td>
@@ -153,10 +149,7 @@ export default function WatchlistPage() {
         )}
       </section>
 
-      <p className="border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
-        提示：同一策略同一天只算一条提醒；已读水位同步到本机后端，localStorage 仅作缓存。
-        命中仅为策略筛选结果，不构成投资建议。
-      </p>
+      <Disclaimer extraOnly extra="同一策略同一天只算一条提醒；已读水位同步到本机后端，localStorage 仅作缓存。命中仅为策略筛选结果。" />
     </motion.div>
   )
 }

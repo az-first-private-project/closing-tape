@@ -12,7 +12,7 @@
  * 走势线提示动能方向，综合分作为每行最重的读数。
  */
 import { useMemo } from 'react'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   Bar,
   BarChart,
@@ -51,14 +51,14 @@ function ScoreBar({ value, color, title }: { value: number | null; color: string
       className="flex w-7 flex-col items-center gap-1"
       title={`${title}: ${value === null ? '未评分' : `${value.toFixed(1)}/10`}`}
     >
-      <span className="text-[9px] leading-none text-muted-foreground/80">{title.slice(0, 1)}</span>
+      <span className="text-[12px] leading-none text-muted-foreground/80">{title.slice(0, 1)}</span>
       <div className="h-1 w-full overflow-hidden rounded-full bg-border/50">
         <div
           className={`h-full rounded-full ${color} transition-[width] duration-700`}
           style={{ width: `${scorePercent(value)}%` }}
         />
       </div>
-      <span className="num text-[9px] leading-none text-muted-foreground">
+      <span className="num text-[12px] leading-none text-muted-foreground">
         {value === null ? '—' : value.toFixed(1)}
       </span>
     </div>
@@ -87,7 +87,7 @@ function ScoreSparkline({
   if (!scores || validCount <= 1) {
     return (
       <span
-        className="text-[11px] text-muted-foreground"
+        className="text-[12px] text-muted-foreground"
         title={failed ? '评分历史加载失败' : validCount === 0 ? '暂无评分历史' : '评分历史不足'}
       >
         —
@@ -110,6 +110,7 @@ function ScoreSparkline({
 }
 
 export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Props) {
+  const reducedMotion = useReducedMotion()
   // 只对「已评分」板块排序取 Top 10
   const { scored, top } = useMemo(() => {
     const scoredRows = sectors.filter((sector) => sector.composite_score !== null)
@@ -145,11 +146,11 @@ export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Pr
       <div className="section-head">
         <h3 className="section-title">
           综合评分
-          <span className="font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground">
+          <span className="font-mono text-[12px] font-normal tracking-[0.14em] text-muted-foreground">
             TOP 10
           </span>
         </h3>
-        <span className="num text-[10px] text-muted-foreground">
+        <span className="num text-[12px] text-muted-foreground">
           已评分 {scoredCount}/{totalCount}
         </span>
       </div>
@@ -178,14 +179,14 @@ export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Pr
                   ${onSelect ? 'cursor-pointer' : ''}`}
               >
                 {/* 排名 */}
-                <span className={`medal h-6 w-6 !text-[10px] ${index < 3 ? 'medal-brass' : ''}`}>
+                <span className={`medal h-6 w-6 !text-[12px] ${index < 3 ? 'medal-brass' : ''}`}>
                   {index + 1}
                 </span>
 
                 {/* 板块名 + 涨跌 */}
                 <div className="min-w-0">
                   <p className="truncate text-[12.5px] font-medium">{sector.sector_name}</p>
-                  <p className={`num text-[10px] ${pctColor(sector.pct_chg)}`}>
+                  <p className={`num text-[12px] ${pctColor(sector.pct_chg)}`}>
                     {fmtPct(sector.pct_chg)}
                   </p>
                 </div>
@@ -217,7 +218,7 @@ export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Pr
                 <div className="text-right">
                   <p className="num text-[17px] font-semibold leading-none tracking-[-0.02em]">
                     {sector.composite_score === null ? (
-                      <span className="text-[10px] font-normal text-muted-foreground">未评分</span>
+                      <span className="text-[12px] font-normal text-muted-foreground">未评分</span>
                     ) : (
                       fmtScore(sector.composite_score)
                     )}
@@ -245,7 +246,13 @@ export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Pr
                   cursor={{ fill: 'color-mix(in srgb, var(--color-brass) 8%, transparent)' }}
                   formatter={(value) => [`${Number(value).toFixed(1)}/10`, '综合评分']}
                 />
-                <Bar dataKey="composite_score" radius={[0, 3, 3, 0]} name="综合评分" barSize={9}>
+                <Bar
+                  dataKey="composite_score"
+                  radius={[0, 3, 3, 0]}
+                  name="综合评分"
+                  barSize={9}
+                  isAnimationActive={!reducedMotion}
+                >
                   {top.map((_, index) => (
                     <Cell key={index} fill={chartColor(index)} />
                   ))}

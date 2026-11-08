@@ -567,17 +567,17 @@ export default function KlineChart({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="eyebrow">Daily Candle</span>
-            <span className="rounded border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[9px] text-muted-foreground">
+            <span className="rounded border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[12px] text-muted-foreground">
               {adjustBasis === 'hfq' ? '后复权' : '未复权'}
             </span>
             {btId && (
-              <span className="rounded border border-brass/40 bg-brass/[0.08] px-1.5 py-0.5 text-[9px] text-brass-strong dark:text-brass">
+              <span className="rounded border border-brass/40 bg-brass/[0.08] px-1.5 py-0.5 text-[12px] text-brass-strong dark:text-brass">
                 回测标记
               </span>
             )}
           </div>
           <h3 className="mt-1.5 text-[14px] font-semibold">日线 K 线</h3>
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+          <p className="mt-1 font-mono text-[12px] text-muted-foreground">
             {visibleItems.length > 0
               ? `${visibleItems[0].trade_date} ~ ${visibleItems[visibleItems.length - 1].trade_date} · ${visibleItems.length} 个交易日`
               : '暂无数据'}
@@ -590,7 +590,7 @@ export default function KlineChart({
               key={value}
               type="button"
               onClick={() => setRange(value)}
-              className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+              className={`rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-all duration-300 ${
                 range === value
                   ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
                   : 'text-muted-foreground hover:text-foreground'
@@ -602,7 +602,7 @@ export default function KlineChart({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-2 text-[11px]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-2 text-[12px]">
         {(
           [
             ['ma5', 'MA5', MA_COLORS.ma5],
@@ -640,7 +640,7 @@ export default function KlineChart({
 
         {hover && (
           <div
-            className="pointer-events-none absolute z-20 w-[212px] rounded-lg border border-border bg-card p-2.5 text-[11px] shadow-lg"
+            className="pointer-events-none absolute z-20 w-[212px] rounded-lg border border-border bg-card p-2.5 text-[12px] shadow-lg"
             style={{ left: tooltipLeft, top: 8 }}
           >
             <div className="flex items-center justify-between gap-2 mb-1">
@@ -674,7 +674,7 @@ export default function KlineChart({
       </div>
 
       {pinnedDate && pinnedDay && pinnedItem && (
-        <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-[11px]">
+        <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-[12px]">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
             <p className="font-medium text-xs">
               回测成交 · <span className="font-mono">{pinnedDate}</span> · {code}
@@ -713,7 +713,7 @@ export default function KlineChart({
               )
             })}
           </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">
+          <p className="mt-2 text-[12px] text-muted-foreground">
             当日 OHLC：开 {fmtNumber(pinnedItem.open, 2)} / 高 {fmtNumber(pinnedItem.high, 2)} / 低{' '}
             {fmtNumber(pinnedItem.low, 2)} / 收 {fmtNumber(pinnedItem.close, 2)}。成交价为未复权口径
             （含滑点），与图表一致。

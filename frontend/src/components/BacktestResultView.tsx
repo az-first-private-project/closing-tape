@@ -6,7 +6,8 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ExternalLink } from 'lucide-react'
+import { useReducedMotion } from 'framer-motion'
+import { ChevronDown, ChevronRight, ExternalLink, TriangleAlert } from 'lucide-react'
 import {
   CartesianGrid,
   Legend,
@@ -36,7 +37,7 @@ function MetricCard({
     tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-foreground'
   return (
     <div className="card p-3">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="text-[12px] text-muted-foreground">{label}</p>
       <p className={`mt-1 text-sm font-semibold num ${color}`}>{value}</p>
     </div>
   )
@@ -77,6 +78,7 @@ function MetricsGrid({ metrics }: { metrics: BacktestMetrics }) {
 
 export default function BacktestResultView({ result }: { result: BacktestResult }) {
   const navigate = useNavigate()
+  const reducedMotion = useReducedMotion()
   const [showTrades, setShowTrades] = useState(false)
 
   const stockLink = (code: string) => `/stocks/${code}?bt=${result.bt_id}`
@@ -112,7 +114,7 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
             event.stopPropagation()
             navigate(stockLink(row.code))
           }}
-          className="inline-flex items-center gap-0.5 text-[11px] text-brass-strong hover:underline dark:text-brass"
+          className="inline-flex items-center gap-0.5 text-[12px] text-brass-strong hover:underline dark:text-brass"
         >
           在 K 线查看
           <ExternalLink className="h-3 w-3" />
@@ -151,8 +153,8 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
                 labelFormatter={(label) => `日期 ${label}`}
               />
               <Legend formatter={(value) => (value === 'nav' ? '策略净值' : '基准净值')} />
-              <Line type="monotone" dataKey="nav" stroke="var(--color-primary)" strokeWidth={2} dot={false} name="nav" />
-              <Line type="monotone" dataKey="benchmark" stroke="var(--color-warning)" strokeWidth={1.5} dot={false} name="benchmark" />
+              <Line type="monotone" dataKey="nav" stroke="var(--color-primary)" strokeWidth={2} dot={false} name="nav" isAnimationActive={!reducedMotion} />
+              <Line type="monotone" dataKey="benchmark" stroke="var(--color-warning)" strokeWidth={1.5} dot={false} name="benchmark" isAnimationActive={!reducedMotion} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -164,13 +166,21 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
       {/* 成交明细（可折叠） */}
       <div>
         <button
+          type="button"
           onClick={() => setShowTrades((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 text-[13px] font-medium transition-colors hover:text-brass"
+          aria-expanded={showTrades}
+          aria-controls="backtest-trades"
+          className="inline-flex items-center gap-1.5 text-[13px] font-medium transition-colors hover:text-brass focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {showTrades ? '▾' : '▸'} 成交明细（{result.trades.length} 笔）
+          {showTrades ? (
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          成交明细（{result.trades.length} 笔）
         </button>
         {showTrades && (
-          <div className="mt-3">
+          <div id="backtest-trades" className="mt-3">
             <DataTable
               columns={tradeColumns}
               rows={result.trades}
@@ -184,8 +194,9 @@ export default function BacktestResultView({ result }: { result: BacktestResult 
         )}
       </div>
 
-      <p className="text-[11px] text-muted-foreground">
-        ⚠️ 回测基于历史数据与理想化成交假设（T+1 成交、含手续费/印花税/滑点），不代表未来收益。
+      <p className="flex items-start gap-2 text-[12px] leading-relaxed text-muted-foreground">
+        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
+        回测基于历史数据与理想化成交假设（T+1 成交、含手续费/印花税/滑点），不代表未来收益。
       </p>
     </div>
   )

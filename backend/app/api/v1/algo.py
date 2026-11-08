@@ -26,8 +26,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import InvalidParamError, NotFoundError, UnknownAlgoError
+from app.core.pagination import pagination_meta
 from app.db.session import get_db
-from app.strategy.runner import get_run, list_runs, run_strategy
+from app.strategy.runner import count_runs, get_run, list_runs, run_strategy
 from app.strategy.strategies import SPECS, list_specs
 
 router = APIRouter(prefix="/api/v1/algo", tags=["选股"])
@@ -141,6 +142,15 @@ async def get_algo_ladder(
     )
     freshness = await get_freshness_items(db, ["signal_perf"])
     snapshot["freshness"] = freshness[0] if freshness else None
+    # C1：天梯固定按策略返回（7 条），仍补齐分页元信息便于前端统一渲染
+    snapshot.update(
+        pagination_meta(
+            total=len(snapshot.get("items") or []),
+            limit=max(1, len(snapshot.get("items") or [])),
+            offset=0,
+            returned=len(snapshot.get("items") or []),
+        )
+    )
     snapshot["note"] = (
         "信号级收益：T 日收盘出信号、T+1 开盘买入；"
         "胜率为 ret_H > 0 的占比，与回测 FIFO 回合胜率不是同一口径"
@@ -152,6 +162,7 @@ async def get_algo_ladder(
 async def get_algo_consensus(
     min_count: int = Query(2, ge=2, le=7, description="最少命中策略数（2–7）"),
     limit: int = Query(100, ge=1, le=500, description="返回条数"),
+    offset: int = Query(0, ge=0, description="分页偏移（C1）"),
     trade_date: Optional[date] = Query(None, description="交易日，默认最新行情日"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -164,7 +175,7 @@ async def get_algo_consensus(
     from app.services.freshness import get_freshness_items
 
     payload = await consensus_signals(
-        db, trade_date, min_count=min_count, limit=limit
+        db, trade_date, min_count=min_count, limit=limit, offset=offset
     )
     freshness = await get_freshness_items(db, ["algo_run"])
     payload["min_count"] = min_count
@@ -190,6 +201,15 @@ async def get_watchlist_hits(
     freshness = await get_freshness_items(db, ["algo_run"])
     payload["freshness"] = freshness[0] if freshness else None
     payload["days"] = body.days
+    # C1：命中明细一次全量返回（按自选代码上限 100 控制规模），补充分页元信息
+    payload.update(
+        pagination_meta(
+            total=len(payload.get("items") or []),
+            limit=max(1, len(payload.get("items") or [])),
+            offset=0,
+            returned=len(payload.get("items") or []),
+        )
+    )
     return payload
 
 
@@ -203,6 +223,7 @@ async def get_algo_result(
     request: Request,
     trade_date: Optional[date] = Query(None, description="交易日，默认最新"),
     limit: int = Query(20, ge=1, le=1000, description="返回条数"),
+    offset: int = Query(0, ge=0, description="分页偏移（C1）"),
     force_refresh: bool = Query(False, description="忽略缓存重算"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -210,16 +231,29 @@ async def get_algo_result(
 
     策略参数从 query string 按 `params_schema` 收集（B1–B5 参数各异），
     参数不同 → 缓存必然不命中 → 重新计算并生成新的 run_id。
+
+    ``limit`` 同时是策略参数「返回数量上限」：一个 run 只保存该上限内的信号。
+    C1 的 ``offset`` 只在该 run 已保存的信号内翻页，不改变缓存键与默认值。
     """
     _ensure_algo(algo_code)
     params = _collect_params(algo_code, limit, dict(request.query_params))
-    return await run_strategy(
+    payload = await run_strategy(
         algo_code=algo_code,
         trade_date=trade_date,
         params=params,
         force=force_refresh,
         db=db,
     )
+    all_items = list(payload.get("data") or [])
+    total = len(all_items)
+    start = min(max(0, offset), total)
+    page_items = all_items[start:start + limit]
+    payload["data"] = page_items
+    payload["count"] = len(page_items)
+    payload.update(
+        pagination_meta(total=total, limit=limit, offset=start, returned=len(page_items))
+    )
+    return payload
 
 
 @router.post("/{algo_code}/refresh")
@@ -238,10 +272,16 @@ async def refresh_algo(
 async def get_algo_runs(
     algo_code: str,
     limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0, description="分页偏移（C1）"),
 ) -> dict:
-    """历史运行记录（不含信号明细）。"""
+    """历史运行记录（不含信号明细）。C1 追加总量与分页元信息。"""
     _ensure_algo(algo_code)
-    return {"items": await list_runs(algo_code, limit=limit)}
+    items = await list_runs(algo_code, limit=limit, offset=offset)
+    total = await count_runs(algo_code)
+    return {
+        "items": items,
+        **pagination_meta(total=total, limit=limit, offset=offset, returned=len(items)),
+    }
 
 
 @router.get("/runs/{run_id}")

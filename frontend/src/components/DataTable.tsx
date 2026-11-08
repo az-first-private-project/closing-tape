@@ -8,6 +8,7 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Download } from 'lucide-react'
 import { downloadText, toCsv } from '../lib/csv'
+import RangeNotice from './RangeNotice'
 
 /** 单元格原始值（排序与 CSV 导出用） */
 export type DataTableValue = string | number | boolean | null | undefined
@@ -37,6 +38,10 @@ interface DataTableProps<T> {
   maxHeight?: string
   /** 行展开内容；不传则不显示展开列 */
   renderExpanded?: (row: T, index: number) => ReactNode
+  /** 服务端分页总数；与 rows.length 不同时表头显示「已显示 N / 共 M」 */
+  total?: number
+  /** 范围说明补充（如「第 1 / 3 页」） */
+  rangeNote?: string
 }
 
 /** 读取排序值 */
@@ -82,6 +87,8 @@ export default function DataTable<T>({
   footer,
   maxHeight,
   renderExpanded,
+  total,
+  rangeNote,
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(
     initialSort ?? null,
@@ -119,13 +126,17 @@ export default function DataTable<T>({
   return (
     <div className="card overflow-hidden">
       <div className="flex items-center justify-between gap-2 border-b border-border/70 px-4 py-2.5">
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground">共 {rows.length} 条</span>
+        {typeof total === 'number' && total !== rows.length ? (
+          <RangeNotice shown={rows.length} total={total} unit="条" note={rangeNote} />
+        ) : (
+          <span className="font-mono text-[12px] tracking-wide text-muted-foreground">共 {rows.length} 条</span>
+        )}
         {csvFilename && (
           <button
             onClick={handleExport}
             disabled={rows.length === 0}
             className="btn btn-sm disabled:opacity-40"
-            title="导出当前表格为 CSV"
+            title={`导出当前表格显示的 ${rows.length} 行为 CSV（与页面范围一致）`}
           >
             <Download className="w-3.5 h-3.5" />
             导出 CSV
@@ -142,7 +153,7 @@ export default function DataTable<T>({
                 const active = sort?.key === column.key
                 const align = ALIGN_CLASS[column.align ?? 'left']
                 return (
-                  <th key={column.key} className={`px-4 py-2.5 text-[10px] font-medium tracking-[0.06em] text-muted-foreground ${align} ${column.className ?? ''}`}>
+                  <th key={column.key} className={`px-4 py-2.5 text-[12px] font-medium tracking-[0.06em] text-muted-foreground ${align} ${column.className ?? ''}`}>
                     {column.sortable ? (
                       <button
                         onClick={() => handleSort(column)}
@@ -185,8 +196,21 @@ export default function DataTable<T>({
                   <Fragment key={key}>
                     <tr
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      onKeyDown={
+                        onRowClick
+                          ? (event) => {
+                              if (event.target !== event.currentTarget) return
+                              if (event.key !== 'Enter' && event.key !== ' ') return
+                              event.preventDefault()
+                              onRowClick(row)
+                            }
+                          : undefined
+                      }
+                      tabIndex={onRowClick ? 0 : undefined}
                       className={`table-row border-b border-border/60 ${
-                        onRowClick ? 'cursor-pointer' : ''
+                        onRowClick
+                          ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+                          : ''
                       } ${expanded ? 'bg-brass/[0.05]' : ''}`}
                     >
                       {renderExpanded && (
@@ -212,7 +236,7 @@ export default function DataTable<T>({
                         const align = ALIGN_CLASS[column.align ?? 'left']
                         const value = resolveValue(row, column)
                         return (
-                          <td key={column.key} className={`px-4 py-[7px] text-[11.5px] ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
+                          <td key={column.key} className={`px-4 py-[7px] text-[12px] ${column.align === 'right' ? 'num' : ''} ${align} ${column.className ?? ''}`}>
                             {column.render ? column.render(row, index) : value === null || value === undefined ? '—' : String(value)}
                           </td>
                         )
@@ -234,7 +258,7 @@ export default function DataTable<T>({
       </div>
 
       {footer && (
-        <div className="border-t border-border/70 px-4 py-2.5 text-[10px] tracking-wide text-muted-foreground">
+        <div className="border-t border-border/70 px-4 py-2.5 text-[12px] tracking-wide text-muted-foreground">
           {footer}
         </div>
       )}

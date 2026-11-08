@@ -21,11 +21,14 @@ import AlgoCard from '../components/AlgoCard'
 import AlgoParamPanel from '../components/AlgoParamPanel'
 import AlgoDataTable from '../components/AlgoDataTable'
 import AlgoBarChart from '../components/AlgoBarChart'
-import RunMetaPanel from '../components/RunMetaPanel'
+import RunMetaPanel, { type RunSource } from '../components/RunMetaPanel'
+import PageHeader from '../components/PageHeader'
+import Disclaimer from '../components/Disclaimer'
 import BacktestPanel from '../components/BacktestPanel'
 import StrategyLadder from '../components/StrategyLadder'
 import ConsensusBoard from '../components/ConsensusBoard'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import { diffPanelAgainstRun } from '../lib/algoParams'
 import { fmtInt } from '../lib/format'
 
 /** 从 params_schema 生成默认参数（布尔默认值转字符串传入 query） */
@@ -171,6 +174,8 @@ export default function AlgoCenter() {
       if (!selectedCode) return
       setHistoryRunId(null)
       setExportError(null)
+      // 发起新执行即清空旧结果，避免把旧 run 误读为本次参数的结果
+      runMutation.reset()
       runMutation.mutate({
         algoCode: selectedCode,
         params,
@@ -196,33 +201,50 @@ export default function AlgoCenter() {
   const result: AlgoResult | null = historyRunId ? (historyQuery.data ?? null) : (runMutation.data ?? null)
   const resultLoading = historyRunId ? historyQuery.isLoading : runMutation.isPending
   const resultError = historyRunId ? historyQuery.error : runMutation.error
-  const runOptions = runsQuery.data ?? []
+  const runOptions = runsQuery.data?.items ?? []
+  /** 结果来源三态：本次执行 / 缓存结果 / 历史 run */
+  const resultSource: RunSource = historyRunId ? 'history' : result?.from_cache ? 'cache' : 'live'
+  /** 参数面板与当前展示 run 的差异（不平移结果，只提示） */
+  const panelDiff = useMemo(
+    () => diffPanelAgainstRun(selectedAlgo, params, result?.run, selectedDate, result?.trade_date),
+    [params, result?.run, result?.trade_date, selectedAlgo, selectedDate],
+  )
 
-  /** 导出用的参数：查看历史 run 时用该 run 的参数快照，否则用当前面板参数 */
+  /**
+   * 导出参数：始终使用当前展示 run 的参数快照（含 limit），
+   * 参数面板未提交的修改不会影响导出范围。
+   */
   const exportParams = useMemo<AlgoParams>(() => {
-    if (historyRunId && result?.run?.params) {
-      const converted: AlgoParams = {}
-      Object.entries(result.run.params).forEach(([key, value]) => {
-        if (typeof value === 'number' || typeof value === 'string') converted[key] = value
-      })
-      return converted
-    }
-    return params
-  }, [historyRunId, params, result?.run])
+    const snapshot = result?.run?.params
+    if (!snapshot) return {}
+    const converted: AlgoParams = {}
+    Object.entries(snapshot).forEach(([key, value]) => {
+      if (typeof value === 'number' || typeof value === 'string') converted[key] = value
+      else if (typeof value === 'boolean') converted[key] = String(value)
+    })
+    return converted
+  }, [result?.run])
+
+  const displayedLimit = result?.run?.params?.limit
 
   /** 导出服务端 CSV */
   const handleExportCsv = useCallback(async () => {
-    if (!selectedCode) return
+    if (!selectedCode || !result) return
     setExporting(true)
     setExportError(null)
     try {
-      await downloadAlgoCsv(selectedCode, exportParams, result?.trade_date)
+      await downloadAlgoCsv(
+        selectedCode,
+        exportParams,
+        result?.trade_date,
+        typeof displayedLimit === 'number' ? displayedLimit : null,
+      )
     } catch (error) {
       setExportError(error instanceof ApiError ? `${error.code}: ${error.message}` : '导出失败，请稍后重试')
     } finally {
       setExporting(false)
     }
-  }, [exportParams, result?.trade_date, selectedCode])
+  }, [exportParams, result, selectedCode])
 
 
   /** Top10 排序指标对比图数据 */
@@ -232,9 +254,9 @@ export default function AlgoCenter() {
   )
 
   const chartTitle = useMemo(() => {
-    if (!result) return '📊 Top 10'
+    if (!result) return 'Top 10'
     if (result.data.some((row) => row.composite_score != null)) {
-      return '📊 Top 10 综合评分（0–10）'
+      return 'Top 10 综合评分（0–10）'
     }
     const labels: Record<string, string> = {
       a4: '股息率（%）',
@@ -244,7 +266,7 @@ export default function AlgoCenter() {
       b4: '布林带宽 60 日分位（%）',
       b5: 'KDJ J 值',
     }
-    return `📊 Top 10 ${labels[result.algo] ?? '排序指标'}`
+    return `Top 10 ${labels[result.algo] ?? '排序指标'}`
   }, [result])
 
   // ---- 算法清单加载 / 错误 ----
@@ -272,21 +294,13 @@ export default function AlgoCenter() {
       className="max-w-7xl mx-auto px-4 py-6 space-y-6"
     >
       {/* ========== 刊头 ========== */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="rise">
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="h-px w-6 bg-brass" />
-            <span className="eyebrow">
-              Strategy Lab{result?.trade_date ? ` · ${result.trade_date}` : ''}
-            </span>
-          </div>
-          <h1 className="page-title mt-2.5">量化选股</h1>
-          <p className="mt-2 text-[12px] text-muted-foreground">
-            本地行情库实时计算 · 参数真实生效 · 结果可复现（run_id）· 支持回测
-          </p>
-        </div>
-        {selectedCode && (
-          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+      <PageHeader
+        eyebrow={`Strategy Lab${result?.trade_date ? ` · ${result.trade_date}` : ''}`}
+        title="量化选股"
+        description="本地行情库实时计算 · 参数真实生效 · 结果可复现（run_id）· 支持回测"
+        actions={
+          selectedCode && (
+            <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             {/* 交易日选择：自动 = 该策略所需数据最新就绪的交易日 */}
             <label className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
               <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -329,14 +343,22 @@ export default function AlgoCenter() {
               onClick={handleExportCsv}
               disabled={exporting || !result}
               className="btn btn-sm h-9"
-              title="导出当前结果 CSV（后端生成）"
+              title="导出当前展示 run 的结果 CSV（使用该 run 的参数快照与 limit，后端生成）"
             >
               <Download className="h-3.5 w-3.5" />
               {exporting ? '导出中…' : '导出 CSV'}
             </button>
-          </div>
-        )}
-      </div>
+
+            {/* 历史 run 仅取最近 10 条：显式标注总量（C1 total） */}
+            {runsQuery.data && (runsQuery.data.total ?? 0) > runOptions.length && (
+              <span className="basis-full text-[12px] leading-5 text-muted-foreground">
+                历史 run 已显示 {runOptions.length} / 共 {runsQuery.data.total} 条（最近优先）
+              </span>
+            )}
+            </div>
+          )
+        }
+      />
 
       {exportError && <p className="text-xs text-alert">CSV 导出失败：{exportError}</p>}
 
@@ -350,7 +372,9 @@ export default function AlgoCenter() {
             key={algo.algo_code}
             algo={algo}
             signalCount={
-              result && result.algo === algo.algo_code ? result.count : null
+              result && result.algo === algo.algo_code
+                ? (result.total ?? result.count)
+                : null
             }
             isActive={algo.algo_code === selectedCode}
             onSelect={handleSelect}
@@ -373,6 +397,9 @@ export default function AlgoCenter() {
               onReset={handleReset}
               onExecute={() => handleExecute(false)}
               isRunning={runMutation.isPending}
+              dirty={panelDiff.dirty}
+              changedKeys={panelDiff.changedKeys}
+              dateMismatch={panelDiff.dateMismatch}
             />
           </div>
 
@@ -398,7 +425,8 @@ export default function AlgoCenter() {
                   <RunMetaPanel
                     run={result.run}
                     algo={result.algo}
-                    fromCache={result.from_cache}
+                    source={resultSource}
+                    dirty={panelDiff.dirty}
                     tradeDate={result.trade_date}
                     refreshing={runMutation.isPending}
                     onForceRefresh={() => handleExecute(true)}
@@ -415,6 +443,12 @@ export default function AlgoCenter() {
                   params={result.run?.params}
                   signalSchema={result.run?.signal_schema}
                   marketGate={result.market_gate}
+                  total={result.total ?? result.count}
+                  rangeNote={
+                    typeof displayedLimit === 'number'
+                      ? `本 run 按返回数量上限 limit=${displayedLimit} 保存信号；导出 CSV 使用同一 run 参数`
+                      : '导出 CSV 使用当前展示 run 的参数快照'
+                  }
                   onRowClick={(row) => navigate(`/stocks/${row.code}`)}
                   csvFilename={`${result.algo}_${result.trade_date}_signals.csv`}
                 />
@@ -434,20 +468,13 @@ export default function AlgoCenter() {
           algoCode={selectedAlgo.algo_code}
           algoName={selectedAlgo.algo_name}
           strategyParams={params}
+          panelDirty={panelDiff.dirty}
+          changedKeys={panelDiff.changedKeys}
+          resultRunId={result?.run?.run_id ?? null}
         />
       )}
 
-      {/* 免责声明 */}
-      <div className="space-y-1.5 border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
-        <p className="flex items-start gap-1.5">
-          <span aria-hidden="true" className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brass/70" />
-          选股结果由本地行情数据按策略规则计算，仅作客观量化信号展示，不构成投资建议。
-        </p>
-        <p className="flex items-start gap-1.5">
-          <span aria-hidden="true" className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-brass/70" />
-          参数快照与 run_id 保证结果可复现；回测基于历史数据，回测 ≠ 实盘。投资有风险，决策需谨慎。
-        </p>
-      </div>
+      <Disclaimer extraOnly extra="选股结果由本地行情数据按策略规则计算，仅作客观量化信号展示；参数快照与 run_id 保证结果可复现。" />
     </motion.div>
   )
 }

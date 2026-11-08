@@ -97,12 +97,12 @@ function ConditionRow({ item }: { item: TriggeredCondition }) {
           <span className={`text-xs ${item.passed ? 'text-foreground' : 'text-muted-foreground'}`}>
             {item.label}
           </span>
-          <span className="text-[11px] num text-muted-foreground">
+          <span className="text-[12px] num text-muted-foreground">
             实际 {fmtCondValue(item.actual)} · 要求 {requirement}
           </span>
         </div>
         {item.detail && (
-          <p className="mt-0.5 text-[11px] font-mono text-muted-foreground/80 break-all">
+          <p className="mt-0.5 text-[12px] font-mono text-muted-foreground/80 break-all">
             {item.detail}
           </p>
         )}
@@ -128,7 +128,7 @@ function BreakdownView({ breakdown }: { breakdown: ScoreBreakdown }) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs font-medium">评分拆解</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           综合分{' '}
           <span className="num font-semibold text-foreground">
             {breakdown.composite !== null && breakdown.composite !== undefined
@@ -145,7 +145,7 @@ function BreakdownView({ breakdown }: { breakdown: ScoreBreakdown }) {
       <div className="space-y-2.5">
         {breakdown.parts.map((part) => (
           <div key={part.key}>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-[11px]">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-[12px]">
               <span className="text-foreground">
                 {part.name}
                 <span className="ml-1.5 text-muted-foreground">
@@ -168,18 +168,18 @@ function BreakdownView({ breakdown }: { breakdown: ScoreBreakdown }) {
                 style={{ width: `${scorePercent(part.score)}%` }}
               />
             </div>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">{rawSummary(part)}</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">{rawSummary(part)}</p>
           </div>
         ))}
       </div>
 
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[12px] leading-relaxed text-muted-foreground">
         条形长度 = 分项得分 / 10。综合分 = 10 × Σ(分位 × 权重) / Σ(当日可用权重)，四舍五入到 2
         位；贡献 = 分项得分 × 权重 / Σ(当日可用权重)，逐项贡献之和与综合分一致（±0.01
         四舍五入）。分项得分 = 分位 × 10；分位缺失时显示中性 5.0 分，但不计入可用权重与贡献。
       </p>
       {breakdown.sentiment_source && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-[12px] text-muted-foreground">
           情绪因子来源：{breakdown.sentiment_source === 'neutral' ? '中性（无情绪数据）' : breakdown.sentiment_source}
         </p>
       )}
@@ -199,11 +199,16 @@ function DegradedHint({ text }: { text: string }) {
 /** 参数快照（run.params）摘要 */
 function paramsText(params?: AlgoParamsSnapshot | null): string {
   if (!params) return ''
-  const entries = Object.entries(params)
-    .filter(([, value]) => value !== null && value !== undefined)
+  const allEntries = Object.entries(params).filter(
+    ([, value]) => value !== null && value !== undefined,
+  )
+  const entries = allEntries
     .slice(0, 12)
     .map(([key, value]) => `${key}=${typeof value === 'boolean' ? (value ? '是' : '否') : value}`)
-  return entries.join(' · ')
+  const text = entries.join(' · ')
+  return allEntries.length > entries.length
+    ? `${text} …（已显示 ${entries.length} / 共 ${allEntries.length} 项）`
+    : text
 }
 
 export default function SignalExplanation({ algo, row, fullDesc, params, signalSchema }: Props) {
@@ -234,7 +239,7 @@ export default function SignalExplanation({ algo, row, fullDesc, params, signalS
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-medium">信号依据</span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             共 {triggered.length} 条 · 通过 {passedCount} 条
           </span>
         </div>
@@ -245,7 +250,7 @@ export default function SignalExplanation({ algo, row, fullDesc, params, signalS
         </ul>
         {marketItems.length > 0 && (
           <div>
-            <p className="mb-0.5 text-[11px] font-medium text-muted-foreground">市场环境要求</p>
+            <p className="mb-0.5 text-[12px] font-medium text-muted-foreground">市场环境要求</p>
             <ul className="divide-y divide-border/60">
               {marketItems.map((item, index) => (
                 <ConditionRow key={`${item.key}-market-${index}`} item={item} />
@@ -270,7 +275,7 @@ export default function SignalExplanation({ algo, row, fullDesc, params, signalS
   return (
     <div className="space-y-3">
       {body}
-      <div className="space-y-1 border-t border-border/70 pt-2 text-[11px] leading-relaxed text-muted-foreground">
+      <div className="space-y-1 border-t border-border/70 pt-2 text-[12px] leading-relaxed text-muted-foreground">
         {fullDesc && <p>{fullDesc}</p>}
         <p>参数快照来自 run.params{snapshot ? `：${snapshot}` : '（本次 run 未记录）'}。</p>
       </div>

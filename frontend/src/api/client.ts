@@ -8,7 +8,7 @@
  *  4. 只对 5xx / 网络错误重试 1 次（4xx 不重试，避免无意义放大）；
  *  5. 文件下载（CSV）封装。
  */
-import type { ApiErrorBody } from '../types/common'
+import type { ApiErrorBody, ListPage } from '../types/common'
 
 /** API 前缀：由 Vite dev proxy / nginx 转发到后端，组件与页面不得自行拼域名 */
 export const BASE_URL = '/api/v1'
@@ -44,6 +44,8 @@ export class ApiError extends Error {
   readonly status: number
   readonly detail: unknown
   readonly requestId: string | null
+  /** C2：后端可选建议；缺省时由 UI 使用统一兜底文案 */
+  readonly suggestion: string | null
 
   constructor(params: {
     code: string
@@ -51,6 +53,7 @@ export class ApiError extends Error {
     status: number
     detail?: unknown
     requestId?: string | null
+    suggestion?: string | null
   }) {
     super(params.message)
     this.name = 'ApiError'
@@ -58,6 +61,7 @@ export class ApiError extends Error {
     this.status = params.status
     this.detail = params.detail ?? null
     this.requestId = params.requestId ?? null
+    this.suggestion = params.suggestion ?? null
   }
 
   /** 是否属于「可重试」错误：网络错误 / 超时 / 5xx */
@@ -100,6 +104,7 @@ async function toApiError(response: Response): Promise<ApiError> {
   let message = response.statusText || `请求失败（HTTP ${response.status}）`
   let detail: unknown = null
   let requestId: string | null = null
+  let suggestion: string | null = null
 
   try {
     const text = await response.text()
@@ -110,6 +115,10 @@ async function toApiError(response: Response): Promise<ApiError> {
         message = parsed.error.message
         detail = parsed.error.detail ?? null
         requestId = parsed.request_id ?? null
+        const rawSuggestion = (parsed.error as { suggestion?: unknown }).suggestion
+        suggestion = typeof rawSuggestion === 'string' && rawSuggestion.trim()
+          ? rawSuggestion.trim()
+          : null
       } else if (typeof parsed === 'object' && parsed !== null) {
         const payload = parsed as Record<string, unknown>
         const rawDetail = payload.detail
@@ -138,7 +147,7 @@ async function toApiError(response: Response): Promise<ApiError> {
     // 非 JSON 错误体：保留 HTTP 状态信息
   }
 
-  return new ApiError({ code, message, status: response.status, detail, requestId })
+  return new ApiError({ code, message, status: response.status, detail, requestId, suggestion })
 }
 
 /** 单次请求（不做重试） */
@@ -253,6 +262,28 @@ export function extractList<T>(payload: unknown): T[] {
     }
   }
   return []
+}
+
+/**
+ * C1：提取列表并保留后端追加的 total / has_more / page / page_size。
+ * 旧接口没有这些字段时返回 undefined，由调用方回退到「已显示 N」。
+ */
+export function extractListPage<T>(payload: unknown): ListPage<T> {
+  const items = extractList<T>(payload)
+  const record = typeof payload === 'object' && payload !== null
+    ? payload as Record<string, unknown>
+    : null
+  const numberOrUndefined = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  const booleanOrUndefined = (value: unknown): boolean | undefined =>
+    typeof value === 'boolean' ? value : undefined
+  return {
+    items,
+    total: numberOrUndefined(record?.total),
+    has_more: booleanOrUndefined(record?.has_more),
+    page: numberOrUndefined(record?.page),
+    page_size: numberOrUndefined(record?.page_size),
+  }
 }
 
 /** 从 Content-Disposition 解析文件名（支持 filename* 与 filename） */

@@ -445,7 +445,11 @@ async def get_backtest_trades(
 
 
 @router.get("/{bt_id}/export.csv")
-async def export_backtest_csv(bt_id: str, db: AsyncSession = Depends(get_db)) -> Response:
+async def export_backtest_csv(
+    bt_id: str,
+    code: Optional[str] = Query(None, min_length=1, max_length=6, pattern=r"^\d{1,6}$"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
     row = (await db.execute(
         select(BacktestRun).where(BacktestRun.bt_id == bt_id)
     )).scalar_one_or_none()
@@ -486,7 +490,15 @@ async def export_backtest_csv(bt_id: str, db: AsyncSession = Depends(get_db)) ->
     writer.writerow([])
     writer.writerow(["# trades"])
     writer.writerow(["date", "code", "name", "side", "price", "shares", "amount", "fee", "reason"])
-    for t in (row.trades or []):
+    target = code.zfill(6) if code else None
+    trades = [
+        t for t in (row.trades or [])
+        if target is None or str(t.get("code", "")).zfill(6) == target
+    ]
+    if target:
+        # C1：与 /trades?code= 的过滤口径保持一致，导出范围随展示范围
+        writer.writerow([f"# filtered by code={target}"])
+    for t in trades:
         writer.writerow([t.get("date"), t.get("code"), t.get("name"), t.get("side"),
                          t.get("price"), t.get("shares"), t.get("amount"),
                          t.get("fee"), t.get("reason")])

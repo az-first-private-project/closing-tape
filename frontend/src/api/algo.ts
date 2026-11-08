@@ -1,7 +1,8 @@
 /**
  * 选股 API（契约第 5 节）
  */
-import { downloadCsv, extractList, request } from './client'
+import { downloadCsv, extractListPage, request } from './client'
+import type { ListPage } from '../types/common'
 import type {
   AlgoMeta,
   AlgoParams,
@@ -52,14 +53,18 @@ export function refreshAlgoResult(
 }
 
 /**
- * 历史 run 列表（5.3，不含明细）。
- * 契约未固定包裹形状，兼容裸数组与 {items:[]}/{runs:[]}。
+ * 历史 run 列表（5.3，不含明细，C1 追加分页元信息）。
+ * 保留包裹对象里的 total/has_more/page/page_size；裸数组时仅返回 items。
  */
-export async function fetchAlgoRuns(algoCode: string, limit = 10): Promise<AlgoRunSummary[]> {
+export async function fetchAlgoRuns(
+  algoCode: string,
+  limit = 10,
+  offset = 0,
+): Promise<ListPage<AlgoRunSummary>> {
   const payload = await request<unknown>(`/algo/${encodeURIComponent(algoCode)}/runs`, {
-    query: { limit },
+    query: { limit, offset },
   })
-  return extractList<AlgoRunSummary>(payload)
+  return extractListPage<AlgoRunSummary>(payload)
 }
 
 /**
@@ -70,15 +75,23 @@ export function fetchAlgoRunDetail(runId: string): Promise<AlgoRunDetail> {
   return request<AlgoRunDetail>(`/algo/runs/${encodeURIComponent(runId)}`)
 }
 
-/** 导出选股结果 CSV（5.3；后端直接返回 text/csv，文件名如 b1_2026-10-21.csv） */
+/**
+ * 导出选股结果 CSV（5.3；后端直接返回 text/csv，文件名如 b1_2026-10-21.csv）。
+ * @param limit 导出范围须与页面展示的 run 一致：传入该 run 保存信号的 limit
+ */
 export function downloadAlgoCsv(
   algoCode: string,
   params: AlgoParams = {},
   tradeDate?: string,
+  limit?: number | null,
 ): Promise<void> {
   return downloadCsv(
     `/algo/${encodeURIComponent(algoCode)}/export.csv`,
-    { ...params, trade_date: tradeDate || undefined },
+    {
+      ...params,
+      limit: typeof limit === 'number' ? limit : undefined,
+      trade_date: tradeDate || undefined,
+    },
     `${algoCode}_export.csv`,
   )
 }
@@ -106,9 +119,10 @@ export function fetchConsensus(
   minCount: number,
   tradeDate?: string,
   limit = 100,
+  offset = 0,
 ): Promise<ConsensusResponse> {
   return request<ConsensusResponse>('/algo/consensus', {
-    query: { min_count: minCount, limit, trade_date: tradeDate || undefined },
+    query: { min_count: minCount, limit, offset, trade_date: tradeDate || undefined },
   })
 }
 

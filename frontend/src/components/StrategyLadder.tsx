@@ -45,10 +45,10 @@ function HorizonCell({
       <span className={`num text-sm font-medium ${pctColor(stats.avg_excess)}`}>
         {fmtPct(stats.avg_excess)}
       </span>
-      <span className="text-[11px] text-muted-foreground num">
+      <span className="text-[12px] text-muted-foreground num">
         胜 {fmtRatio(stats.win_rate)}
       </span>
-      <span className={`text-[11px] num ${hint === '低样本' ? 'text-warning' : 'text-muted-foreground'}`}>
+      <span className={`text-[12px] num ${hint === '低样本' ? 'text-warning' : 'text-muted-foreground'}`}>
         n={fmtInt(stats.sample_signals)}
         {hint && <span title={hint === '低样本' ? '有效样本少于 30，结论不稳定' : undefined}> · {hint}</span>}
       </span>
@@ -101,11 +101,11 @@ export default function StrategyLadder({
         <div>
           <h2 id="ladder-title" className="flex items-center gap-2 text-[14px] font-semibold">
             策略天梯
-            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
+            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[12px] font-normal text-muted-foreground">
               信号级 {horizon} 日收益
             </span>
           </h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             T 日收盘出信号 → T+1 开盘买入，含复权；超额对比沪深 300（{data?.benchmark ?? 'sh000300'}）。
             点击行选择下方策略。
           </p>
@@ -123,7 +123,7 @@ export default function StrategyLadder({
                 type="button"
                 aria-pressed={window === value}
                 onClick={() => setWindow(value)}
-                className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+                className={`rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-all duration-300 ${
                   window === value
                     ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
                     : 'text-muted-foreground hover:text-foreground'
@@ -145,7 +145,7 @@ export default function StrategyLadder({
                 type="button"
                 aria-pressed={horizon === value}
                 onClick={() => setHorizon(value)}
-                className={`rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+                className={`rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-all duration-300 ${
                   horizon === value
                     ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
                     : 'text-muted-foreground hover:text-foreground'
@@ -161,7 +161,7 @@ export default function StrategyLadder({
       </div>
 
       {data && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
           <span>
             数据截至 <span className="num text-foreground">{data.trade_date}</span>（窗口自 {data.window_start}）
           </span>
@@ -186,7 +186,7 @@ export default function StrategyLadder({
         <div className="overflow-x-auto -mx-1">
           <table className="w-full min-w-[760px] text-[12px]">
             <thead>
-              <tr className="border-b border-border/70 bg-muted/25 font-mono text-[10px] tracking-[0.05em] text-muted-foreground">
+              <tr className="border-b border-border/70 bg-muted/25 font-mono text-[12px] tracking-[0.05em] text-muted-foreground">
                 <th className="text-left font-medium py-2 pl-1 w-14">排名</th>
                 <th className="text-left font-medium py-2 min-w-[10rem]">策略</th>
                 {HORIZONS.map((value) => (
@@ -208,7 +208,6 @@ export default function StrategyLadder({
                   <tr
                     key={item.algo_code}
                     tabIndex={0}
-                    role="button"
                     aria-label={`选择策略 ${item.algo_name}`}
                     onClick={() => onSelectAlgo(item.algo_code)}
                     onKeyDown={(event) => {
@@ -225,33 +224,33 @@ export default function StrategyLadder({
                     <td className="py-2.5">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="font-medium truncate">{item.algo_name}</span>
-                        <span className="text-[10px] font-mono text-muted-foreground uppercase">
+                        <span className="text-[12px] font-mono text-muted-foreground uppercase">
                           {item.algo_code}
                         </span>
                         {item.total_signals === 0 ? (
                           <span
-                            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted text-muted-foreground"
+                            className="shrink-0 text-[12px] px-1.5 py-0.5 rounded border border-border bg-muted text-muted-foreground"
                             title="所选窗口内没有该策略的非回测信号"
                           >
                             无信号
                           </span>
                         ) : hint === '低样本' ? (
                           <span
-                            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-warning/40 bg-warning/10 text-warning"
+                            className="shrink-0 text-[12px] px-1.5 py-0.5 rounded border border-warning/40 bg-warning/10 text-warning"
                             title={`有效样本 ${item.sample_signals} 条，少于 30 条`}
                           >
                             低样本
                           </span>
                         ) : hint ? (
                           <span
-                            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted text-muted-foreground"
+                            className="shrink-0 text-[12px] px-1.5 py-0.5 rounded border border-border bg-muted text-muted-foreground"
                             title={hint === '待成熟' ? '信号已有，但收益窗口尚未走完' : '已成熟样本均不可成交或缺少行情'}
                           >
                             {hint}
                           </span>
                         ) : null}
                       </div>
-                      <div className="text-[11px] text-muted-foreground num mt-0.5">
+                      <div className="text-[12px] text-muted-foreground num mt-0.5">
                         中位 {fmtPct(item.median_ret)} · 最好 {fmtPct(item.best)} · 最差 {fmtPct(item.worst)}
                       </div>
                     </td>
@@ -281,7 +280,7 @@ export default function StrategyLadder({
                           formatValue={(value) => fmtRatio(value)}
                           className="w-[104px]"
                         />
-                        <span className={`text-[11px] num ${hint === '低样本' ? 'text-warning' : 'text-muted-foreground'}`}>
+                        <span className={`text-[12px] num ${hint === '低样本' ? 'text-warning' : 'text-muted-foreground'}`}>
                           {item.total_signals === 0 ? '无信号' : hint ?? '样本充足'}
                         </span>
                       </div>
@@ -294,7 +293,7 @@ export default function StrategyLadder({
         </div>
       )}
 
-      <p className="border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
+      <p className="border-t border-border/60 pt-3 text-[12px] leading-relaxed text-muted-foreground">
         5/10/20 日均按各自的成熟窗口统计；停牌或一字板导致 T+1 无法成交的信号不计入胜率与均值。
         样本不足 30 条时排序仅作参考。
       </p>

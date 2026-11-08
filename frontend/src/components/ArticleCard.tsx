@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { ArrowUpRight } from 'lucide-react'
 import { Article } from '../api/news'
 import { cn, formatTime, getSourceColor } from '../lib/utils'
+import { useTiltEnabled } from '../hooks/useTilt'
 
 interface ArticleCardProps {
   article: Article
@@ -18,16 +19,18 @@ export default function ArticleCard({ article, index, featured = false }: Articl
   const cardRef = useRef<HTMLDivElement>(null)
   const rectRef = useRef<DOMRect | null>(null)
   const rafRef = useRef<number | null>(null)
+  const tiltEnabled = useTiltEnabled()
 
   /** 变换写入 CSS 变量，避免每次 mousemove 重写内联 style 造成整卡重算 */
   const handleMouseEnter = () => {
+    if (!tiltEnabled) return
     rectRef.current = cardRef.current?.getBoundingClientRect() ?? null
   }
 
   const handleMouseMove = (event: React.MouseEvent) => {
     const card = cardRef.current
     const rect = rectRef.current
-    if (!card || !rect || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    if (!tiltEnabled || !card || !rect || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
     const clientX = event.clientX
     const clientY = event.clientY
@@ -80,7 +83,8 @@ export default function ArticleCard({ article, index, featured = false }: Articl
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           className={cn(
-            'card card-3d card-sheen group relative flex h-full cursor-pointer flex-col overflow-hidden p-5',
+            'card group relative flex h-full cursor-pointer flex-col overflow-hidden p-5',
+            tiltEnabled && 'card-3d card-sheen',
             'hover:border-brass/45',
             featured && 'sm:p-7',
           )}
@@ -96,7 +100,7 @@ export default function ArticleCard({ article, index, featured = false }: Articl
           {/* 头部：来源 + 时间 */}
           <div className="mb-3 flex items-center justify-between gap-2">
             <span
-              className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11px] font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[12px] font-semibold"
               style={{
                 backgroundColor: sourceColor + '12',
                 borderColor: sourceColor + '33',
@@ -110,7 +114,7 @@ export default function ArticleCard({ article, index, featured = false }: Articl
               />
               {article.source_name || '未知来源'}
             </span>
-            <span className="num text-[11px] text-muted-foreground">{publishTime}</span>
+            <span className="num text-[12px] text-muted-foreground">{publishTime}</span>
           </div>
 
           {/* 标题 */}
@@ -140,7 +144,7 @@ export default function ArticleCard({ article, index, featured = false }: Articl
           <div className="mt-auto flex items-center justify-between border-t border-border/60 pt-3">
             <span
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] font-medium',
+                'inline-flex items-center gap-1.5 text-[12px] font-medium',
                 isProcessed ? 'text-success' : 'text-warning',
               )}
             >
@@ -154,7 +158,7 @@ export default function ArticleCard({ article, index, featured = false }: Articl
               {isProcessed ? 'AI 已总结' : '待处理'}
             </span>
 
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-brass">
+            <span className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground transition-colors group-hover:text-brass">
               查看详情
               <ArrowUpRight
                 className="h-3.5 w-3.5 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:-translate-y-0.5 group-hover:translate-x-0.5"

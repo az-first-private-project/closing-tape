@@ -1,8 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
+import { ApiError } from './api/client'
+import { recordStatus } from './lib/statusFeed'
 import { hydrateWatchlist } from './lib/watchlist'
 import './index.css'
 
@@ -14,7 +16,37 @@ import './index.css'
  *   页面会落到空态且没有重试入口；这里让请求真实发出，由 client.ts 统一报网络错误；
  * - 窗口重新聚焦时不自动刷新，避免盘后分析页频繁重算。
  */
+/** detail.next_action 兜底建议（与 ErrorState 口径一致） */
+function readNextAction(detail: unknown): string | undefined {
+  if (typeof detail !== 'object' || detail === null || !('next_action' in detail)) return undefined
+  const value = (detail as Record<string, unknown>).next_action
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+/** U09：把接口异常记入会话状态中心；ABORTED 是主动取消，不记 */
+function recordRequestError(error: unknown): void {
+  const path = `${window.location.pathname}${window.location.search}`
+  if (error instanceof ApiError) {
+    if (error.code === 'ABORTED') return
+    recordStatus({
+      level: error.isRetryable ? 'error' : 'warning',
+      title: error.isRetryable ? '接口暂时不可用' : '接口请求未完成',
+      detail: error.message,
+      code: error.code,
+      suggestion: error.suggestion ?? readNextAction(error.detail),
+      path,
+      requestId: error.requestId ?? undefined,
+    })
+    return
+  }
+  if (error instanceof Error) {
+    recordStatus({ level: 'error', title: '页面请求失败', detail: error.message, path })
+  }
+}
+
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: recordRequestError }),
+  mutationCache: new MutationCache({ onError: recordRequestError }),
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60 * 5,

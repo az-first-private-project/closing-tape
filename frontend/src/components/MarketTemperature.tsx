@@ -6,6 +6,7 @@
  * - `confidence !== "ok"` 时顶部提示条说明缺了哪些子项（可信度关键，不允许省略）；
  * - 缺失子项显示 "—"，不显示 NaN / 0 分。
  */
+import { RefreshCw } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { useTemperature, useTemperatureSeries } from '../hooks/useTemperature'
 import type {
@@ -15,6 +16,7 @@ import type {
 import { temperatureBand, temperatureColor, temperatureLabel } from '../lib/market'
 import { fmtDate } from '../lib/format'
 import Sparkline from './Sparkline'
+import { ErrorState } from './StateViews'
 
 const GAUGE_RADIUS = 78
 const GAUGE_CENTER_Y = 100
@@ -110,7 +112,7 @@ function Gauge({ score }: { score: number | null }) {
         <p className={`readout text-[44px] leading-none ${band?.textClass ?? 'text-muted-foreground'}`}>
           {score === null ? '—' : score.toFixed(1)}
         </p>
-        <p className="mt-2 text-[11px] tracking-wide text-muted-foreground">
+        <p className="mt-2 text-[12px] tracking-wide text-muted-foreground">
           {score === null ? '数据不足' : temperatureLabel(score)}
         </p>
       </div>
@@ -142,16 +144,11 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
   if (!data) {
     const notReady = temperature.error instanceof ApiError && temperature.error.code === 'DATA_NOT_READY'
     return (
-      <div className="card p-4 text-sm text-muted-foreground">
-        {notReady ? '市场温度尚未生成（每日管线 temperature 步骤未运行，或历史未回填）。' : '市场温度加载失败。'}
-        <button
-          type="button"
-          onClick={() => temperature.refetch()}
-          className="ml-2 text-brass-strong hover:underline dark:text-brass"
-        >
-          重试
-        </button>
-      </div>
+      <ErrorState
+        title={notReady ? '市场温度尚未生成' : '市场温度加载失败'}
+        error={temperature.error}
+        onRetry={() => temperature.refetch()}
+      />
     )
   }
 
@@ -175,13 +172,13 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
           <span className="eyebrow">Market Temperature</span>
           <div className="mt-1.5 flex items-baseline gap-2">
             <h2 className="text-[15px] font-semibold tracking-[-0.01em]">市场温度</h2>
-            <span className="num text-[10px] text-muted-foreground">{fmtDate(data.trade_date)}</span>
+            <span className="num text-[12px] text-muted-foreground">{fmtDate(data.trade_date)}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           {band && (
             <span
-              className={`rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[10px] ${band.textClass}`}
+              className={`rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[12px] ${band.textClass}`}
             >
               {band.label}
             </span>
@@ -189,11 +186,24 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
           <span className="num">
             合成 {data.components?.available_count ?? 0}/{data.components?.total_count ?? 0} 项
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              void temperature.refetch()
+              void series.refetch()
+            }}
+            disabled={temperature.isFetching}
+            className="btn btn-sm h-8"
+            title="重新加载市场温度"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${temperature.isFetching ? 'animate-spin' : ''}`} />
+            刷新{temperature.isFetching ? '中…' : ''}
+          </button>
         </div>
       </div>
 
       {data.confidence !== 'ok' && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.07] px-3 py-2 text-[11px] leading-relaxed text-warning">
+        <div className="rounded-lg border border-warning/30 bg-warning/[0.07] px-3 py-2 text-[12px] leading-relaxed text-warning">
           <span className="font-medium">
             {data.confidence === 'insufficient' ? '温度数据不足，暂不给出总分。' : '部分子项缺数据，总分由可用子项重新加权。'}
           </span>
@@ -213,10 +223,10 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
                 className="group rounded-lg border border-border/60 bg-muted/25 p-3 transition-colors duration-300 hover:border-brass/35"
               >
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                     {item.label}
                     {item.direction < 0 && (
-                      <span className="rounded border border-border/70 px-1 text-[9px] leading-4">降温</span>
+                      <span className="rounded border border-border/70 px-1 text-[12px] leading-4">降温</span>
                     )}
                   </span>
                   <span className="num text-[12px] font-medium text-foreground">{formatRaw(item)}</span>
@@ -230,12 +240,12 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
                       />
                     )}
                   </div>
-                  <span className="w-7 text-right num text-[11px] text-muted-foreground">
+                  <span className="w-7 text-right num text-[12px] text-muted-foreground">
                     {item.score === null ? '—' : item.score.toFixed(0)}
                   </span>
-                  <span className={`w-3 text-center text-[11px] ${glyph.className}`}>{glyph.glyph}</span>
+                  <span className={`w-3 text-center text-[12px] ${glyph.className}`}>{glyph.glyph}</span>
                 </div>
-                <p className="mt-1.5 truncate text-[10px] text-muted-foreground/80" title={item.note}>
+                <p className="mt-1.5 truncate text-[12px] text-muted-foreground/80" title={item.note}>
                   {item.note}
                 </p>
               </div>
@@ -245,7 +255,7 @@ export default function MarketTemperature({ tradeDate }: { tradeDate?: string })
       </div>
 
       <div className="border-t border-border/60 pt-3">
-        <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+        <div className="mb-1.5 flex items-center justify-between font-mono text-[12px] text-muted-foreground">
           <span>近 {seriesPoints.length} 个交易日</span>
           {seriesMin !== null && seriesMax !== null && (
             <span className="num">

@@ -62,18 +62,18 @@ export default function WatchlistPanel({
           <h2 id="watchlist-panel-title" className="flex items-center gap-2 text-[14px] font-semibold">
             <Star className="h-3.5 w-3.5 text-brass" aria-hidden="true" />
             自选股
-            <span className="num rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
+            <span className="num rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[12px] font-normal text-muted-foreground">
               {watchlist.length}/{MAX_WATCHLIST}
             </span>
           </h2>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-[12px] text-muted-foreground">
             近 {days} 个交易日的策略命中；名单保存在本机缓存并同步到服务器。
           </p>
         </div>
         {(showAllLink || compact) && (
           <Link
             to="/watchlist"
-            className="inline-flex items-center gap-1 rounded text-[11px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
+            className="inline-flex items-center gap-1 rounded text-[12px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
           >
             查看全部提醒
             <ArrowRight className="w-3.5 h-3.5" />
@@ -112,13 +112,13 @@ export default function WatchlistPanel({
                   <div className="flex flex-wrap items-baseline gap-2">
                     <Link
                       to={`/stocks/${code}`}
-                      className="rounded font-mono text-[10px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
+                      className="rounded font-mono text-[12px] text-brass-strong hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
                     >
                       {code}
                     </Link>
                     <span className="truncate text-[12.5px] font-medium">{latest?.name ?? '—'}</span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">
                     {latest ? (
                       <>
                         <span className="font-mono uppercase text-foreground">{latest.algo_code}</span>
@@ -141,7 +141,7 @@ export default function WatchlistPanel({
                   onClick={() => handleRemove(code)}
                   aria-label={`从自选中移除 ${latest?.name ?? code}`}
                   className={`shrink-0 rounded-md border border-border/70 p-1.5 text-muted-foreground transition-colors hover:border-alert/40 hover:bg-alert/[0.08] hover:text-alert focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    compact ? '' : 'inline-flex items-center gap-1 px-2 text-[10px]'
+                    compact ? '' : 'inline-flex items-center gap-1 px-2 text-[12px]'
                   }`}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -154,29 +154,29 @@ export default function WatchlistPanel({
       )}
 
       {compact && watchlist.length > visible.length && (
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-[12px] text-muted-foreground">
           还有 {watchlist.length - visible.length} 只，进入自选页查看全部。
         </p>
       )}
 
       {hint && (
-        <p role="status" className="mt-2 text-[11px] text-warning">
+        <p role="status" className="mt-2 text-[12px] text-warning">
           {hint}
         </p>
       )}
 
       {syncStatus === 'offline' ? (
-        <p role="status" className="mt-2 text-[11px] text-warning">
+        <p role="status" className="mt-2 text-[12px] text-warning">
           服务器同步失败，改动已保存在本机，恢复后会自动重试。
         </p>
       ) : syncStatus === 'syncing' ? (
-        <p className="mt-2 text-[11px] text-muted-foreground">正在同步到服务器…</p>
+        <p className="mt-2 text-[12px] text-muted-foreground">正在同步到服务器…</p>
       ) : syncStatus === 'synced' ? (
-        <p className="mt-2 text-[11px] text-muted-foreground">已同步到服务器</p>
+        <p className="mt-2 text-[12px] text-muted-foreground">已同步到服务器</p>
       ) : null}
 
       {latestSignalDate && !error && (
-        <p className="mt-3 text-[11px] text-muted-foreground">
+        <p className="mt-3 text-[12px] text-muted-foreground">
           最近命中日 <span className="num text-foreground">{latestSignalDate}</span>
         </p>
       )}

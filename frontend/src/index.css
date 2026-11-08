@@ -410,7 +410,7 @@ p {
 /* 小号全大写标签：英文 + 数字，用于分区编号与元信息 */
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -427,7 +427,7 @@ p {
 }
 
 .kicker {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.12em;
   color: var(--color-muted-foreground);
@@ -494,7 +494,7 @@ p {
 /* 序号：01 / 02 / 03 —— 仪表盘式的分区标记 */
 .section-index {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.14em;
   color: var(--color-brass);
@@ -705,7 +705,7 @@ select optgroup {
 
 .btn-sm {
   padding: 0.3rem 0.55rem;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   border-radius: 8px;
 }
 
@@ -732,7 +732,7 @@ select optgroup {
   border: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-muted) 60%, transparent);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--color-muted-foreground);
   transition:
@@ -917,6 +917,15 @@ input[type="range"]::-moz-range-thumb {
     scroll-behavior: auto;
   }
 
+  /* 兜底：减弱动效覆盖所有 CSS 动画/过渡（图表入场另由 isAnimationActive 关闭） */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
   .skeleton {
     animation: none;
   }
@@ -945,7 +954,7 @@ input[type="range"]::-moz-range-thumb {
 
 .recharts-tooltip-label {
   color: var(--color-muted-foreground) !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
   margin-bottom: 2px !important;
 }
 
@@ -967,7 +976,7 @@ input[type="range"]::-moz-range-thumb {
 
 .recharts-legend-item-text {
   color: var(--color-muted-foreground) !important;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .recharts-surface:focus {
@@ -1052,7 +1061,8 @@ input[type="range"]::-moz-range-thumb {
   inset: 0;
   z-index: 200;
   overflow: hidden;
-  cursor: pointer;
+  /* U08：不拦截首屏交互，点击穿透到页面 */
+  pointer-events: none;
   background: #0b0d0c;
   -webkit-user-select: none;
   user-select: none;
@@ -1189,31 +1199,6 @@ input[type="range"]::-moz-range-thumb {
   white-space: nowrap;
 }
 
-/* 页面归位：从「微放大 + 模糊」落回正常，与幕布分离重叠进行 */
 .app-shell {
   min-height: 100vh;
-}
-
-.app-shell.is-intro-pending {
-  opacity: 0;
-  transform: scale(1.012) translateY(8px);
-  filter: blur(8px);
-}
-
-.app-shell.is-intro-ready {
-  opacity: 1;
-  transform: none;
-  filter: none;
-  transition:
-    opacity 0.9s var(--ease-out-quart) 0.05s,
-    transform 1.1s var(--ease-out-expo) 0.05s,
-    filter 0.9s var(--ease-out-quart) 0.05s;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-shell.is-intro-pending {
-    opacity: 1;
-    transform: none;
-    filter: none;
-  }
 }

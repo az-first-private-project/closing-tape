@@ -123,7 +123,13 @@ def test_freshness_lists_datasets(client):
 def test_jobs(client):
     resp = client.get("/api/v1/meta/jobs?limit=5")
     assert resp.status_code == 200
-    assert "items" in resp.json()
+    body = resp.json()
+    assert "items" in body
+    assert {"total", "has_more", "page", "page_size"} <= set(body)
+    assert body["page"] == 1
+    assert body["page_size"] == 5
+    assert body["total"] >= len(body["items"])
+    assert body["has_more"] == (len(body["items"]) < body["total"])
 
 
 # ============================================================
@@ -142,6 +148,16 @@ def test_dashboard_has_scores(client):
     assert all(0 <= s["composite_score"] <= 10 for s in scored)
     assert body["freshness"], "仪表盘应带新鲜度"
 
+    # C1：三个截断数组的 total_matching 必须等于 sectors 全量数
+    assert body["heatmap_data"] and len(body["heatmap_data"]) <= 50
+    assert body["heatmap_total_matching"] == len(body["sectors"])
+    assert body["top_sectors_total_matching"] == len(body["sectors"])
+    assert body["bottom_sectors_total_matching"] == len(body["sectors"])
+    assert len(body["top_sectors"]) <= 10
+    assert len(body["bottom_sectors"]) <= 10
+    if body["report"] is not None:
+        assert "structured" in body["report"], "日报应带结构化结论字段（历史行可为 null）"
+
 
 def test_sector_detail(client):
     sectors = client.get("/api/v1/market/dashboard").json()["sectors"]
@@ -151,6 +167,9 @@ def test_sector_detail(client):
     body = resp.json()
     assert body["sector_code"] == code
     assert "recent_trend" in body
+    # C1：成员截断到 200 条，全量数另给
+    assert body["members_total_matching"] == body["total_matching"]
+    assert body["members_total_matching"] >= len(body["members"])
 
 
 def test_stock_detail_and_kline(client):
@@ -172,6 +191,12 @@ def test_stock_detail_and_kline(client):
     body = resp.json()
     assert body["code"] == code
     assert body["latest"]["close"] is not None
+    assert body["sectors_total_matching"] >= len(body["sectors"])
+
+    search = client.get("/api/v1/stocks/search", params={"q": code, "limit": 5}).json()
+    assert {"total", "has_more", "page", "page_size"} <= set(search)
+    assert search["page"] == 1 and search["page_size"] == 5
+    assert any(item["code"] == code.zfill(6) for item in search["items"])
 
     kline = client.get(f"/api/v1/stocks/{code}/kline?limit=60")
     assert kline.status_code == 200
@@ -238,6 +263,19 @@ def test_stock_not_found_uses_unified_error(client):
     body = resp.json()
     assert body["ok"] is False
     assert body["error"]["code"] == "NOT_FOUND"
+    # C2：suggestion 为可选字段，无建议时不得凭空出现
+    assert "suggestion" not in body["error"]
+
+
+def test_data_not_ready_error_carries_suggestion(client):
+    """C2：数据未就绪时 error.suggestion 与 detail.next_action 同时可读。"""
+    resp = client.get("/api/v1/market/temperature", params={"trade_date": "2000-01-01"})
+    assert resp.status_code == 409, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "DATA_NOT_READY"
+    assert error["detail"]["trade_date"] == "2000-01-01"
+    assert error["detail"]["next_action"]
+    assert error["suggestion"] == error["detail"]["next_action"]
 
 
 # ============================================================
@@ -261,6 +299,9 @@ def test_algo_consensus(client):
     assert body["total_algos_evaluated"] >= 0
     assert body["min_count"] == 2
     assert body["freshness"]["dataset"] == "algo_run"
+    assert body["total"] >= len(body["items"])
+    assert body["page"] == 1 and body["page_size"] == 100
+    assert body["has_more"] == (len(body["items"]) < body["total"])
     for item in body["items"]:
         assert item["hit_count"] >= 2
         assert item["hit_count"] == len(item["algos"])
@@ -318,6 +359,9 @@ def test_algo_hits_returns_current_hits_and_dedupes(client):
     body = resp.json()
     assert body["days"] == 10
     assert body["freshness"]["dataset"] == "algo_run"
+    assert body["total"] == len(body["items"])
+    assert body["has_more"] is False and body["page"] == 1
+    assert body["page_size"] == max(1, len(body["items"]))
 
     items = body["items"]
     assert any(
@@ -391,6 +435,41 @@ def test_algo_result_is_reproducible(client):
     assert first["count"] == second["count"]
     assert [d["code"] for d in first["data"]] == [d["code"] for d in second["data"]]
     assert first["run"]["run_id"] == second["run"]["run_id"], "相同参数应命中同一 run"
+    assert first["total"] >= first["count"]
+    assert first["page"] == 1 and first["page_size"] == 10
+    assert first["has_more"] == (first["count"] < first["total"])
+
+
+def test_algo_result_offset_keeps_same_run(client):
+    """C1：offset 只在该 run 已保存的信号内截取，不改变缓存键与 run_id。"""
+    first = client.get("/api/v1/algo/a3?limit=5&offset=0").json()
+    assert first["total"] == first["count"], "一个 run 最多保存 limit 条信号"
+    if first["total"] >= 3:
+        second = client.get("/api/v1/algo/a3?limit=5&offset=2").json()
+        assert second["run"]["run_id"] == first["run"]["run_id"]
+        assert [row["code"] for row in second["data"]] == [
+            row["code"] for row in first["data"]
+        ][2:]
+        assert second["total"] == first["total"]
+        assert second["has_more"] is False
+
+    beyond = client.get("/api/v1/algo/a3?limit=5&offset=5").json()
+    assert beyond["run"]["run_id"] == first["run"]["run_id"]
+    assert beyond["data"] == []
+    assert beyond["count"] == 0
+    assert beyond["total"] == first["total"]
+    assert beyond["has_more"] is False
+
+
+def test_algo_runs_pagination_meta(client):
+    """C1 + 契约 5.3：历史 run 带分页元信息，代码键是 algo 而非 algo_code。"""
+    body = client.get("/api/v1/algo/a3/runs?limit=2&offset=0").json()
+    assert {"total", "has_more", "page", "page_size"} <= set(body)
+    assert body["page"] == 1 and body["page_size"] == 2
+    assert body["total"] >= len(body["items"])
+    for item in body["items"]:
+        assert item["algo"] == "a3"
+        assert "algo_code" not in item
 
 
 def test_algo_pe_max_really_changes_result(client):
@@ -411,12 +490,17 @@ def test_algo_a4_excludes_negative_pe(client):
 
 
 def test_algo_csv_export(client):
-    resp = client.get("/api/v1/algo/a3/export.csv")
+    # C1：导出必须使用与展示相同的 limit，命中同一 run、行数一致
+    display = client.get("/api/v1/algo/a3?limit=7").json()
+    resp = client.get("/api/v1/algo/a3/export.csv?limit=7")
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
     assert "attachment" in resp.headers.get("content-disposition", "")
+    assert display["run"]["run_id"][:8] in resp.headers["content-disposition"]
     text = resp.content.decode("utf-8-sig")
-    assert "代码" in text.splitlines()[0]
+    rows = list(csv.reader(text.splitlines()))
+    assert "代码" in rows[0]
+    assert len(rows) - 1 == display["count"]
 
 
 # ============================================================
@@ -501,11 +585,22 @@ def test_backtest_runs_and_persists(client):
     assert trades_body["bt_id"] == body["bt_id"]
     assert trades_body["algo_code"] == "a3"
     assert trades_body["count"] == len(body["trades"])
+    assert trades_body["total"] == len(body["trades"])
     if body["trades"]:
         code = body["trades"][0]["code"]
         filtered = client.get(f"/api/v1/backtest/{body['bt_id']}/trades?code={code}").json()
         assert filtered["count"] > 0
+        assert filtered["total"] == trades_body["total"]
+        assert filtered["count"] == len(filtered["items"])
         assert all(t["code"].zfill(6) == code for t in filtered["items"])
+
+        # C1：导出接受同一 code 过滤，成交 block 与展示范围一致
+        export_filtered = client.get(
+            f"/api/v1/backtest/{body['bt_id']}/export.csv?code={code}"
+        )
+        assert export_filtered.status_code == 200
+        filtered_text = export_filtered.content.decode("utf-8-sig")
+        assert f"# filtered by code={code.zfill(6)}" in filtered_text
     missing = client.get("/api/v1/backtest/BT-NOT-EXIST/trades")
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "NOT_FOUND"

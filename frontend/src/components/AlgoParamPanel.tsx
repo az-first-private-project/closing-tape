@@ -18,6 +18,12 @@ interface AlgoParamPanelProps {
   /** 执行算法（useMutation 触发） */
   onExecute: () => void
   isRunning: boolean
+  /** 面板值与当前展示 run 的快照是否不一致（U01） */
+  dirty?: boolean
+  /** 不一致的参数 key，用于明确提示 */
+  changedKeys?: string[]
+  /** 显式选择的交易日与展示结果交易日不一致 */
+  dateMismatch?: boolean
 }
 
 /**
@@ -132,7 +138,7 @@ function ParamControl({
           />
         )}
         {hasRange && (
-          <span className="num whitespace-nowrap text-[10px] text-muted-foreground">
+          <span className="num whitespace-nowrap text-[12px] text-muted-foreground">
             {fmtRangeBound(schema.min)}–{fmtRangeBound(schema.max)}
           </span>
         )}
@@ -148,6 +154,9 @@ export default function AlgoParamPanel({
   onReset,
   onExecute,
   isRunning,
+  dirty = false,
+  changedKeys = [],
+  dateMismatch = false,
 }: AlgoParamPanelProps) {
   return (
     <div className="card space-y-4 p-4">
@@ -158,22 +167,36 @@ export default function AlgoParamPanel({
           <span className="eyebrow">Parameters</span>
         </div>
         <h3 className="mt-1.5 text-[14px] font-semibold">参数面板</h3>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">{algo.full_desc}</p>
+        <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{algo.full_desc}</p>
       </div>
+
+      {dirty && (
+        <div
+          className="rounded-lg border border-warning/45 bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-warning"
+          role="status"
+        >
+          参数已修改
+          {changedKeys.length > 0 && (
+            <span className="num">（{changedKeys.join('、')}）</span>
+          )}
+          {dateMismatch && <span>，交易日也已切换</span>}
+          ：下方展示的仍是上一次 run 的结果；点击「执行算法」按新参数重算，导出与信号依据仍使用旧 run 快照。
+        </div>
+      )}
 
       {/* schema 驱动控件 */}
       <div className="space-y-3">
         {algo.params_schema.map((schema) => (
           <div key={schema.key}>
-            <label className="mb-1.5 block text-[11px] font-medium" title={schema.key}>
+            <label className="mb-1.5 block text-[12px] font-medium" title={schema.key}>
               {schema.label}
-              <span className="ml-1.5 font-mono text-[9px] tracking-wide text-muted-foreground/70">{schema.key}</span>
+              <span className="ml-1.5 font-mono text-[12px] tracking-wide text-muted-foreground/70">{schema.key}</span>
             </label>
             <ParamControl schema={schema} values={values} onChange={onChange} />
           </div>
         ))}
         {algo.params_schema.length === 0 && (
-          <p className="text-[11px] text-muted-foreground">该算法无可调参数。</p>
+          <p className="text-[12px] text-muted-foreground">该算法无可调参数。</p>
         )}
       </div>
 
@@ -189,7 +212,7 @@ export default function AlgoParamPanel({
           ) : (
             <Play className="w-4 h-4" />
           )}
-          {isRunning ? '执行中…' : '执行算法'}
+          {isRunning ? '执行中…' : dirty ? '按新参数执行' : '执行算法'}
         </button>
         <button
           onClick={onReset}
@@ -199,7 +222,7 @@ export default function AlgoParamPanel({
           <RotateCcw className="w-3.5 h-3.5" />
           恢复默认参数
         </button>
-        <p className="text-center text-[10px] text-muted-foreground/80">修改参数不会自动请求，点击「执行算法」后生效</p>
+        <p className="text-center text-[12px] text-muted-foreground/80">修改参数不会自动请求，点击「执行算法」后生效</p>
       </div>
     </div>
   )

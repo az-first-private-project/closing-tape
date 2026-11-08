@@ -16,6 +16,7 @@ import {
 } from '../types/algo'
 import { fmtMetricValue } from '../lib/format'
 import DataTable, { type DataTableColumn } from './DataTable'
+import RangeNotice from './RangeNotice'
 import SignalExplanation from './SignalExplanation'
 
 interface Props {
@@ -31,6 +32,10 @@ interface Props {
   signalSchema?: number | null
   /** B4/B5 的 run 级市场门槛（0 信号时解释原因） */
   marketGate?: MarketGate | null
+  /** 本 run 保存的信号总数（C1 total）；缺省等于当前展示条数 */
+  total?: number | null
+  /** 额外范围说明（如 run 按 limit 截断） */
+  rangeNote?: string
 }
 
 /** 无综合评分时，「得分」列展示各策略的排序指标 */
@@ -166,6 +171,8 @@ export default function AlgoDataTable({
   params,
   signalSchema,
   marketGate,
+  total,
+  rangeNote,
 }: Props) {
   const explainable = supportsSignalExplanation(algo)
   const gateNotice = marketGateNotice(algo, marketGate)
@@ -268,9 +275,13 @@ export default function AlgoDataTable({
             : undefined
         }
         footer={
-          <span>
-            共 {data.length} 条 · 动态指标 {metricKeys.length} 列 · 点击行可查看个股详情
-            {explainable && ' · 点击左侧箭头查看信号依据'}
+          <span className="flex flex-wrap items-center gap-x-2">
+            <RangeNotice shown={data.length} total={total ?? data.length} unit="条信号" />
+            {rangeNote && <span>· {rangeNote}</span>}
+            <span>· 动态指标 {metricKeys.length} 列</span>
+            <span>· 点击行可查看个股详情</span>
+            {explainable && <span>· 点击左侧箭头查看信号依据</span>}
+            <span>· 导出 CSV 仅包含当前展示的 {data.length} 条</span>
           </span>
         }
       />

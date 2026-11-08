@@ -176,7 +176,11 @@ async def handle_unexpected(request: Request, exc: Exception):
         status_code=500,
         content={
             "ok": False,
-            "error": {"code": "INTERNAL", "message": f"{type(exc).__name__}: {exc}"},
+            "error": {
+                "code": "INTERNAL",
+                "message": f"{type(exc).__name__}: {exc}",
+                "suggestion": "请稍后重试；若持续失败，请携带 request_id 联系管理员",
+            },
             "request_id": request_id,
         },
     )

@@ -12,6 +12,10 @@ import { useFreshness } from '../hooks/useFreshness'
 import { useJobs } from '../hooks/useJobs'
 import FreshnessBadge from '../components/FreshnessBadge'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
+import PaginationBar from '../components/PaginationBar'
+import PageHeader from '../components/PageHeader'
+import SectionHeader from '../components/SectionHeader'
+import Disclaimer from '../components/Disclaimer'
 import {
   EmptyState,
   ErrorState,
@@ -58,7 +62,7 @@ const JOB_COLUMNS: DataTableColumn<Job>[] = [
     header: '数据集',
     sortable: true,
     value: (row) => row.dataset,
-    render: (row) => <span className="font-mono text-[11px] text-muted-foreground">{row.dataset ?? '—'}</span>,
+    render: (row) => <span className="font-mono text-[12px] text-muted-foreground">{row.dataset ?? '—'}</span>,
   },
   {
     key: 'status',
@@ -67,7 +71,7 @@ const JOB_COLUMNS: DataTableColumn<Job>[] = [
     align: 'center',
     value: (row) => row.status,
     render: (row) => (
-      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full border ${statusBadgeClass(row.status)}`}>
+      <span className={`inline-block text-[12px] px-2 py-0.5 rounded-full border ${statusBadgeClass(row.status)}`}>
         {statusLabel(row.status)}
       </span>
     ),
@@ -127,14 +131,18 @@ const JOB_COLUMNS: DataTableColumn<Job>[] = [
   },
 ]
 
+const JOB_PAGE_SIZE = 50
+
 export default function JobsPage() {
   const [paused, setPaused] = useState(false)
   const [statusFilter, setStatusFilter] = useState('')
+  const [page, setPage] = useState(1)
 
   const freshnessQuery = useFreshness()
   const jobsQuery = useJobs(
     {
-      limit: 50,
+      limit: JOB_PAGE_SIZE,
+      offset: (page - 1) * JOB_PAGE_SIZE,
       status: statusFilter || undefined,
     },
     paused,
@@ -142,7 +150,10 @@ export default function JobsPage() {
   const showFreshnessSkeleton = useDelayedFlag(freshnessQuery.isLoading)
   const showJobsSkeleton = useDelayedFlag(jobsQuery.isLoading)
 
-  const jobs = jobsQuery.data ?? []
+  const jobs = jobsQuery.data?.items ?? []
+  const jobsTotal = jobsQuery.data?.total ?? jobs.length
+  const totalPages = Math.max(1, Math.ceil(jobsTotal / JOB_PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
   const failedCount = useMemo(() => jobs.filter((job) => job.status === 'failed').length, [jobs])
 
   return (
@@ -153,24 +164,25 @@ export default function JobsPage() {
       className="max-w-7xl mx-auto px-4 py-6 space-y-6"
     >
       {/* ========== 标题栏 ========== */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="rise">
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="h-px w-6 bg-brass" />
-            <span className="eyebrow">Pipeline Monitor</span>
-          </div>
-          <h1 className="page-title mt-2.5">任务监控</h1>
-          <p className="mt-2 text-[12px] text-muted-foreground">
-            最近 {jobs.length} 条采集/策略任务
-            {failedCount > 0 && <span className="text-alert"> · 其中失败 {failedCount} 条</span>}
-            {' · '}
-            {paused ? '自动刷新已暂停' : '每 30 秒自动刷新'}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <PageHeader
+        eyebrow="Pipeline Monitor"
+        title="任务监控"
+        description={
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span>第 {currentPage} / {totalPages} 页</span>
+            {failedCount > 0 && <span className="text-alert">本页失败 {failedCount} 条</span>}
+            <span aria-hidden="true">·</span>
+            <span>{paused ? '自动刷新已暂停' : '每 30 秒自动刷新'}</span>
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
+            onChange={(event) => {
+              setStatusFilter(event.target.value)
+              setPage(1)
+            }}
             className="field !h-9 !w-auto cursor-pointer !py-0 pr-2 text-[12px]"
             aria-label="按状态筛选任务"
           >
@@ -198,12 +210,13 @@ export default function JobsPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${jobsQuery.isFetching ? 'animate-spin' : ''}`} />
             刷新{jobsQuery.isFetching ? '中…' : ''}
           </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* ========== 数据集新鲜度总览 ========== */}
       <div className="space-y-2">
-        <h2 className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground">数据新鲜度总览</h2>
+        <SectionHeader index="01" title="数据新鲜度总览" hint="每个数据集最后成功时间 / 覆盖率 / 异常数" />
         {freshnessQuery.isLoading ? (
           <div
             aria-busy="true"
@@ -220,7 +233,7 @@ export default function JobsPage() {
 
       {/* ========== 任务表 ========== */}
       <div className="space-y-2">
-        <h2 className="font-mono text-[10px] tracking-[0.16em] text-muted-foreground">采集 / 策略任务</h2>
+        <SectionHeader index="02" title="采集 / 策略任务" hint="按开始时间倒序；导出仅当前页" />
         {jobsQuery.isLoading ? (
           <div
             aria-busy="true"
@@ -236,25 +249,37 @@ export default function JobsPage() {
             description="采集任务运行后，这里会展示每次任务的耗时、行数、失败数与错误摘要。"
           />
         ) : (
-          <DataTable
-            columns={JOB_COLUMNS}
-            rows={jobs}
-            rowKey={(row) => row.job_id}
-            initialSort={{ key: 'started_at', direction: 'desc' }}
-            csvFilename="gfna_jobs.csv"
-            maxHeight="640px"
-            footer={
-              <span>
-                共 {jobs.length} 条{jobsQuery.isFetching ? ' · 正在刷新…' : ''}
-              </span>
-            }
-          />
+          <>
+            <DataTable
+              columns={JOB_COLUMNS}
+              rows={jobs}
+              rowKey={(row) => row.job_id}
+              initialSort={{ key: 'started_at', direction: 'desc' }}
+              csvFilename="gfna_jobs.csv"
+              maxHeight="640px"
+              total={jobsTotal}
+              rangeNote={`第 ${currentPage} / ${totalPages} 页`}
+              footer={
+                <span className="flex flex-wrap items-center gap-x-2">
+                  <span>导出 CSV 仅包含第 {currentPage} 页这 {jobs.length} 条</span>
+                  {jobsQuery.isFetching && <span>· 正在刷新…</span>}
+                </span>
+              }
+            />
+            {totalPages > 1 && (
+              <PaginationBar
+                page={currentPage}
+                totalPages={totalPages}
+                total={jobsTotal}
+                onPageChange={setPage}
+                compact
+              />
+            )}
+          </>
         )}
       </div>
 
-      <p className="border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
-        任务数据来自后端 meta_jobs / 采集编排记录；若某个数据集长时间未成功，请检查数据源可用性与网络环境。
-      </p>
+      <Disclaimer extraOnly extra="任务数据来自后端 meta_jobs / 采集编排记录；若某个数据集长时间未成功，请检查数据源可用性与网络环境。" />
     </motion.div>
   )
 }

@@ -248,7 +248,10 @@ export interface SectorDetail {
     sentiment: LeaderStock[]
   }
   recent_trend: SectorTrendPoint[]
+  /** 最多返回 200 条；完整数量见 members_total_matching */
   members: SectorMember[]
+  /** 该日有效成分的全量命中数（C1） */
+  members_total_matching?: number | null
 }
 
 /** 市场温度子项（T3；raw 单位见 unit） */

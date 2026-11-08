@@ -36,7 +36,7 @@ export default function FilterTabs({ active, onChange }: FilterTabsProps) {
     <div className="border-b border-border/70">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="fade-right flex items-stretch gap-1 overflow-x-auto scrollbar-thin">
-          <span className="hidden shrink-0 items-center pr-3 font-mono text-[10px] tracking-[0.18em] text-muted-foreground/70 sm:flex">
+          <span className="hidden shrink-0 items-center pr-3 font-mono text-[12px] tracking-[0.18em] text-muted-foreground/70 sm:flex">
             SOURCE
           </span>
 

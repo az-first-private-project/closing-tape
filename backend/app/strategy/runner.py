@@ -643,10 +643,21 @@ async def get_run(run_id: str) -> dict | None:
         )
 
 
+async def count_runs(algo_code: str, include_backtest: bool = False) -> int:
+    """历史 run 总数（C1：配合 ``limit / offset`` 计算 has_more）。"""
+    spec = strat.get_spec(algo_code)
+    statement = select(func.count()).select_from(StgRun).where(StgRun.algo_code == spec.code)
+    if not include_backtest:
+        statement = statement.where(StgRun.is_backtest.is_(False))
+    async with session_scope() as db:
+        return int((await db.execute(statement)).scalar_one() or 0)
+
+
 async def list_runs(
     algo_code: str,
     limit: int = 10,
     include_backtest: bool = False,
+    offset: int = 0,
 ) -> list[dict]:
     """历史 run 列表（契约 5.3，不含信号明细）。
 
@@ -657,13 +668,14 @@ async def list_runs(
     spec = strat.get_spec(algo_code)
     try:
         count = max(1, min(int(limit), 100))
+        start = max(0, int(offset))
     except (TypeError, ValueError):
-        raise InvalidParamError(f"limit 必须是整数，收到: {limit!r}") from None
+        raise InvalidParamError(f"limit/offset 必须是整数，收到: {limit!r}/{offset!r}") from None
 
     statement = select(StgRun).where(StgRun.algo_code == spec.code)
     if not include_backtest:
         statement = statement.where(StgRun.is_backtest.is_(False))
-    statement = statement.order_by(StgRun.created_at.desc()).limit(count)
+    statement = statement.order_by(StgRun.created_at.desc()).offset(start).limit(count)
 
     async with session_scope() as db:
         result = await db.execute(statement)
@@ -699,5 +711,6 @@ __all__ = [
     "get_cached_run",
     "get_run",
     "list_runs",
+    "count_runs",
     "superseded_run_ids",
 ]

@@ -65,7 +65,13 @@ def row(
 
 def test_empty_input_returns_empty_board():
     result = build_consensus([])
-    assert result == {"items": [], "total_algos_evaluated": 0}
+    assert result["items"] == []
+    assert result["total_algos_evaluated"] == 0
+    # C1 追加式分页字段：空板也要给出诚实的 total/has_more
+    assert result["total"] == 0
+    assert result["has_more"] is False
+    assert result["page"] == 1
+    assert result["page_size"] == 100
 
 
 def test_single_strategy_below_min_count_keeps_evaluated_count():

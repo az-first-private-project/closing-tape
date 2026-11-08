@@ -5,7 +5,7 @@
  * 参数敏感性：rebalance_days × max_positions 矩阵 → POST /backtest/{algo_code}/grid
  * 两个标签页共用同一份回测结果视图（BacktestResultView）。
  */
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
 import { Download, FlaskConical } from 'lucide-react'
 import { useBacktest } from '../hooks/useBacktest'
 import { downloadBacktestCsv } from '../api/backtest'
@@ -20,6 +20,11 @@ interface BacktestPanelProps {
   algoName?: string
   /** 当前参数面板里的策略参数快照，回测时原样传给后端 */
   strategyParams: AlgoParams
+  /** 参数面板与上方展示 run 是否不一致（U01） */
+  panelDirty?: boolean
+  changedKeys?: string[]
+  /** 上方展示结果的 run_id，用于明确回测参数与结果的差异 */
+  resultRunId?: string | null
 }
 
 type PanelTab = 'single' | 'grid'
@@ -37,7 +42,14 @@ function defaultStartDate(): string {
   return localDateString(date)
 }
 
-export default function BacktestPanel({ algoCode, algoName, strategyParams }: BacktestPanelProps) {
+export default function BacktestPanel({
+  algoCode,
+  algoName,
+  strategyParams,
+  panelDirty = false,
+  changedKeys = [],
+  resultRunId,
+}: BacktestPanelProps) {
   const mutation = useBacktest()
 
   const [tab, setTab] = useState<PanelTab>('single')
@@ -85,11 +97,20 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
   }
 
   const tabClass = (active: boolean) =>
-    `rounded-[6px] px-2.5 py-1 text-[10px] font-medium transition-all duration-300 ${
+    `rounded-[6px] px-2.5 py-1 text-[12px] font-medium transition-all duration-300 ${
       active
         ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)] ring-1 ring-border/70'
         : 'text-muted-foreground hover:text-foreground'
     }`
+
+  /** 标签页键盘操作：左右方向键切换并移动焦点 */
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const next: PanelTab = tab === 'single' ? 'grid' : 'single'
+    setTab(next)
+    document.getElementById(`bt-tab-${next}`)?.focus()
+  }
 
   return (
     <div className="card p-4 space-y-4">
@@ -103,17 +124,25 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
         <div className="flex items-center gap-2">
           <div role="tablist" aria-label="回测视图" className="flex gap-0.5 rounded-lg border border-border/70 bg-muted/25 p-0.5">
             <button
+              id="bt-tab-single"
               role="tab"
               aria-selected={tab === 'single'}
+              aria-controls="bt-panel-single"
+              tabIndex={tab === 'single' ? 0 : -1}
               onClick={() => setTab('single')}
+              onKeyDown={handleTabKeyDown}
               className={tabClass(tab === 'single')}
             >
               单次回测
             </button>
             <button
+              id="bt-tab-grid"
               role="tab"
               aria-selected={tab === 'grid'}
+              aria-controls="bt-panel-grid"
+              tabIndex={tab === 'grid' ? 0 : -1}
               onClick={() => setTab('grid')}
+              onKeyDown={handleTabKeyDown}
               className={tabClass(tab === 'grid')}
             >
               参数敏感性
@@ -132,8 +161,30 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
         </div>
       </div>
 
+      {panelDirty && (
+        <div
+          className="rounded-lg border border-warning/45 bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-warning"
+          role="status"
+        >
+          左侧参数面板已修改
+          {changedKeys.length > 0 && <span className="num">（{changedKeys.join('、')}）</span>}
+          ：回测将使用<b>面板当前参数</b>；上方选股结果仍对应
+          {resultRunId ? (
+            <span className="font-mono"> run …{resultRunId.slice(-10)}</span>
+          ) : (
+            ' 上一次 run'
+          )}
+          。
+        </div>
+      )}
+
       {/* 单次回测 */}
-      <div className={tab === 'single' ? 'space-y-4' : 'hidden'}>
+      <div
+        id="bt-panel-single"
+        role="tabpanel"
+        aria-labelledby="bt-tab-single"
+        className={tab === 'single' ? 'space-y-4' : 'hidden'}
+      >
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <label className="text-xs space-y-1">
             <span className="text-muted-foreground">起始日期</span>
@@ -204,7 +255,12 @@ export default function BacktestPanel({ algoCode, algoName, strategyParams }: Ba
       </div>
 
       {/* 参数敏感性矩阵 */}
-      <div className={tab === 'grid' ? 'block' : 'hidden'}>
+      <div
+        id="bt-panel-grid"
+        role="tabpanel"
+        aria-labelledby="bt-tab-grid"
+        className={tab === 'grid' ? 'block' : 'hidden'}
+      >
         <SensitivityMatrix
           algoCode={algoCode}
           strategyParams={strategyParams}

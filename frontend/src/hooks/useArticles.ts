@@ -17,6 +17,7 @@ import {
   fetchAutoCrawlStatus,
   type AutoCrawlState,
 } from '../api/news'
+import { recordStatus } from '../lib/statusFeed'
 
 /** 同一浏览器会话 10 分钟内最多触发一次自动抓取 */
 const AUTO_CRAWL_KEY = 'gfna:news-auto-crawl-at'
@@ -135,8 +136,18 @@ export function useAutoCrawl() {
           void queryClient.invalidateQueries({ queryKey: ['stats'] })
           void queryClient.invalidateQueries({ queryKey: ['news-sources'] })
         }
-      } catch {
-        if (!cancelled) setCrawling(false)
+      } catch (error) {
+        if (!cancelled) {
+          setCrawling(false)
+          recordStatus({
+            level: 'warning',
+            title: '新闻抓取状态检查失败',
+            detail: error instanceof Error ? error.message : '请求失败',
+            code: 'AUTO_CRAWL',
+            suggestion: '已有新闻不受影响；可刷新页面重试。',
+            path: '/',
+          })
+        }
       }
     }
 
@@ -148,8 +159,18 @@ export function useAutoCrawl() {
           setCrawling(true)
           timer = setTimeout(poll, 2500)
         }
-      } catch {
-        if (!cancelled) setCrawling(false)
+      } catch (error) {
+        if (!cancelled) {
+          setCrawling(false)
+          recordStatus({
+            level: 'warning',
+            title: '自动抓取未能启动',
+            detail: error instanceof Error ? error.message : '请求失败',
+            code: 'AUTO_CRAWL',
+            suggestion: '已有新闻不受影响；可刷新页面重试。',
+            path: '/',
+          })
+        }
       }
     }
 

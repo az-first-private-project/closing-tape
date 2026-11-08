@@ -29,14 +29,14 @@ const STATUS_META: Record<FreshnessStatus, StatusMeta> = {
   stale: {
     label: '滞后',
     icon: Clock,
-    badge: 'border-warning/40 bg-warning/10 text-warning',
-    iconClass: 'text-warning',
+    badge: 'border-brass/40 bg-brass/10 text-brass-strong dark:text-brass',
+    iconClass: 'text-brass-strong dark:text-brass',
   },
   quality_failed: {
     label: '质量异常',
     icon: AlertTriangle,
-    badge: 'border-alert/40 bg-alert/10 text-alert',
-    iconClass: 'text-alert',
+    badge: 'border-warning/45 bg-warning/10 text-warning',
+    iconClass: 'text-warning',
   },
   error: {
     label: '失败',
@@ -112,10 +112,10 @@ export default function FreshnessBadge({
                   <Icon className={`w-3.5 h-3.5 shrink-0 ${meta.iconClass}`} />
                   <span className="text-[13px] font-medium truncate">{item.display_name}</span>
                 </div>
-                <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border ${meta.badge}`}>{meta.label}</span>
+                <span className={`shrink-0 text-[12px] px-2 py-0.5 rounded-full border ${meta.badge}`}>{meta.label}</span>
               </div>
-              <p className="mt-1 text-[10px] text-muted-foreground/80 font-mono truncate tracking-wide">{item.dataset}</p>
-              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-[11px]">
+              <p className="mt-1 text-[12px] text-muted-foreground/80 font-mono truncate tracking-wide">{item.dataset}</p>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-[12px]">
                 <div>
                   <dt className="text-muted-foreground">最后成功</dt>
                   <dd className="num mt-0.5 text-foreground">{fmtDateTime(item.last_success_at)}</dd>
@@ -138,7 +138,7 @@ export default function FreshnessBadge({
                 </div>
               </dl>
               {item.error && (
-                <p className="mt-2 text-[11px] text-alert break-words line-clamp-3" title={item.error}>
+                <p className="mt-2 text-[12px] text-alert break-words line-clamp-3" title={item.error}>
                   {item.error}
                 </p>
               )}
@@ -151,7 +151,7 @@ export default function FreshnessBadge({
 
   return (
     <div className={`flex flex-wrap items-center gap-2 ${className}`}>
-      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.16em] text-muted-foreground/80 uppercase">
+      <span className="inline-flex items-center gap-1.5 font-mono text-[12px] tracking-[0.16em] text-muted-foreground/80 uppercase">
         <Database className="w-3 h-3" />
         {title}
       </span>
@@ -165,7 +165,7 @@ export default function FreshnessBadge({
           <span
             key={item.dataset}
             title={buildTitle(item)}
-            className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-[3px] rounded-full border cursor-help
+            className={`inline-flex items-center gap-1.5 text-[12px] px-2 py-[3px] rounded-full border cursor-help
               transition-colors duration-300 ${meta.badge}`}
           >
             <Icon className="w-3 h-3" />

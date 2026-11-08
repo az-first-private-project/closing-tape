@@ -52,11 +52,11 @@ export function useAlgoRun() {
   })
 }
 
-/** 历史 run 列表（不含明细） */
-export function useAlgoRuns(algoCode: string | null, limit = 10) {
+/** 历史 run 列表（不含明细，C1：items + 分页元信息） */
+export function useAlgoRuns(algoCode: string | null, limit = 10, offset = 0) {
   return useQuery({
-    queryKey: ['algo-runs', algoCode, limit],
-    queryFn: () => fetchAlgoRuns(algoCode as string, limit),
+    queryKey: ['algo-runs', algoCode, limit, offset],
+    queryFn: () => fetchAlgoRuns(algoCode as string, limit, offset),
     enabled: !!algoCode,
     staleTime: 60 * 1000,
   })
@@ -90,11 +90,17 @@ export function useLadder(
 /** 多策略共识榜（默认折叠时不请求；min_count 切换即换 queryKey） */
 export function useConsensus(
   minCount: number,
-  options: { tradeDate?: string; enabled?: boolean } = {},
+  options: { tradeDate?: string; enabled?: boolean; offset?: number; limit?: number } = {},
 ) {
   return useQuery({
-    queryKey: ['algo-consensus', minCount, options.tradeDate ?? ''],
-    queryFn: () => fetchConsensus(minCount, options.tradeDate),
+    queryKey: [
+      'algo-consensus',
+      minCount,
+      options.tradeDate ?? '',
+      options.offset ?? 0,
+      options.limit ?? 100,
+    ],
+    queryFn: () => fetchConsensus(minCount, options.tradeDate, options.limit ?? 100, options.offset ?? 0),
     enabled: options.enabled ?? true,
     staleTime: 60 * 1000,
   })

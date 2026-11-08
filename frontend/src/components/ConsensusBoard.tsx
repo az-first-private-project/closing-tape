@@ -3,7 +3,7 @@
  * =====================
  * 同一只票被多个策略同时命中时按命中策略数排序。
  * - 默认折叠在策略卡片之下（策略天梯 T5 才是首要信息），展开后才请求；
- * - 命中数徽章 ●●●○○ 的填充比例 = 命中数 / 当日已评估策略数，满命中视觉最重；
+ * - 命中数徽章用星标 + 命中/已评估数字，满命中视觉最重；
  * - 命中策略可展开查看该票在各策略里的名次、排序值与 metrics（每策略前 3 项）；
  * - **不展示跨策略平均分**：各策略 score 量纲不同，混算会误导。
  */
@@ -18,6 +18,8 @@ import { getWatchlist, toggleWatch, MAX_WATCHLIST } from '../lib/watchlist'
 import { fmtMetricValue, fmtNumber, fmtPct, fmtScore, pctColor } from '../lib/format'
 import { EmptyState, ErrorState } from './StateViews'
 import FreshnessBadge from './FreshnessBadge'
+import PaginationBar from './PaginationBar'
+import RangeNotice from './RangeNotice'
 import Sparkline from './Sparkline'
 
 /** 命中数徽章：圆点 + 比例色阶（满命中用实心 primary） */
@@ -32,16 +34,16 @@ function HitBadge({ hits, total }: { hits: number; total: number }) {
         : ratio >= 0.35
           ? 'bg-brass/10 text-brass-strong border-brass/30 dark:text-brass'
           : 'bg-muted text-muted-foreground border-border'
-  const dots = '●'.repeat(hits) + '○'.repeat(Math.max(0, safeTotal - hits))
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${tone}`}
       aria-label={`命中 ${hits} / ${safeTotal} 个策略`}
     >
-      <span aria-hidden="true" className="text-[10px] tracking-[0.08em] num">
-        {dots}
-      </span>
-      <span className="text-[11px] font-bold num">
+      <Star
+        aria-hidden="true"
+        className={`h-3.5 w-3.5 ${hits > 0 ? 'fill-current' : ''}`}
+      />
+      <span className="text-[12px] font-bold num">
         {hits}/{safeTotal}
       </span>
     </span>
@@ -62,7 +64,7 @@ function StockSparkline({
     return <span className="inline-block h-[24px] w-[84px]" aria-hidden="true" />
   }
   if (!closes || closes.length === 0) {
-    return <span className="text-[11px] text-muted-foreground">—</span>
+    return <span className="text-[12px] text-muted-foreground">—</span>
   }
   return (
     <Sparkline
@@ -88,7 +90,7 @@ function SampleBadge({
   error: boolean
 }) {
   if (loading) {
-    return <span className="text-[11px] text-muted-foreground">样本统计加载中…</span>
+    return <span className="text-[12px] text-muted-foreground">样本统计加载中…</span>
   }
   const summary = summarizeSample(error ? null : stats)
   const toneClass =
@@ -96,7 +98,7 @@ function SampleBadge({
       ? 'border-warning/40 bg-warning/10 text-warning'
       : 'border-border bg-muted text-muted-foreground'
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+    <div className="flex flex-wrap items-center gap-2 text-[12px]">
       <span
         className={`shrink-0 rounded border px-1.5 py-0.5 ${toneClass}`}
         title="有效样本 = 已成熟且 T+1 可成交；有效样本少于 30 条为低样本"
@@ -130,7 +132,7 @@ function HitDetails({
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-sm font-medium truncate">{hit.algo_name}</p>
-                <p className="text-[11px] text-muted-foreground num">
+                <p className="text-[12px] text-muted-foreground num">
                   {hit.algo_code.toUpperCase()} · 名次 {hit.rank ?? '—'} · 排序值{' '}
                   {hit.score === null ? '—' : hit.score.toFixed(2)}
                 </p>
@@ -139,7 +141,7 @@ function HitDetails({
                 <button
                   type="button"
                   onClick={() => onOpenAlgo(hit.algo_code)}
-                  className="shrink-0 text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  className="shrink-0 text-[12px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                 >
                   选中策略
                 </button>
@@ -151,9 +153,9 @@ function HitDetails({
               error={statsError}
             />
             {Object.keys(hit.metrics).length === 0 ? (
-              <p className="text-[11px] text-muted-foreground">该策略未附带指标</p>
+              <p className="text-[12px] text-muted-foreground">该策略未附带指标</p>
             ) : (
-              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px]">
                 {Object.entries(hit.metrics).map(([key, value]) => (
                   <div key={key} className="flex justify-between gap-2 min-w-0">
                     <dt className="text-muted-foreground truncate" title={key}>
@@ -169,7 +171,7 @@ function HitDetails({
           </div>
         ))}
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[12px] text-muted-foreground">
         仅展示每个命中策略的前 3 个指标键值；各策略评分量纲不同，未做加权或平均。
       </p>
     </div>
@@ -183,13 +185,22 @@ export default function ConsensusBoard({
 }) {
   const [open, setOpen] = useState(false)
   const [minCount, setMinCount] = useState(2)
+  const [page, setPage] = useState(1)
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
   const [watchlist, setWatchlist] = useState<string[]>(() => getWatchlist())
   const [watchHint, setWatchHint] = useState<string | null>(null)
 
-  const query = useConsensus(minCount, { enabled: open })
+  const pageSize = 20
+  const query = useConsensus(minCount, {
+    enabled: open,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  })
   const data = query.data
   const items = data?.items ?? []
+  const total = data?.total ?? items.length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const currentPage = Math.min(page, totalPages)
   const totalAlgos = data?.total_algos_evaluated ?? 0
 
   const ladder = useLadder(60, 20, data?.trade_date, {
@@ -218,7 +229,7 @@ export default function ConsensusBoard({
     const result = toggleWatch(code)
     setWatchlist(getWatchlist())
     if (result.reason === 'limit') {
-      setWatchHint(`自选上限 ${MAX_WATCHLIST} 只，请先在自选列表中移除`)
+      setWatchHint(`自选上限 ${MAX_WATCHLIST} 只，请先在自选页移除`)
     } else if (result.reason === 'storage') {
       setWatchHint('本浏览器不保存自选，刷新后会丢失')
     } else {
@@ -232,11 +243,11 @@ export default function ConsensusBoard({
         <div>
           <h2 id="consensus-title" className="flex items-center gap-2 text-[14px] font-semibold">
             多策略共识榜
-            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[10px] font-normal text-muted-foreground">
+            <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[12px] font-normal text-muted-foreground">
               按命中策略数排序
             </span>
           </h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             同一只票被多个策略同时命中时，按命中策略数排序；命中策略可展开查看该票在各策略里的名次与指标。
           </p>
         </div>
@@ -269,6 +280,7 @@ export default function ConsensusBoard({
                 value={minCount}
                 onChange={(event) => {
                   setMinCount(Number(event.target.value))
+                  setPage(1)
                   setExpandedCode(null)
                 }}
                 className="w-28 accent-primary"
@@ -277,16 +289,24 @@ export default function ConsensusBoard({
               <span className="num font-semibold text-foreground w-5 text-center">{minCount}</span>
             </label>
             {data && (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[12px] text-muted-foreground">
                 数据截至 <span className="num text-foreground">{data.trade_date}</span>
                 {' · '}已评估 <span className="num text-foreground">{totalAlgos}</span> 个策略
               </span>
             )}
-            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            {data && (
+              <RangeNotice
+                shown={items.length}
+                total={total}
+                unit="只标的"
+                note={totalPages > 1 ? `第 ${currentPage} / ${totalPages} 页` : '已全部展示'}
+              />
+            )}
+            <span className="inline-flex items-center gap-1 text-[12px] text-muted-foreground">
               <Info className="w-3 h-3" />
               同一策略当日多次参数 run 命中同一票只算一次
             </span>
-            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1 text-[12px] text-muted-foreground">
               <Info className="w-3 h-3" />
               样本口径：近 60 日信号 · 20 日成熟窗口
               {ladder.data?.trade_date ? `（截至 ${ladder.data.trade_date}）` : ''}
@@ -306,7 +326,7 @@ export default function ConsensusBoard({
             <div className="overflow-x-auto -mx-1">
               <table className="w-full min-w-[960px] text-[12px]">
                 <thead>
-                  <tr className="border-b border-border/70 bg-muted/25 font-mono text-[10px] tracking-[0.05em] text-muted-foreground">
+                  <tr className="border-b border-border/70 bg-muted/25 font-mono text-[12px] tracking-[0.05em] text-muted-foreground">
                     <th className="text-left font-medium py-2 pl-1 min-w-[10rem]">代码 / 名称</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[8.5rem]">命中数</th>
                     <th className="text-left font-medium py-2 px-2 min-w-[6rem]">行业</th>
@@ -330,13 +350,13 @@ export default function ConsensusBoard({
                             <div className="flex items-center gap-2 min-w-0">
                               <Link
                                 to={`/stocks/${item.code}`}
-                                className="font-mono text-[10px] text-brass-strong hover:underline dark:text-brass"
+                                className="font-mono text-[12px] text-brass-strong hover:underline dark:text-brass"
                               >
                                 {item.code}
                               </Link>
                               <span className="font-medium truncate">{item.name}</span>
                             </div>
-                            <div className="text-[11px] text-muted-foreground">
+                            <div className="text-[12px] text-muted-foreground">
                               {item.board ?? '—'} · {item.ownership ?? '—'}
                             </div>
                           </td>
@@ -360,20 +380,21 @@ export default function ConsensusBoard({
                               type="button"
                               onClick={() => setExpandedCode(isExpanded ? null : item.code)}
                               aria-expanded={isExpanded}
-                              className="inline-flex flex-col items-end gap-1 group"
+                              aria-controls={`consensus-detail-${item.code}`}
+                              className="inline-flex flex-col items-end gap-1 group rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <span className="flex flex-wrap justify-end gap-1">
                                 {item.algos.map((hit) => (
                                   <span
                                     key={hit.algo_code}
-                                    className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-border bg-background text-foreground"
+                                    className="text-[12px] font-mono uppercase px-1.5 py-0.5 rounded border border-border bg-background text-foreground"
                                     title={`${hit.algo_name} · 名次 ${hit.rank ?? '—'}`}
                                   >
                                     {hit.algo_code}
                                   </span>
                                 ))}
                               </span>
-                              <span className="text-[11px] text-brass-strong group-hover:underline dark:text-brass">
+                              <span className="text-[12px] text-brass-strong group-hover:underline dark:text-brass">
                                 {isExpanded ? '收起指标' : '查看指标'}
                               </span>
                             </button>
@@ -384,7 +405,7 @@ export default function ConsensusBoard({
                               onClick={() => handleWatch(item.code)}
                               aria-pressed={watched}
                               aria-label={watched ? `取消自选 ${item.name}` : `加入自选 ${item.name}`}
-                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] transition-colors ${
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[12px] transition-colors ${
                                 watched
                                   ? 'border-warning/50 bg-warning/10 text-warning'
                                   : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -396,7 +417,7 @@ export default function ConsensusBoard({
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr className="border-b border-border/60 bg-muted/20">
+                          <tr id={`consensus-detail-${item.code}`} className="border-b border-border/60 bg-muted/20">
                             <td colSpan={8} className="p-3">
                               <HitDetails
                                 item={item}
@@ -416,9 +437,23 @@ export default function ConsensusBoard({
             </div>
           )}
 
-          {watchHint && <p className="text-[11px] text-warning">⚠ {watchHint}</p>}
+          {totalPages > 1 && (
+            <PaginationBar
+              page={currentPage}
+              totalPages={totalPages}
+              total={total}
+              onPageChange={(next) => {
+                setPage(next)
+                setExpandedCode(null)
+              }}
+              unit="只"
+              compact
+            />
+          )}
 
-          <p className="border-t border-border/60 pt-3 text-[10px] leading-relaxed text-muted-foreground">
+          {watchHint && <p className="text-[12px] text-warning">{watchHint}</p>}
+
+          <p className="border-t border-border/60 pt-3 text-[12px] leading-relaxed text-muted-foreground">
             各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。
             共识只说明多策略同时选中，不代表更强收益。30 日走势为未复权收盘价，整页一次批量请求并缓存 5 分钟。
           </p>
@@ -426,7 +461,7 @@ export default function ConsensusBoard({
       )}
 
       {!open && (
-        <p className="text-[11px] text-muted-foreground mt-3">
+        <p className="text-[12px] text-muted-foreground mt-3">
           各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。
         </p>
       )}

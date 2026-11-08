@@ -5,6 +5,7 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Compass, Home, TrendingUp } from 'lucide-react'
+import PageHeader from '../components/PageHeader'
 
 export default function NotFoundPage() {
   return (
@@ -22,10 +23,14 @@ export default function NotFoundPage() {
         4<span className="text-brass">0</span>4
       </p>
 
-      <h1 className="mt-4 text-[15px] font-semibold">页面不存在</h1>
-      <p className="mt-2 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
-        你访问的地址可能已迁移或输入有误。V5 已将旧量化页面统一到「盘后分析」。
-      </p>
+      <PageHeader
+        align="center"
+        size="compact"
+        eyebrow="Error 404 · 页面未找到"
+        title="页面不存在"
+        description="你访问的地址可能已迁移或输入有误。V5 已将旧量化页面统一到「盘后分析」。"
+        className="mt-4"
+      />
 
       <div className="mt-7 flex flex-wrap items-center justify-center gap-2.5">
         <Link to="/" className="btn btn-primary btn-sm">

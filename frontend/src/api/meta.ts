@@ -1,8 +1,13 @@
 /**
  * 元信息 API（契约第 1 节）：数据新鲜度、交易日历、任务列表、健康检查
  */
-import { extractList, request } from './client'
-import type { Freshness, HealthResponse, TradeCalendarResponse } from '../types/common'
+import { extractList, extractListPage, request } from './client'
+import type {
+  Freshness,
+  HealthResponse,
+  ListPage,
+  TradeCalendarResponse,
+} from '../types/common'
 import type { Job, JobQuery } from '../types/jobs'
 
 /**
@@ -23,14 +28,19 @@ export function fetchTradeCalendar(start?: string, end?: string): Promise<TradeC
 }
 
 /**
- * 采集/策略任务列表（1）。
- * 契约未固定包裹形状，这里兼容裸数组与 {items:[]}/{jobs:[]}。
+ * 采集/策略任务列表（1，C1 追加分页元信息）。
+ * 保留包裹对象里的 total/has_more/page/page_size；裸数组时仅返回 items。
  */
-export async function fetchJobs(query: JobQuery = {}): Promise<Job[]> {
+export async function fetchJobs(query: JobQuery = {}): Promise<ListPage<Job>> {
   const payload = await request<unknown>('/meta/jobs', {
-    query: { limit: query.limit, task: query.task, status: query.status },
+    query: {
+      limit: query.limit,
+      offset: query.offset,
+      task: query.task,
+      status: query.status,
+    },
   })
-  return extractList<Job>(payload)
+  return extractListPage<Job>(payload)
 }
 
 /** 健康检查：注意 /health 不在 /api/v1 前缀下 */

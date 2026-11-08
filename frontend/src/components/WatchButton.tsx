@@ -54,7 +54,7 @@ export default function WatchButton({
         title={watched ? `取消自选 ${label}` : `加入自选 ${label}`}
         className={cn(
           'inline-flex items-center gap-1 rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          size === 'md' ? 'px-3 py-2 text-sm' : 'px-1.5 py-0.5 text-[11px]',
+          size === 'md' ? 'px-3 py-2 text-sm' : 'px-1.5 py-0.5 text-[12px]',
           watched
             ? 'border-warning/50 bg-warning/10 text-warning'
             : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -71,7 +71,7 @@ export default function WatchButton({
       {hint && (
         <span
           role="status"
-          className="absolute left-0 top-full z-20 mt-1 whitespace-nowrap rounded-md border border-warning/40 bg-card px-2 py-1 text-[10px] text-warning shadow-lg"
+          className="absolute left-0 top-full z-20 mt-1 whitespace-nowrap rounded-md border border-warning/40 bg-card px-2 py-1 text-[12px] text-warning shadow-lg"
         >
           {hint}
         </span>

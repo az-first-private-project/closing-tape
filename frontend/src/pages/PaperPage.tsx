@@ -4,9 +4,9 @@
  * 每策略一个组合，每日整体重算建仓日至今的净值（不做增量状态机）。
  * 页面同时展示：组合卡片、净值 vs 基准、回撤、持仓、明日待执行清单、与回测差值。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   CalendarClock,
   RefreshCw,
@@ -49,6 +49,8 @@ import {
   shortDate,
 } from '../lib/format'
 import DataTable, { type DataTableColumn } from '../components/DataTable'
+import PageHeader from '../components/PageHeader'
+import Disclaimer from '../components/Disclaimer'
 import {
   EmptyState,
   ErrorState,
@@ -74,7 +76,7 @@ const STATUS_META: Record<PaperStatus, { label: string; badge: string }> = {
 function StatusBadge({ status }: { status: PaperStatus }) {
   const meta = STATUS_META[status] ?? STATUS_META.pending
   return (
-    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${meta.badge}`}>
+    <span className={`text-[12px] px-2 py-0.5 rounded-full border font-medium ${meta.badge}`}>
       {meta.label}
     </span>
   )
@@ -110,7 +112,7 @@ function freshnessText(freshness: PaperFreshness): string {
 function VsBacktestBadge({ value }: { value: PaperVsBacktest | null }) {
   if (!value) {
     return (
-      <span className="inline-flex text-[11px] px-2 py-1 rounded-full border border-border bg-muted text-muted-foreground">
+      <span className="inline-flex text-[12px] px-2 py-1 rounded-full border border-border bg-muted text-muted-foreground">
         暂无同参数同区间人工回测
       </span>
     )
@@ -120,7 +122,7 @@ function VsBacktestBadge({ value }: { value: PaperVsBacktest | null }) {
     diff === null || diff === 0 ? '与回测持平' : diff > 0 ? '跑赢回测' : '跑输回测'
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${diffBadgeClass(diff)}`}
+      className={`inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-full border ${diffBadgeClass(diff)}`}
       title={`纸面 ${fmtRatio(value.total_return, 2)} vs 回测 ${fmtRatio(value.total_return, 2)}（${value.as_of}）`}
     >
       {text} <span className="num font-medium">{fmtPp(diff)}</span>
@@ -142,69 +144,89 @@ function PaperCard({
   onSync: (code: string) => void
 }) {
   const selectable = card.status !== 'pending'
+  const select = () => {
+    if (selectable) onSelect(card.algo_code)
+  }
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!selectable) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onSelect(card.algo_code)
+  }
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      onClick={() => selectable && onSelect(card.algo_code)}
-      className={`card p-4 ${selectable ? 'card-lift cursor-pointer' : ''} ${
+      className={`card p-4 ${selectable ? 'card-lift' : ''} ${
         selected ? 'card-selected' : ''
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground/70">
-            {card.algo_code}
-          </p>
-          <h3 className="mt-1 truncate text-[13.5px] font-semibold" title={card.name}>
-            {card.name}
-          </h3>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            {card.rebalance_days ? `每 ${card.rebalance_days} 日调仓` : '调仓周期待定'}
-            {card.max_positions ? ` · 持有 ${card.max_positions} 只` : ''}
-          </p>
+      <div
+        role={selectable ? 'button' : undefined}
+        tabIndex={selectable ? 0 : undefined}
+        aria-pressed={selectable ? selected : undefined}
+        aria-disabled={!selectable}
+        onClick={select}
+        onKeyDown={handleKeyDown}
+        className={selectable
+          ? 'cursor-pointer rounded-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+          : undefined}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-mono text-[12px] uppercase tracking-[0.16em] text-muted-foreground/70">
+              {card.algo_code}
+            </p>
+            <h3 className="mt-1 truncate text-[13.5px] font-semibold" title={card.name}>
+              {card.name}
+            </h3>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">
+              {card.rebalance_days ? `每 ${card.rebalance_days} 日调仓` : '调仓周期待定'}
+              {card.max_positions ? ` · 持有 ${card.max_positions} 只` : ''}
+            </p>
+          </div>
+          <StatusBadge status={card.status} />
         </div>
-        <StatusBadge status={card.status} />
-      </div>
 
-      <div className="mt-4 flex items-baseline gap-3">
-        <span className="readout text-[30px]" title="累计净值（起点=1）">
-          {card.nav !== null ? fmtNumber(card.nav, 4) : '—'}
-        </span>
-        <span className={`text-sm font-medium num ${pctColor(card.total_return)}`}>
-          {card.total_return !== null ? fmtRatio(card.total_return, 2) : '—'}
-        </span>
-      </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">
-        累计净值 · 起点 {card.start_date ? fmtDate(card.start_date) : '待确定'}
-      </p>
+        <div className="mt-4 flex items-baseline gap-3">
+          <span className="readout text-[30px]" title="累计净值（起点=1）">
+            {card.nav !== null ? fmtNumber(card.nav, 4) : '—'}
+          </span>
+          <span className={`text-sm font-medium num ${pctColor(card.total_return)}`}>
+            {card.total_return !== null ? fmtRatio(card.total_return, 2) : '—'}
+          </span>
+        </div>
+        <p className="mt-1 text-[12px] text-muted-foreground">
+          累计净值 · 起点 {card.start_date ? fmtDate(card.start_date) : '待确定'}
+        </p>
 
-      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-        <div>
-          <dt className="text-muted-foreground">超额收益</dt>
-          <dd className={`num mt-0.5 ${pctColor(card.excess_return)}`}>
-            {card.excess_return !== null ? fmtRatio(card.excess_return, 2) : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">最大回撤</dt>
-          <dd className="num mt-0.5 text-down">
-            {card.max_drawdown !== null ? fmtRatio(card.max_drawdown, 2) : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">跟踪交易日</dt>
-          <dd className="num mt-0.5">{card.tracking_days}</dd>
-        </div>
-      </dl>
+        <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <div>
+            <dt className="text-muted-foreground">超额收益</dt>
+            <dd className={`num mt-0.5 ${pctColor(card.excess_return)}`}>
+              {card.excess_return !== null ? fmtRatio(card.excess_return, 2) : '—'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">最大回撤</dt>
+            <dd className="num mt-0.5 text-down">
+              {card.max_drawdown !== null ? fmtRatio(card.max_drawdown, 2) : '—'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">跟踪交易日</dt>
+            <dd className="num mt-0.5">{card.tracking_days}</dd>
+          </div>
+        </dl>
 
-      <div className="mt-3">
-        <VsBacktestBadge value={card.vs_backtest} />
+        <div className="mt-3">
+          <VsBacktestBadge value={card.vs_backtest} />
+        </div>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/60 pt-3">
         <span
-          className={`text-[11px] ${card.freshness.stale ? 'text-warning' : 'text-muted-foreground'}`}
+          className={`text-[12px] ${card.freshness.stale ? 'text-warning' : 'text-muted-foreground'}`}
           title={freshnessText(card.freshness)}
         >
           {freshnessText(card.freshness)}
@@ -223,7 +245,13 @@ function PaperCard({
             {syncing ? '同步中…' : '立即同步'}
           </button>
         ) : (
-          <span className="shrink-0 text-[11px] text-brass-strong dark:text-brass">查看明细 →</span>
+          <button
+            type="button"
+            onClick={select}
+            className="shrink-0 rounded text-[12px] text-brass-strong transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-brass"
+          >
+            查看明细 →
+          </button>
         )}
       </div>
     </motion.div>
@@ -245,7 +273,7 @@ function PendingOrders({
           <CalendarClock className="w-4 h-4 text-warning" />
           明日待执行
         </h3>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           按 T+1 开盘价成交，停牌 / 一字板不可成交
         </span>
       </div>
@@ -267,13 +295,13 @@ function PendingOrders({
               </span>
               <Link
                 to={`/stocks/${order.code}`}
-                className="font-mono text-[10px] text-brass-strong hover:underline dark:text-brass"
+                className="font-mono text-[12px] text-brass-strong hover:underline dark:text-brass"
               >
                 {order.code}
               </Link>
               <span className="text-sm">{order.name}</span>
-              <span className="text-[11px] text-muted-foreground">{order.reason}</span>
-              <span className="ml-auto text-[11px]">
+              <span className="text-[12px] text-muted-foreground">{order.reason}</span>
+              <span className="ml-auto text-[12px]">
                 {order.fillable === true ? (
                   <span className="text-success">可成交</span>
                 ) : order.fillable === false ? (
@@ -302,24 +330,24 @@ function VsBacktestPanel({ value }: { value: PaperVsBacktest }) {
     <div className="card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">与同区间人工回测的差值</h3>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-[12px] text-muted-foreground">
           回测 <span className="font-mono">{value.bt_id.slice(0, 8)}</span> · 截至 {value.as_of}
         </span>
       </div>
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
         {items.map((item) => (
           <div key={item.label} className="rounded-lg border border-border px-3 py-2">
-            <p className="text-[11px] text-muted-foreground">{item.label}</p>
+            <p className="text-[12px] text-muted-foreground">{item.label}</p>
             <p className={`mt-1 text-sm font-semibold num ${pctColor(item.diff)}`}>
               {fmtPp(item.diff)}
             </p>
-            <p className="text-[11px] text-muted-foreground num">
+            <p className="text-[12px] text-muted-foreground num">
               纸面 {fmtRatio(item.paper, 2)}
             </p>
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[11px] text-muted-foreground">
+      <p className="mt-2 text-[12px] text-muted-foreground">
         差值为「纸面 − 回测」，正数表示纸面跑赢回测口径；只应来自区间末点差异。
       </p>
     </div>
@@ -374,6 +402,7 @@ const holdingColumns: DataTableColumn<PaperHolding>[] = [
 ]
 
 function DrawdownChart({ series }: { series: PaperNavPoint[] }) {
+  const reducedMotion = useReducedMotion()
   const data = useMemo(
     () =>
       series.map((point) => ({
@@ -405,6 +434,7 @@ function DrawdownChart({ series }: { series: PaperNavPoint[] }) {
             fill="var(--color-down)"
             fillOpacity={0.18}
             strokeWidth={1.5}
+            isAnimationActive={!reducedMotion}
           />
         </AreaChart>
       </ResponsiveContainer>
@@ -421,6 +451,7 @@ function PaperDetailPanel({
   syncing: boolean
   onSync: () => void
 }) {
+  const reducedMotion = useReducedMotion()
   const { summary } = detail
   const metricItems = [
     {
@@ -472,7 +503,7 @@ function PaperDetailPanel({
             <span className="font-mono uppercase">{detail.algo_code}</span> · 建仓 {detail.start_date ?? '—'} ·
             每 {detail.params.rebalance_days ?? '—'} 日调仓 · 持有 {detail.params.max_positions ?? '—'} 只
           </p>
-          <p className={`mt-1 text-[11px] ${detail.freshness.stale ? 'text-warning' : 'text-muted-foreground'}`}>
+          <p className={`mt-1 text-[12px] ${detail.freshness.stale ? 'text-warning' : 'text-muted-foreground'}`}>
             {freshnessText(detail.freshness)}
           </p>
         </div>
@@ -495,7 +526,7 @@ function PaperDetailPanel({
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {metricItems.map((item) => (
           <div key={item.label} className="inset px-3 py-2.5">
-            <p className="text-[10px] tracking-wide text-muted-foreground">{item.label}</p>
+            <p className="text-[12px] tracking-wide text-muted-foreground">{item.label}</p>
             <p className={`num mt-1 text-[14px] font-semibold ${item.tone}`}>{item.value}</p>
           </div>
         ))}
@@ -531,6 +562,7 @@ function PaperDetailPanel({
                   strokeWidth={2}
                   dot={false}
                   name="nav"
+                  isAnimationActive={!reducedMotion}
                 />
                 <Line
                   type="monotone"
@@ -539,6 +571,7 @@ function PaperDetailPanel({
                   strokeWidth={1.5}
                   dot={false}
                   name="benchmark"
+                  isAnimationActive={!reducedMotion}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -560,7 +593,7 @@ function PaperDetailPanel({
           <h3 id="holdings-title" className="text-sm font-medium">
             当前持仓
           </h3>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[12px] text-muted-foreground">
             成本含手续费 · 权重按收盘总资产
           </span>
         </div>
@@ -573,7 +606,7 @@ function PaperDetailPanel({
         />
       </section>
 
-      <p className="text-[11px] text-muted-foreground leading-relaxed">{detail.caliber}</p>
+      <p className="text-[12px] text-muted-foreground leading-relaxed">{detail.caliber}</p>
     </motion.section>
   )
 }
@@ -631,34 +664,33 @@ export default function PaperPage() {
       transition={{ duration: 0.3 }}
       className="max-w-6xl mx-auto px-4 py-6 space-y-6"
     >
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="rise">
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="h-px w-6 bg-brass" />
-            <span className="eyebrow">Paper Portfolio</span>
-          </div>
-          <h1 className="page-title mt-2.5">纸面组合跟踪</h1>
-          <p className="mt-2 max-w-3xl text-[12px] leading-relaxed text-muted-foreground">
+      <PageHeader
+        eyebrow="Paper Portfolio"
+        title="纸面组合跟踪"
+        description={
+          <>
             按策略首次实盘 run 自动建仓，每个交易日收盘后把建仓日至今整段重算并覆盖净值（不做增量）。
             净值口径与回测完全一致：后复权、佣金/印花税/滑点、整手向下取整。
-          </p>
-          <p className="mt-1.5 text-[10px] text-muted-foreground/80">
-            17:30 自动执行；非交易日跳过。手动同步为完整区间重算，耗时与区间长度成正比。
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void listQuery.refetch()
-            if (selected) void detailQuery.refetch()
-          }}
-          disabled={listQuery.isFetching}
-          className="btn btn-sm h-9"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
-          刷新{listQuery.isFetching ? '中…' : ''}
-        </button>
-      </div>
+            <span className="mt-1 block text-muted-foreground/80">
+              17:30 自动执行；非交易日跳过。手动同步为完整区间重算，耗时与区间长度成正比。
+            </span>
+          </>
+        }
+        actions={
+          <button
+            type="button"
+            onClick={() => {
+              void listQuery.refetch()
+              if (selected) void detailQuery.refetch()
+            }}
+            disabled={listQuery.isFetching}
+            className="btn btn-sm h-9"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
+            刷新{listQuery.isFetching ? '中…' : ''}
+          </button>
+        }
+      />
 
       {syncError && (
         <p className="text-xs text-alert">同步触发失败：{syncError}</p>
@@ -750,6 +782,8 @@ export default function PaperPage() {
           onSync={() => handleSync(selected)}
         />
       ) : null}
+
+      <Disclaimer extraOnly extra="纸面组合为历史数据上的模拟跟踪，不代表真实成交与收益。" />
     </motion.div>
   )
 }

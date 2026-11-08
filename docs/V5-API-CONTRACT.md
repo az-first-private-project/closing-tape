@@ -10,18 +10,37 @@
 ### 0.1 成功响应
 直接返回业务对象，**不包 `data` 壳**（与 V2/V3 保持一致，减少前端改动）。
 
+**列表分页（C1 追加式）**：既有 `limit` 语义与默认值不变，新增可选 `offset`（默认 `0`）；
+被截断的列表可追加 `total / has_more / page / page_size`：
+
+- `total`：过滤后的全量命中数（分页前）；
+- `page`：从 1 开始，`page_size` 等于本次 `limit`；
+- `has_more`：按**实际返回条数**计算（`offset + 返回数 < total`），不把 `limit` 当承诺条数；
+- `count` 若存在，一律表示**本次返回条数**，不是全量。
+
+C1 只追加字段，不改变任何成功响应的包裹形状与默认值；前端应忽略未知的追加字段。
+
 ### 0.2 错误响应（统一）
 ```json
 {
   "ok": false,
   "error": { "code": "DATA_NOT_READY", "message": "2026-10-20 的行情尚未采集",
-             "detail": { "next_action": "POST /api/v1/admin/ingest/daily_snapshot" } },
+             "detail": { "next_action": "POST /api/v1/admin/ingest/daily_snapshot" },
+             "suggestion": "先运行日行情采集，数据就绪后重试" },
   "request_id": "..."
 }
 ```
-错误码：`DATA_NOT_READY | DATA_STALE | DATA_QUALITY | NO_TRADE_DATE | BAD_REQUEST |
-UNKNOWN_ALGO | INVALID_PARAM | NOT_FOUND | PROVIDER_UNAVAILABLE | LLM_UNAVAILABLE |
-DB_UNAVAILABLE | INTERNAL | BUSY`
+- `suggestion`（可选，C2）：面向用户的一句话处置建议，仅在需要时出现。前端展示优先级为
+  `error.suggestion` → `error.detail.next_action` → 统一兜底文案「请稍后重试；若持续失败，请携带错误码与请求 ID 反馈。」；
+  三处都没有时也不得把错误体当成功解析。
+- 成功响应**不**追加 `request_id`；`request_id` 只出现在错误体顶层，用于排查。
+- `detail` 为任意 JSON；`DataUnavailableError` 默认把 `next_action` 放在 `detail` 内，C2 起同名文本也会作为 `suggestion` 返回（重复时前端只显示一次）。
+
+错误码：`DATA_NOT_READY | DATA_QUALITY | BAD_REQUEST | UNKNOWN_ALGO | INVALID_PARAM |
+NOT_FOUND | PROVIDER_UNAVAILABLE | INTERNAL`
+
+已定义但**当前不返回**的错误码（前端不要编写专属分支，按通用错误处理）：
+`DATA_STALE`、`NO_TRADE_DATE`、`LLM_UNAVAILABLE`、`DB_UNAVAILABLE`、`BUSY`。
 
 HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题 409，外部源不可用 503。
 
@@ -50,8 +69,12 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 `sector_daily`、`sector_members`、`moneyflow`、**`valuation`**、`index_daily`、`margin`、
 `trade_calendar`、`news`、`algo_run`、`daily_report`。
 
-> 形状说明：`/api/v1/meta/freshness` 返回 `{items: Freshness[], network_enabled, snapshot_ready_after}`；
-> 业务接口内嵌的 `freshness` 字段直接是 `Freshness[]`（数组）。前端需同时兼容数组与包裹对象。
+> 形状说明（**两种并存，均已生效**）：
+> - `/api/v1/meta/freshness` 返回 `{items: Freshness[], network_enabled, snapshot_ready_after}`（包裹对象）；
+> - 内嵌为**数组**：`market/dashboard`、`market/temperature`、`market/sector/{code}`、`stocks/{code}`；
+> - 内嵌为**单个对象或 `null`**：`algo/ladder`、`algo/consensus`、`algo/hits`。
+>
+> 前端必须两种形态都兼容（`FreshnessBadge` 与本仓的归一化逻辑已覆盖），不得假设所有 `freshness` 都是数组。
 
 ---
 
@@ -62,7 +85,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 | GET | `/health` | `{status, service, version, database, latest_trade_date, data_ready, detail}` |
 | GET | `/api/v1/meta/freshness` | `{items: Freshness[], network_enabled, snapshot_ready_after}` |
 | GET | `/api/v1/meta/trade-calendar?start=&end=` | `{start, end, days:[{cal_date,is_open}]}` |
-| GET | `/api/v1/meta/jobs?limit=20&task=&status=` | `{items: Job[]}` |
+| GET | `/api/v1/meta/jobs?limit=20&offset=0&task=&status=` | `{items: Job[], total, has_more, page, page_size}`（C1 追加分页元信息；默认排除 `archived`，显式 `status=archived` 仍可审计） |
 | GET | `/api/v1/meta/partitions` | `{table, partitions:[{partition,bound}]}` |
 | POST | `/api/v1/admin/ingest/{task}` | 手动触发采集，需 `X-Admin-Key`；`task ∈ calendar|universe|snapshot|backfill|sector|sector_members|sector_fallback|moneyflow|valuation|index|margin|features|scores|sector_scores|report|algos|all`；重任务（backfill/all/features/scores/valuation）自动后台执行（`{status:"accepted"}`） |
 | POST | `/api/v1/admin/seed-demo` | 仅 `ENV=demo` 时可用（演示数据从生产接口移出） |
@@ -125,19 +148,29 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
                  "sentiment_leaders": [ {"code":"688256","name":"寒武纪","change_pct":8.1,
                                          "rank_text":"涨幅第1 × 换手率第2"} ] } ],
   "heatmap_data": [ { "sector_code": "BK1036", "sector_name": "半导体", "pct_chg": 3.2 } ],
+  "heatmap_total_matching": 86,
   "top_sectors": [ /* 同 sectors 结构，按 pct_chg 降序前 10 */ ],
   "bottom_sectors": [ /* 升序前 10 */ ],
+  "top_sectors_total_matching": 86,
+  "bottom_sectors_total_matching": 86,
   "margin_data": { "trade_date": "2026-10-21", "margin_balance": 16356.16,
                    "short_balance": 174.23, "margin_change": 120.5, "northward_net": null },
-  "report": { "content": "## 今日大盘综述…", "is_fallback": false,
-              "model": "deepseek-chat", "created_at": "…" },
+  "report": { "content": "## 今日大盘综述…",
+              "structured": { "conclusions": [ { "text": "…", "evidence": "…" } ],
+                              "risks": [ "…" ], "data_gaps": [ "…" ] },
+              "is_fallback": false, "model": "deepseek-chat", "created_at": "…" },
   "freshness": [ /* Freshness[] */ ],
   "stats": { "scored_sectors": 30, "total_sectors": 86, "signal_count": 0 }
 }
 ```
 - `sectors[]` / `top_sectors[]` / `bottom_sectors[]` 与 3.5 的 `items` 同结构（含 T4 的 `market_cap / member_count / is_partial / partial_member_count` 等字段）。
+- 三个截断数组的 C1 追加字段：`heatmap_total_matching` / `top_sectors_total_matching` /
+  `bottom_sectors_total_matching` 等于当日 `sectors` 全量数；数组本身仍是截断后的 50 / 10 / 10 条，
+  前端据此显示「已显示 N / 共 M」。
 - 无数据时返回 200 + `sectors: []` + `freshness` 里 `status=unknown`，**不要 500**。
 - `report` 为 `null` 表示尚未生成。
+- `report.structured` 为日报的结构化结论 `{conclusions, risks, data_gaps}`；历史日报行可能为 `null`，
+  前端只做展示、不据此重算正文。`content` 为 Markdown 文本，渲染时必须转义、不得直出 HTML。
 - `indices[]` / `us_indices[]` 的 `ret_1d/5d/20d/60d/ytd` 为**百分数**（-5.48 表示 -5.48%），按交易日窗口计算；历史长度不足该窗口时为 `null`，**不返回 0**。
 - `ret_ytd` 基准是「当年首个交易日的前一交易日」收盘；若该基准不在库内（次新指数）则为 `null`。
 - `rel_300_20d / rel_300_ytd` 是相对沪深300 的**超额百分点**（指数收益 − 沪深300 同周期收益），仅 A 股指数返回数值；`us_indices` 跨市场无意义，一律 `null`。
@@ -156,9 +189,12 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
                           "news": 5.5, "weights": { "…": "…" } } },
   "leaders": { "strength": [ … ], "sentiment": [ … ] },
   "recent_trend": [ { "date": "2026-10-17", "close": 1200.1, "pct_chg": 1.2 } ],
-  "members": [ { "code": "688981", "name": "中芯国际", "pct_chg": 5.8 } ] }
+  "members": [ { "code": "688981", "name": "中芯国际", "pct_chg": 5.8 } ],
+  "members_total_matching": 96, "total_matching": 96 }
 ```
 - `members` 按当日 SCD2 名单返回，最多 200 条；`name` 取自 `dim_stock`，名称缺失时为 `null`，`pct_chg` 缺失时也为 `null`。
+- `members_total_matching`（C1）为该板块当日名单的全量成员数（截断前）；`total_matching` 是同值的通用别名，
+  两者都不是「本次返回条数」。前端据此显示「已显示 N / 共 M」，两者不一致时以 `members_total_matching` 为准。
 - 名单不完整（THS `pages > 10`，仅开放前后各 5 页）时返回已抓取的部分，不补 0；`is_partial=true`，`partial_member_count` 为样本成员数（当前约 100 只），完整名单时分别为 `false / null`。
 
 ### 3.3 GET `/api/v1/market/indices?trade_date=&days=`
@@ -247,7 +283,12 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   "scores": { "value": 3.1, "quality": 6.2, "momentum": 7.4, "volatility": 5.1,
               "liquidity": 8.8, "sentiment": 5.0, "composite": 5.9 },
   "sectors": [ { "sector_code": "BK1036", "sector_name": "半导体" } ],
-  "freshness": { … } }
+  "sectors_total_matching": 1,
+  "freshness": [ /* Freshness[] */ ] }
+```
+- `sectors` 为当日 SCD2 有效归属，最多 20 条；`sectors_total_matching`（C1）为截断前的全量归属数，
+  前端据此显示「已显示 N / 共 M」，不得把 20 当成全部板块。
+- `latest` / `features` / `scores` 在对应日数据缺失时逐字段为 `null`，不补 0；`freshness` 为 `Freshness[]`（与 0.4 一致）。
 
 ### 4.2 GET `/api/v1/stocks/{code}/kline?limit=250&start=&end=`
 ```json
@@ -260,8 +301,10 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `adjust_basis` 固定为 `"raw"`：OHLC 为未复权原始价；MA/BOLL 也由同一组未复权收盘价计算（`features.py` 不读 `adj_factor`）。前端画 K 线与回测成交标记均按此口径，不做二次复权换算。
 - `boll_mid/upper/lower` 来自 `fact_feature_daily`；特征缺失的日期返回 null（不是 0）。
 
-### 4.3 GET `/api/v1/stocks/search?q=&limit=20`
-`{ "items": [ { "code": "688981", "name": "中芯国际", "industry_l1": "电子" } ] }`
+### 4.3 GET `/api/v1/stocks/search?q=&limit=20&offset=0`
+`{ "items": [ { "code": "688981", "name": "中芯国际", "industry_l1": "电子" } ],
+   "total": 1, "has_more": false, "page": 1, "page_size": 20 }`
+- `limit` 1–50，默认 20；`offset` 默认 0（C1）。`total` 为匹配全量数，`items` 只含本页。
 
 ### 4.4 GET `/api/v1/stocks/sparkline/batch?codes=&days=30&end=`
 共识榜 / 评分榜的批量走势端点（P2-5）。一次请求替代逐行 `useKline`。
@@ -288,7 +331,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
     "is_active": true, "sort_order": 3 } ]
 ```
 
-### 5.2 GET `/api/v1/algo/{algo_code}?trade_date=&limit=20&force_refresh=false&<策略参数>`
+### 5.2 GET `/api/v1/algo/{algo_code}?trade_date=&limit=20&offset=0&force_refresh=false&<策略参数>`
 ```json
 { "algo": "b1", "algo_name": "双均线动量突破", "trade_date": "2026-10-21",
   "run": { "run_id": "9f2c…", "created_at": "2026-10-21T16:02:11+08:00",
@@ -296,6 +339,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
            "data_version": "2026-10-21:b5382", "signal_schema": 2,
            "params": { "pe_max": 50, "limit": 20 } },
   "from_cache": true, "count": 20,
+  "total": 20, "has_more": false, "page": 1, "page_size": 20,
   "data": [ { "code": "600519", "name": "贵州茅台", "rank": 1,
               "score": 22.3, "composite_score": 7.4,
               "close": 1520.0, "pct_chg": 1.2,
@@ -303,6 +347,12 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
               "macd_dif": 0.5, "macd_dea": 0.3, "rsi14": 58.2,
               "metrics": { "pe_ttm": 22.3, "macd_golden_cross": true } } ] }
 ```
+- `limit` 1–1000，默认 20，同时是策略参数「返回数量上限」：一个 run 只保存该上限内的信号，并参与缓存键。
+- `offset`（C1）默认 0，只在**该 run 已保存的信号**内截取，不改变缓存键与默认值；`count` 为本次返回条数，
+  `total` 为该 run 保存的信号总数，`has_more/page/page_size` 见 0.1。前端只应把 `data` 当本页数据。
+- 由于一个 run 最多保存 `limit` 条信号，`total ≤ limit`；`offset > 0` 只截取该 run 已保存信号的尾部，
+  `offset ≥ total` 返回空 `data`（`count=0`）。需要看到更多信号时应提高 `limit` 重新执行（会生成新 run），
+  而不是反复翻页。
 - **`score` 是该策略的排序指标原始值**（A3=综合分、A4=股息率、B1=ROC10、B2=RSI6、B3/B5=KDJ_J、B4=带宽分位），
   **`composite_score` 才是 0–10 的综合因子得分**（可能为 null）。前端"得分"列请用后者。
 - **参数必须真生效**：不同 `pe_max` 必须产生不同 `run_id` 与不同结果。
@@ -368,12 +418,17 @@ b4/b5 每次响应顶层带 `market_gate`（新 run 与缓存 run 均按 `trade_
 ### 5.3 其他
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/algo/{algo_code}/runs?limit=10` | `{items: RunSummary[]}`（**默认排除回测 run**，需要时加 `include_backtest=true`） |
+| GET | `/api/v1/algo/{algo_code}/runs?limit=10&offset=0` | `{items: RunSummary[], total, has_more, page, page_size}`（**默认排除回测 run**，需要时加 `include_backtest=true`） |
 | GET | `/api/v1/algo/runs/{run_id}` | 单次 run 明细：`{algo, algo_name, trade_date, run:{…}, data:[…]}` |
-| GET | `/api/v1/algo/{algo_code}/export.csv?trade_date=&…` | `text/csv`（UTF-8 BOM；列=排名/代码/名称/综合得分(0-10)/排序分/metrics 动态列） |
+| GET | `/api/v1/algo/{algo_code}/export.csv?trade_date=&limit=&…` | `text/csv`（UTF-8 BOM；列=排名/代码/名称/综合得分(0-10)/排序分/metrics 动态列） |
 | POST | `/api/v1/algo/{algo_code}/refresh` | 忽略缓存重跑（默认参数） |
 
-`RunSummary`：`{run_id, algo_code, trade_date, created_at, elapsed_ms, universe_count, signal_count, data_version, signal_schema, status, is_backtest}`。
+- `runs` 的 `limit` 1–50，默认 10；`offset` 默认 0（C1）。`total` 为过滤后的历史 run 总数，前端据此显示「已显示 N / 共 M」。
+- `RunSummary`：`{run_id, algo, algo_name, trade_date, created_at, elapsed_ms, universe_count, signal_count, data_version, signal_schema, params, status, error, is_backtest}`。
+  代码键是 **`algo`**（不是 `algo_code`）；`params` 为该 run 的参数快照，用于复现与导出。
+- `export.csv` 的 `limit` 默认 100（1–1000），与策略参数一起参与 run 指纹；**导出前端的展示范围须与该 run 一致**：
+  页面展示 `limit=20` 的 run 时，导出也必须传 `limit=20`，否则会命中另一个 run、导出不同结果。
+  导出列中 `triggered / score_breakdown` 不参与平铺（见 5.2 末）。
 
 ### 5.4 GET `/api/v1/algo/ladder?window=60&horizon=20&trade_date=`
 
@@ -402,6 +457,7 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
       "20": { "...": "同顶层统计字段，20 日口径" }
     }
   }],
+  "total": 7, "has_more": false, "page": 1, "page_size": 7,
   "immature_total": 100, "unfillable_total": 0,
   "freshness": { "dataset": "signal_perf", "status": "ok", "...": "契约 0.4" },
   "note": "信号级收益……与回测 FIFO 回合胜率不是同一口径" }
@@ -413,14 +469,16 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
   与有效样本互斥，`total_signals` 为区间内全部信号。
 - 有效样本 < 30 时 `low_sample=true`，排序仅作参考。
 - 顶层统计字段等于 `horizons[String(horizon)]`，一次请求即可渲染 5/10/20 三列。
+- C1 追加 `total / has_more / page / page_size`：天梯一次返回全部启用策略（当前 7 条），不按 `limit` 截断，
+  因此 `total = page_size = items.length`、`has_more=false`；前端仍可复用统一的列表元信息渲染。
 - `spark` 为最近 20 个出信号日的胜率（`win_rate` 0–1，`samples` 当日有效样本数）。
 
-### 5.5 GET `/api/v1/algo/consensus?trade_date=&min_count=2&limit=100`
+### 5.5 GET `/api/v1/algo/consensus?trade_date=&min_count=2&limit=100&offset=0`
 
 多策略共识榜（V6 T6）：同一只票被多个策略同时命中时，按命中策略数排序。
 
 - `min_count` 为**最少命中策略数**，只接受 `2–7`，非法返回 422（统一错误体不适用 FastAPI 参数校验）；
-- `limit` 1–500，默认 100；`trade_date` 省略时取 `fact_stock_daily.max(trade_date)`（最新行情日）；
+- `limit` 1–500，默认 100；`offset` 默认 0（C1）；`trade_date` 省略时取 `fact_stock_daily.max(trade_date)`（最新行情日）；
 - 统计口径：当日 `stg_run.status='success'` 且 `is_backtest IS FALSE` 的**全部 run**；同一策略的多次参数 run
   合并统计，`hit_count = count(DISTINCT algo_code)`。同一策略多次 run 命中同一票只算一次，取**名次最优**
   那次 run 的 `rank/score/metrics`。只统计当前启用策略（历史 a1/a2 run 不参与）。
@@ -432,6 +490,7 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
 
 ```json
 { "trade_date": "2026-10-26", "min_count": 2, "total_algos_evaluated": 7,
+  "total": 1, "has_more": false, "page": 1, "page_size": 100,
   "items": [{
     "code": "601838", "name": "成都银行",
     "industry_l1": "银行", "board": "主板", "ownership": "央企",
@@ -449,6 +508,8 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
 ```
 
 - 排序：`hit_count DESC` → `best_rank ASC` → `composite_score DESC NULLS LAST` → `code ASC`。
+- C1 分页：`total` 为通过 `min_count` 的**全量标的数**（分页前），`items` 只含本页；
+  `has_more / page / page_size` 见 0.1。`total_algos_evaluated` 是策略数口径，不受 `offset / limit` 影响。
 - `best_rank` 为各命中策略名次的最小值（`null` 名次不参与）。
 - 单条 SQL 完成；同一策略当日多次 run 的去重与跨策略计数均不产生 N×策略查询。
 
@@ -483,12 +544,15 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
   ],
   "latest_signal_date": "2026-10-26",
   "freshness": { "dataset": "algo_run", "status": "ok", "...": "契约 0.4" },
-  "days": 10 }
+  "days": 10,
+  "total": 2, "has_more": false, "page": 1, "page_size": 2 }
 ```
 
 - `hit_id = algo_code:signal_date` 是提醒去重键：同一策略同一天命中多只自选股只算**一条**新提醒；
   已读 `hit_id` 由前端写入 5.7 的服务端状态（localStorage 仅作缓存），导航栏只显示未读数量（>9 显示 `9+`）。
 - `rank` 可能为 `null`；`latest_signal_date` 为 `items` 中最大日期，无命中时为 `null`。
+- C1 分页：命中明细一次全量返回（自选代码上限 100 控制规模），`total = page_size = items.length`、
+  `has_more=false`、`page=1`；这些字段只用于统一渲染，**不存在**按页遗漏的命中。
 - `items` 排序：`signal_date DESC` → `algo_code ASC` → `rank ASC NULLS LAST` → `code ASC`。
 
 ### 5.7 GET/PUT `/api/v1/watchlist`（V6 T8）
@@ -592,6 +656,7 @@ Query：`start`（默认近 1 年）、`end`（默认库内最新行情交易日
                "reason": "rebalance" } ] }
 ```
 - 直接读 `backtest_run.trades`，**不重新计算回测**；`code` 可省略（省略返回全部），过滤按 6 位补零后精确匹配。
+- `total` 为回测**全部**成交记录数（过滤前），`count` 为本次返回条数（过滤后）；省略 `code` 时两者相等。
 - `shares=0` 的记录是被拒单（`reason ∈ limit_up/limit_down/suspended/no_data`），前端需与真实成交区分。
 - 回测不存在返回 404 `NOT_FOUND`。
 
@@ -618,6 +683,10 @@ GET 成功的详情响应在 6.2 字段之外追加以下五项，全部由已�
 4. 成交（既有）：`date,code,name,side,price,shares,amount,fee,reason`
 
 CSV 与界面同源（同一引擎、同一单位）；月度与回撤为百分数、保留 2 位小数，净值沿用落库精度。
+
+`export.csv` 接受与 6.3 相同的 `code` 过滤（1–6 位数字，按 6 位补零精确匹配，C1）：
+传 `code` 时成交 block 只导出该股票，并在表头后追加一行 `# filtered by code=000001` 说明范围；
+净值/月度/回撤 block 始终覆盖整个回测，不随 `code` 收窄。前端「导出当前展示范围」必须把当前筛选代码一并传入。
 
 ### 6.5 参数敏感性矩阵（T10）
 

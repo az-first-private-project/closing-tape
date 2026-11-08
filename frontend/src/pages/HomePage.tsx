@@ -9,6 +9,7 @@ import PaginationBar from '../components/PaginationBar'
 import { ErrorState } from '../components/StateViews'
 import { useArticles, useSearch, useAutoCrawl } from '../hooks/useArticles'
 import { useDelayedFlag } from '../hooks/useDelayedFlag'
+import { recordStatus } from '../lib/statusFeed'
 
 export default function HomePage() {
   const [searchParams] = useSearchParams()
@@ -29,6 +30,13 @@ export default function HomePage() {
     }
     if (lastResult && lastResult.new > 0) {
       setNotice(`已更新 ${lastResult.new} 条最新财经新闻`)
+      recordStatus({
+        level: 'success',
+        title: '新闻抓取完成',
+        detail: `新增 ${lastResult.new} 条最新财经新闻`,
+        code: 'AUTO_CRAWL',
+        path: '/',
+      })
       const timer = setTimeout(() => setNotice(null), 8000)
       return () => clearTimeout(timer)
     }
@@ -83,7 +91,7 @@ export default function HomePage() {
             </h2>
           </div>
 
-          <div className="flex items-center gap-3 pb-0.5 font-mono text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-3 pb-0.5 font-mono text-[12px] text-muted-foreground">
             {data && <span>{data.total.toLocaleString()} 条</span>}
             {data && data.total_pages > 1 && (
               <span className="text-muted-foreground/60">
@@ -167,6 +175,7 @@ export default function HomePage() {
             totalPages={data.total_pages}
             total={data.total}
             onPageChange={setPage}
+            unit="篇"
           />
         )}
       </div>

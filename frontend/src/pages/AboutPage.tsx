@@ -1,5 +1,8 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
+import PageHeader from '../components/PageHeader'
+import SectionHeader from '../components/SectionHeader'
+import Disclaimer from '../components/Disclaimer'
 
 const TECH_STACK = [
   { label: '后端框架', value: 'Python 3.11+ + FastAPI (异步)' },
@@ -25,23 +28,15 @@ export default function AboutPage() {
       className="mx-auto max-w-3xl px-4 py-10 sm:px-6"
     >
       {/* 刊头 */}
-      <div className="rise">
-        <div className="flex items-center gap-2.5">
-          <span aria-hidden="true" className="h-px w-6 bg-brass" />
-          <span className="eyebrow">About · V5</span>
-        </div>
-        <h1 className="page-title mt-2.5">关于 GFNA</h1>
-        <p className="lede mt-3 max-w-xl">
-          一个只读本地数据库的 A 股盘后研究终端：新闻聚合、行情复盘、量化选股与回测。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="About · V5"
+        title="关于 GFNA"
+        description="一个只读本地数据库的 A 股盘后研究终端：新闻聚合、行情复盘、量化选股与回测。"
+      />
 
       <div className="mt-8 space-y-5">
         <section className="card p-5 sm:p-6">
-          <div className="mb-3 flex items-baseline gap-2">
-            <span className="section-index">01</span>
-            <h2 className="text-[14px] font-semibold">项目简介</h2>
-          </div>
+          <SectionHeader index="01" title="项目简介" />
           <p className="text-[13px] leading-[1.9] text-muted-foreground">
             GFNA (Global Finance News Aggregator) 已升级为 V5：在保留全球财经新闻聚合与 AI 中文摘要的基础上，
             补齐了 A 股全市场行情库、技术指标与因子评分、参数化选股策略（A3/A4 价值策略 + B1–B5 短线策略）以及回测能力。
@@ -50,29 +45,22 @@ export default function AboutPage() {
         </section>
 
         <section className="card p-5 sm:p-6">
-          <div className="mb-4 flex items-baseline gap-2">
-            <span className="section-index">02</span>
-            <h2 className="text-[14px] font-semibold">技术栈</h2>
-            <span className="font-mono text-[10px] tracking-[0.14em] text-muted-foreground">V5</span>
-          </div>
+          <SectionHeader index="02" title="技术栈" hint="V5" className="mb-4" />
           <dl className="grid grid-cols-1 gap-x-10 sm:grid-cols-2">
             {TECH_STACK.map((item) => (
               <div
                 key={item.label}
                 className="flex items-baseline gap-3 border-b border-border/50 py-2.5"
               >
-                <dt className="w-[4.5rem] shrink-0 text-[11px] text-muted-foreground">{item.label}</dt>
-                <dd className="text-[11.5px] font-medium leading-relaxed">{item.value}</dd>
+                <dt className="w-[4.5rem] shrink-0 text-[12px] text-muted-foreground">{item.label}</dt>
+                <dd className="text-[12px] font-medium leading-relaxed">{item.value}</dd>
               </div>
             ))}
           </dl>
         </section>
 
         <section className="card p-5 sm:p-6">
-          <div className="mb-3 flex items-baseline gap-2">
-            <span className="section-index">03</span>
-            <h2 className="text-[14px] font-semibold">数据与风险声明</h2>
-          </div>
+          <SectionHeader index="03" title="数据与风险声明" />
           <ul className="space-y-2.5">
             {[
               '本项目仅用于课程设计与个人研究，数据版权归原始数据源所有',
@@ -88,6 +76,8 @@ export default function AboutPage() {
           </ul>
         </section>
       </div>
+
+      <Disclaimer className="mt-8" extraOnly extra="本项目仅用于课程设计与个人研究，数据版权归原始数据源所有。" />
 
       <div className="mt-8 flex justify-center">
         <Link to="/" className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass">

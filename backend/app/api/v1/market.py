@@ -108,8 +108,12 @@ async def get_dashboard(
         "us_indices": us_indices,
         "sectors": sectors,
         "heatmap_data": heatmap,
+        # C1：三个被截断数组的全量命中数（数组本身保持原有类型与顺序）
+        "heatmap_total_matching": len(sectors),
         "top_sectors": by_pct[:10],
+        "top_sectors_total_matching": len(sectors),
         "bottom_sectors": sorted(by_pct[-10:], key=lambda s: s["pct_chg"] or 0.0)[:10],
+        "bottom_sectors_total_matching": len(sectors),
         "margin_data": margin,
         "report": report,
         "freshness": freshness,
@@ -356,6 +360,14 @@ async def get_sector_detail(
     partial_count = (
         await _query_partial_membership(db, resolved, [sector_code])
     ).get(sector_code)
+    members_total = (await db.execute(
+        select(func.count())
+        .select_from(DimSectorMember)
+        .where(DimSectorMember.sector_code == sector_code)
+        .where(DimSectorMember.effective_from <= resolved)
+        .where((DimSectorMember.effective_to.is_(None)) |
+               (DimSectorMember.effective_to > resolved))
+    )).scalar_one()
 
     member_quotes: list[dict] = []
     if members:
@@ -412,6 +424,9 @@ async def get_sector_detail(
             for r in reversed(recent)
         ],
         "members": member_quotes,
+        # C1：members 最多返回 200 条，这里给出该日有效成分的全量命中数
+        "members_total_matching": int(members_total or 0),
+        "total_matching": int(members_total or 0),
         "freshness": await get_freshness_items(db, ["sector_daily", "stock_scores"]),
     }
 

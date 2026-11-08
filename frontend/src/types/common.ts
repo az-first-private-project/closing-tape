@@ -23,15 +23,30 @@ export type ApiErrorCode =
   | 'PARSE_ERROR'
   | 'ABORTED'
 
-/** 统一错误响应体（契约 0.2） */
+/** 统一错误响应体（契约 0.2；C2 追加可选 suggestion） */
 export interface ApiErrorBody {
   ok: false
   error: {
     code: ApiErrorCode | string
     message: string
+    /** 可操作建议；缺省时前端使用统一兜底文案 */
+    suggestion?: string
     detail?: unknown
   }
   request_id?: string
+}
+
+/** C1：列表接口追加的可选分页元信息 */
+export interface PaginationMeta {
+  total?: number
+  has_more?: boolean
+  page?: number
+  page_size?: number
+}
+
+/** 提取列表后的统一包裹结果（兼容无分页字段的旧接口） */
+export interface ListPage<T> extends PaginationMeta {
+  items: T[]
 }
 
 /** 数据新鲜度状态（契约 0.4） */

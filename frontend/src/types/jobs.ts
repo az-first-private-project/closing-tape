@@ -22,9 +22,10 @@ export interface Job {
   error: string | null
 }
 
-/** GET /api/v1/meta/jobs 查询参数 */
+/** GET /api/v1/meta/jobs 查询参数（C1：仅追加 offset，不分页参数改名） */
 export interface JobQuery {
   limit?: number
+  offset?: number
   task?: string
   status?: string
 }

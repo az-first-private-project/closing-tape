@@ -87,7 +87,7 @@ function relativeBadgeClass(value: number | null | undefined): string {
 export function IndexCompareHeader({ showRelative = true }: { showRelative?: boolean }) {
   return (
     <div
-      className={`${ROW_GRID} border-b border-border bg-muted/35 px-4 py-2.5 font-mono text-[10px] tracking-[0.1em] text-muted-foreground`}
+      className={`${ROW_GRID} border-b border-border bg-muted/35 px-4 py-2.5 font-mono text-[12px] tracking-[0.1em] text-muted-foreground`}
     >
       <span>指数 / 收盘</span>
       {PERIODS.map((period) => (
@@ -132,7 +132,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
           </span>
           {warming && (
             <span
-              className="shrink-0 rounded border border-warning/35 bg-warning/[0.08] px-1 py-0.5 text-[9px] tracking-wide text-warning"
+              className="shrink-0 rounded border border-warning/35 bg-warning/[0.08] px-1 py-0.5 text-[12px] tracking-wide text-warning"
               title="该指数历史数据回补中"
             >
               回补中
@@ -141,7 +141,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
         </div>
         <div className="flex items-center justify-between gap-2">
           <p
-            className="num truncate text-[11px] text-muted-foreground"
+            className="num truncate text-[12px] text-muted-foreground"
             title={`高 ${fmtNumber(index.high, 2)} / 低 ${fmtNumber(index.low, 2)}`}
           >
             {fmtNumber(index.close, 2)}
@@ -172,7 +172,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
             <span className={`text-[13px] font-medium ${pctColor(value)}`}>
               {fmtPct(value)}
             </span>
-            <span className="text-[9px] tracking-wide text-muted-foreground/80">
+            <span className="text-[12px] tracking-wide text-muted-foreground/80">
               {rank && rank.total > 1 ? `${rank.rank}/${rank.total}` : '\u00A0'}
             </span>
           </div>
@@ -180,7 +180,7 @@ export default function IndexCard({ index, showRelative = true, order = 0 }: Pro
       })}
 
       {/* 末列：相对300 或美股交易日 */}
-      <div className="flex flex-col items-end justify-center gap-1 text-[10px] num">
+      <div className="flex flex-col items-end justify-center gap-1 text-[12px] num">
         {showRelative ? (
           <>
             <span className="flex items-center gap-2">

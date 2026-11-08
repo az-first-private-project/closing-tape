@@ -15,7 +15,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Activity, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { useDashboard, useIndexSeries, useTradeCalendar } from '../hooks/useDashboard'
 import { useWatchSignals, useWatchlist } from '../hooks/useWatchSignals'
 import WatchButton from '../components/WatchButton'
@@ -31,6 +31,9 @@ import ScoreRanking from '../components/ScoreRanking'
 import AIReport from '../components/AIReport'
 import MarketTemperature from '../components/MarketTemperature'
 import FreshnessBadge from '../components/FreshnessBadge'
+import PageHeader from '../components/PageHeader'
+import SectionHeader from '../components/SectionHeader'
+import Disclaimer from '../components/Disclaimer'
 import {
   EmptyState,
   ErrorState,
@@ -100,25 +103,6 @@ function toUsIndexCard(index: UsIndexQuote): IndexCardData {
   }
 }
 
-/** 分区标签：序号 + 标题 + 口径说明 */
-function SectionLabel({
-  index,
-  title,
-  hint,
-}: {
-  index: string
-  title: string
-  hint?: string
-}) {
-  return (
-    <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-      <span className="section-index">{index}</span>
-      <span className="text-[12px] font-semibold tracking-wide text-foreground">{title}</span>
-      {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
-    </div>
-  )
-}
-
 /** 统计徽标 */
 function StatBadge({
   label,
@@ -134,9 +118,9 @@ function StatBadge({
   const color = tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-foreground'
   return (
     <div className="inset px-3 py-2.5" title={sub}>
-      <p className="text-[10px] tracking-[0.08em] text-muted-foreground">{label}</p>
+      <p className="text-[12px] tracking-[0.08em] text-muted-foreground">{label}</p>
       <p className={`mt-1 text-[15px] font-semibold num ${color}`}>{value}</p>
-      {sub && <p className="mt-0.5 truncate text-[10px] text-muted-foreground/80">{sub}</p>}
+      {sub && <p className="mt-0.5 truncate text-[12px] text-muted-foreground/80">{sub}</p>}
     </div>
   )
 }
@@ -167,15 +151,11 @@ function MarginOverview({ margin }: { margin: MarginData | null }) {
 
   return (
     <div className="space-y-2.5">
-      <div className="flex items-end justify-between gap-2">
-        <div>
-          <span className="eyebrow">Margin</span>
-          <h3 className="mt-1.5 text-[13px] font-semibold">融资融券概览</h3>
-        </div>
-        {margin.trade_date && (
-          <span className="num text-[10px] tracking-wide text-muted-foreground">数据日 {margin.trade_date}</span>
-        )}
-      </div>
+      {margin.trade_date && (
+        <p className="text-right num text-[12px] tracking-wide text-muted-foreground">
+          数据日 {margin.trade_date}
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <StatBadge label="融资余额" value={fmtYi(margin.margin_balance)} />
         <StatBadge label="融券余额" value={fmtYi(margin.short_balance)} />
@@ -218,10 +198,10 @@ function SectorRankList({
     <div className="card p-4">
       <div className="section-head">
         <h3 className="section-title">
-          <span className={`font-mono text-[11px] ${variant === 'up' ? 'text-up' : 'text-down'}`}>{glyph}</span>
+          <span className={`font-mono text-[12px] ${variant === 'up' ? 'text-up' : 'text-down'}`}>{glyph}</span>
           {title}
         </h3>
-        <span className="font-mono text-[10px] tracking-[0.14em] text-muted-foreground">TOP 5</span>
+        <span className="font-mono text-[12px] tracking-[0.14em] text-muted-foreground">TOP 5</span>
       </div>
 
       <div>
@@ -238,14 +218,14 @@ function SectorRankList({
                   <span className={`medal ${index === 0 ? 'medal-brass' : ''}`}>{index + 1}</span>
                   <span className="truncate text-[13px] font-medium">{sector.sector_name}</span>
                   {sector.leading_stock && (
-                    <span className="hidden truncate text-[10px] text-muted-foreground sm:inline">
+                    <span className="hidden truncate text-[12px] text-muted-foreground sm:inline">
                       龙头 {sector.leading_stock}
                       {sector.leading_stock_pct !== null && ` ${fmtPct(sector.leading_stock_pct)}`}
                     </span>
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  <span className="num text-[10px] text-muted-foreground">
+                  <span className="num text-[12px] text-muted-foreground">
                     {sector.composite_score === null ? '未评分' : `${fmtScore(sector.composite_score)}/10`}
                   </span>
                   <span className={`num text-[13px] font-semibold ${pctColor(sector.pct_chg)}`}>
@@ -259,7 +239,7 @@ function SectorRankList({
                 <div className="mt-1.5 ml-[2.1rem] flex flex-wrap gap-1.5">
                   {strengthLeader && (
                     <span
-                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-card/60 px-2 py-0.5 text-[10px] text-muted-foreground"
+                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-card/60 px-2 py-0.5 text-[12px] text-muted-foreground"
                       title={strengthLeader.rank_text ?? undefined}
                     >
                       实力 {strengthLeader.name}
@@ -269,7 +249,7 @@ function SectorRankList({
                   )}
                   {sentimentLeader && (
                     <span
-                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-card/60 px-2 py-0.5 text-[10px] text-muted-foreground"
+                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-card/60 px-2 py-0.5 text-[12px] text-muted-foreground"
                       title={sentimentLeader.rank_text ?? undefined}
                     >
                       情绪 {sentimentLeader.name}
@@ -392,23 +372,20 @@ export default function DashboardPage() {
       className="mx-auto max-w-7xl px-4 py-6 space-y-7 sm:px-6 lg:px-8"
     >
       {/* ========== 刊头 + 日期选择 ========== */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="rise">
-          <div className="flex items-center gap-2.5">
-            <span aria-hidden="true" className="h-px w-6 bg-brass" />
-            <span className="eyebrow">Market Close · {data.trade_date}</span>
-          </div>
-          <h1 className="page-title mt-2.5">盘后分析</h1>
-          <p className="mt-2 text-[12px] text-muted-foreground">
+      <PageHeader
+        eyebrow={`Market Close · ${data.trade_date}`}
+        title="盘后分析"
+        description={
+          <>
             {indices.length} 指数 · {sectors.length} 板块 · 评分覆盖{' '}
             <span className="num text-foreground">{scoredCount}/{totalSectors}</span>
             {(data.stats?.signal_count ?? 0) > 0 && (
               <> · 当日信号 <span className="num text-foreground">{data.stats.signal_count}</span> 条</>
             )}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
           {/* 日期选择器：可回看历史交易日 */}
           <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
             <span className="eyebrow">Date</span>
@@ -434,8 +411,9 @@ export default function DashboardPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${dashboard.isFetching ? 'animate-spin' : ''}`} />
             刷新{dashboard.isFetching ? '中…' : ''}
           </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* 刷新失败但仍展示旧数据 */}
       {dashboard.isError && (
@@ -486,7 +464,7 @@ export default function DashboardPage() {
           {/* ========== 指数多周期对比条 ========== */}
           {indexCards.length > 0 && (
             <section>
-              <SectionLabel
+              <SectionHeader
                 index="01"
                 title="指数多周期"
                 hint="1 / 5 / 20 / 60 日与年内收益，小字为同期 A 股指数排名"
@@ -504,7 +482,7 @@ export default function DashboardPage() {
                     ))}
                   </div>
                 </div>
-                <p className="border-t border-border/60 px-4 py-2.5 text-[10px] leading-relaxed text-muted-foreground">
+                <p className="border-t border-border/60 px-4 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
                   周期按交易日计算；小字为同周期 A 股指数排名；相对300 单位为百分点。
                   {hasIndexWarming && (
                     <span className="ml-2 text-warning">
@@ -519,7 +497,7 @@ export default function DashboardPage() {
           {/* 美股指数（若返回则展示） */}
           {usCards.length > 0 && (
             <section>
-              <SectionLabel index="02" title="美股指数" hint="T-1 收盘" />
+              <SectionHeader index="02" title="美股指数" hint="T-1 收盘" />
               <div className="card overflow-hidden">
                 <div className="overflow-x-auto scrollbar-thin">
                   <div className="min-w-[860px]">
@@ -539,36 +517,38 @@ export default function DashboardPage() {
           )}
 
           {/* ========== 融资融券概览 ========== */}
-          <MarginOverview margin={data.margin_data} />
+          <section>
+            <SectionHeader index="03" title="融资融券概览" hint="T-1 数据" />
+            <MarginOverview margin={data.margin_data} />
+          </section>
 
           {/* ========== 热力图 + 评分榜 ========== */}
-          <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <SectorHeatmap tradeDate={data.trade_date} />
-            <ScoreRanking sectors={sectors} stats={data.stats} tradeDate={data.trade_date} />
+          <section>
+            <SectionHeader index="04" title="板块热力与评分" hint="按申万一级行业；面积与颜色对应涨跌幅" />
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <SectorHeatmap tradeDate={data.trade_date} />
+              <ScoreRanking sectors={sectors} stats={data.stats} tradeDate={data.trade_date} />
+            </div>
           </section>
 
           {/* ========== 领涨 / 领跌 Top5 ========== */}
-          <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <SectorRankList title="领涨板块" sectors={topSectors} variant="up" />
-            <SectorRankList title="领跌板块" sectors={bottomSectors} variant="down" />
+          <section>
+            <SectionHeader index="05" title="领涨 / 领跌板块" hint="按当日涨跌幅取前后 5 名" />
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <SectorRankList title="领涨板块" sectors={topSectors} variant="up" />
+              <SectorRankList title="领跌板块" sectors={bottomSectors} variant="down" />
+            </div>
           </section>
 
           {/* ========== AI 复盘报告 ========== */}
-          <AIReport report={data.report} />
+          <section>
+            <SectionHeader index="06" title="AI 复盘报告" hint="由 DeepSeek 生成，可能存在事实偏差" />
+            <AIReport report={data.report} />
+          </section>
         </>
       )}
 
-      {/* 免责声明 */}
-      <div className="flex flex-col gap-1.5 border-t border-border/60 pt-4 text-[10px] leading-relaxed text-muted-foreground">
-        <p className="flex items-center gap-1.5">
-          <Activity className="h-3 w-3 shrink-0 text-brass/70" />
-          数据来自本地行情库，页面展示以「数据新鲜度」标注的采集时间为准。
-        </p>
-        <p className="flex items-center gap-1.5">
-          <Activity className="h-3 w-3 shrink-0 text-brass/70" />
-          颜色遵循 A 股习惯：红涨绿跌。量化评分与 AI 报告不构成投资建议。
-        </p>
-      </div>
+      <Disclaimer extraOnly extra="数据来自本地行情库，以「数据新鲜度」标注的采集时间为准；颜色遵循 A 股习惯（红涨绿跌），量化评分与 AI 报告不构成投资建议。" />
     </motion.div>
   )
 }

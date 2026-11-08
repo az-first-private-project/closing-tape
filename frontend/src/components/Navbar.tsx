@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarChart3, Moon, Search, Sun } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
+import StatusCenter from './StatusCenter'
 import { useWatchBadge } from '../hooks/useWatchSignals'
 import { NAV_ITEMS, PALETTE_OPEN_EVENT } from '../lib/navigation'
 import { cn } from '../lib/utils'
@@ -78,7 +79,7 @@ export default function Navbar() {
                 aria-label="打开命令面板（Ctrl+K 或 Command+K）"
                 title="命令面板（Ctrl/⌘ + K）"
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border/80
-                  bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground
+                  bg-muted/60 px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground
                   transition-colors hover:border-brass/40 hover:text-foreground"
               >
                 ⌘K
@@ -151,8 +152,8 @@ export default function Navbar() {
                           {isWatchlist && newCount > 0 && (
                             <span
                               aria-hidden="true"
-                              className="absolute -right-2 -top-2 min-w-[15px] h-[15px] px-1 rounded-full
-                                bg-alert text-background text-[9px] font-bold leading-[15px] text-center
+                              className="absolute -right-2.5 -top-2 min-w-[17px] h-[17px] px-1 rounded-full
+                                bg-alert text-background text-[11px] font-bold leading-[17px] text-center
                                 border border-background num"
                             >
                               {newCount > 9 ? '9+' : newCount}
@@ -183,6 +184,8 @@ export default function Navbar() {
             </button>
 
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border/80" />
+
+            <StatusCenter />
 
             <button
               onClick={toggle}

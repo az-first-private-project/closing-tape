@@ -6,6 +6,10 @@ interface PaginationBarProps {
   totalPages: number
   total: number
   onPageChange: (page: number) => void
+  /** 数量单位：文章「篇」、列表「条」 */
+  unit?: string
+  /** 紧凑模式：用在卡片/表格内部，去掉大段外边距 */
+  compact?: boolean
 }
 
 /** 分页：左右方向键按钮 + 等宽页码读数，视觉上与表格底部的元信息一致 */
@@ -14,9 +18,16 @@ export default function PaginationBar({
   totalPages,
   total,
   onPageChange,
+  unit = '条',
+  compact = false,
 }: PaginationBarProps) {
   return (
-    <div className="mt-12 flex items-center justify-center gap-4 border-t border-border/60 pt-6">
+    <div
+      className={cn(
+        'flex items-center justify-center gap-4 border-t border-border/60',
+        compact ? 'mt-2 pt-3' : 'mt-12 pt-6',
+      )}
+    >
       <button
         onClick={() => onPageChange(page - 1)}
         disabled={page <= 1}
@@ -26,11 +37,13 @@ export default function PaginationBar({
         <ChevronLeft className="h-4 w-4" />
       </button>
 
-      <div className="flex items-baseline gap-2 font-mono text-[11px] text-muted-foreground">
+      <div className="flex items-baseline gap-2 font-mono text-[12px] text-muted-foreground">
         <span className="text-foreground">{String(page).padStart(2, '0')}</span>
         <span className="text-muted-foreground/50">/</span>
         <span>{String(totalPages).padStart(2, '0')}</span>
-        <span className="ml-2 text-muted-foreground/70">共 {total} 篇</span>
+        <span className="ml-2 text-muted-foreground/70">
+          共 {total} {unit}
+        </span>
       </div>
 
       <button

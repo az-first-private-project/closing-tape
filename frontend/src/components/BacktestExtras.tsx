@@ -5,6 +5,8 @@
  * 数据全部来自后端已落库回测的派生结果，本组件不重算、不请求。
  */
 import { useMemo, useState, type ReactNode } from 'react'
+import { useReducedMotion } from 'framer-motion'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   Area,
   AreaChart,
@@ -50,13 +52,15 @@ function Section({
         type="button"
         onClick={() => setOpen((previous) => !previous)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-muted/40 rounded-lg"
+        className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex items-center gap-1.5">
-          <span className="w-3 text-muted-foreground">{open ? '▾' : '▸'}</span>
+          <span className="w-3 text-muted-foreground" aria-hidden="true">
+            {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </span>
           {title}
         </span>
-        {subtitle && <span className="text-[11px] font-normal text-muted-foreground">{subtitle}</span>}
+        {subtitle && <span className="text-[12px] font-normal text-muted-foreground">{subtitle}</span>}
       </button>
       {open && <div className="px-3 pb-3 pt-1">{children}</div>}
     </section>
@@ -118,7 +122,7 @@ function MonthlyHeatmap({ monthly }: { monthly: MonthlyReturn[] }) {
   return (
     <div className="space-y-2">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[780px] border-separate border-spacing-0.5 text-[11px]">
+        <table className="w-full min-w-[780px] border-separate border-spacing-0.5 text-[12px]">
           <thead>
             <tr className="text-muted-foreground">
               <th className="w-12 px-1 py-1 text-left font-normal">年份</th>
@@ -154,7 +158,7 @@ function MonthlyHeatmap({ monthly }: { monthly: MonthlyReturn[] }) {
                           <span className="text-muted-foreground/50">—</span>
                         )}
                         {item?.excess != null && (
-                          <span className="absolute right-1 top-0.5 text-[9px] num opacity-70">
+                          <span className="absolute right-1 top-0 text-[10px] num opacity-80">
                             {signed(item.excess)}
                           </span>
                         )}
@@ -179,7 +183,7 @@ function MonthlyHeatmap({ monthly }: { monthly: MonthlyReturn[] }) {
           </tbody>
         </table>
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[12px] text-muted-foreground">
         单元格为当月收益（%），右上角小字为超额收益；色阶以 ±5% 饱和，全年为逐月复利。
       </p>
     </div>
@@ -187,6 +191,7 @@ function MonthlyHeatmap({ monthly }: { monthly: MonthlyReturn[] }) {
 }
 
 function DrawdownChart({ result }: { result: BacktestResult }) {
+  const reducedMotion = useReducedMotion()
   const curve = result.drawdown_curve
   if (curve.length === 0) return <EmptyHint text="暂无回撤数据" />
   return (
@@ -212,6 +217,7 @@ function DrawdownChart({ result }: { result: BacktestResult }) {
           fillOpacity={0.22}
           strokeWidth={1.5}
           dot={false}
+          isAnimationActive={!reducedMotion}
         />
       </AreaChart>
     </ResponsiveContainer>
@@ -219,6 +225,7 @@ function DrawdownChart({ result }: { result: BacktestResult }) {
 }
 
 function RollingExcessChart({ result }: { result: BacktestResult }) {
+  const reducedMotion = useReducedMotion()
   const points = result.rolling_excess_20d
   const valid = points.filter((item) => item.value != null).length
   if (valid === 0) return <EmptyHint text="样本不足 20 个交易日，暂无滚动超额" />
@@ -241,6 +248,7 @@ function RollingExcessChart({ result }: { result: BacktestResult }) {
           strokeWidth={1.6}
           dot={false}
           connectNulls={false}
+          isAnimationActive={!reducedMotion}
         />
       </LineChart>
     </ResponsiveContainer>
@@ -359,7 +367,7 @@ function IndustryExposure({ snapshots }: { snapshots: IndustrySnapshot[] }) {
 
           return (
             <div key={snapshot.label} className="grid grid-cols-[72px_1fr_84px] items-center gap-2">
-              <span className={`text-[11px] num ${snapshot.merged ? 'text-muted-foreground' : ''}`}>
+              <span className={`text-[12px] num ${snapshot.merged ? 'text-muted-foreground' : ''}`}>
                 {snapshot.merged ? snapshot.label : shortDate(snapshot.label)}
               </span>
               <div
@@ -381,7 +389,7 @@ function IndustryExposure({ snapshots }: { snapshots: IndustrySnapshot[] }) {
                   />
                 ))}
               </div>
-              <span className="text-right text-[10px] text-muted-foreground num">
+              <span className="text-right text-[12px] text-muted-foreground num">
                 现金 {cashWeight.toFixed(1)}%
               </span>
             </div>
@@ -389,7 +397,7 @@ function IndustryExposure({ snapshots }: { snapshots: IndustrySnapshot[] }) {
         })}
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
         {view.topNames.map((name) => (
           <span key={name} className="inline-flex items-center gap-1">
             <span className="h-2 w-2 rounded-sm" style={{ background: colorByName.get(name) }} />
@@ -407,7 +415,7 @@ function IndustryExposure({ snapshots }: { snapshots: IndustrySnapshot[] }) {
           {CASH_LABEL}
         </span>
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[12px] text-muted-foreground">
         按调仓日重建持仓市值（收盘价）并汇总申万一级行业；现金显式列出，行业缺失的标的计入「其他」。
         超过 {MAX_EXPOSURE_DATES} 个调仓日时，较早的时点合并为「其余 N 期」均值。
       </p>

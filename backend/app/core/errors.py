@@ -46,10 +46,11 @@ class AppError(Exception):
     status_code: int = 500
 
     def __init__(self, message: str, *, detail: Any = None, code: str | None = None,
-                 status_code: int | None = None):
+                 status_code: int | None = None, suggestion: str | None = None):
         super().__init__(message)
         self.message = message
         self.detail = detail
+        self.suggestion = suggestion
         if code:
             self.code = code
         if status_code:
@@ -60,6 +61,10 @@ class AppError(Exception):
             "ok": False,
             "error": {"code": self.code, "message": self.message},
         }
+        if self.suggestion:
+            # C2：前端四个反馈要素（错误码/原因/建议/重试）中的「建议」。
+            # 仅追加可选字段；detail.next_action 保留原有位置。
+            body["error"]["suggestion"] = self.suggestion
         if self.detail is not None:
             body["error"]["detail"] = self.detail
         if request_id:
@@ -82,9 +87,13 @@ class DataUnavailableError(AppError):
     code = ErrorCode.DATA_NOT_READY
     status_code = 409
 
-    def __init__(self, message: str, *, next_action: str = "", detail: Any = None):
-        super().__init__(message, detail={"next_action": next_action, **(detail or {})}
-                         if next_action else detail)
+    def __init__(self, message: str, *, next_action: str = "", detail: Any = None,
+                 suggestion: str | None = None):
+        super().__init__(
+            message,
+            detail={"next_action": next_action, **(detail or {})} if next_action else detail,
+            suggestion=suggestion or (next_action or None),
+        )
 
 
 class QualityBlockedError(AppError):
