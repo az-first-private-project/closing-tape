@@ -398,8 +398,9 @@ async def _load_market_sentiment_inputs(session: AsyncSession,
                                         trade_date: date) -> dict:
     """读取融资/北向输入（市场级，所有板块共享）。
 
-    取数方向：`trade_date <= d ORDER BY trade_date DESC LIMIT 5`（最近 5 个交易日），
-    容忍数据晚一天（两融披露通常 T+1），并记录 `as_of` 便于追溯。
+    取数方向：`trade_date < d ORDER BY trade_date DESC LIMIT 5`（最近 5 个交易日）。
+    两融在 T+1 才披露，评分 T 日时只能看到 T-1 及更早的数据；若把同日行也算进来，
+    历史补跑会用当时尚不可知的数据，构成未来函数。`as_of` 记录实际使用的数据日。
     """
     stmt = (
         select(
@@ -409,7 +410,7 @@ async def _load_market_sentiment_inputs(session: AsyncSession,
             MarginTrading.margin_change,
             MarginTrading.northward_net,
         )
-        .where(MarginTrading.trade_date <= trade_date)
+        .where(MarginTrading.trade_date < trade_date)
         .order_by(MarginTrading.trade_date.desc())
         .limit(5)
     )

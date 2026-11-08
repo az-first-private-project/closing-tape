@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,6 +223,7 @@ async def generate_report(trade_date: date, db: AsyncSession) -> dict:
             "structured": result["structured"],
             "model": model,
             "is_fallback": result["is_fallback"],
+            "updated_at": func.now(),
         },
     )
     await db.execute(stmt)

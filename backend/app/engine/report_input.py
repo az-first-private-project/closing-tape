@@ -114,10 +114,14 @@ async def _load_indices(session: AsyncSession, trade_date: date) -> list[dict]:
 
 
 async def _load_margin(session: AsyncSession, trade_date: date) -> dict:
-    """最近一条两融/北向数据（容忍 T+1 披露；无数据显式标注）。"""
+    """最近一条两融/北向数据（严格早于报告日；无数据显式标注）。
+
+    两融 T+1 披露，报告 T 日只能引用 T-1 及更早的数据；使用同日行会把未来才
+    披露的数据写进日报。
+    """
     row = (await session.execute(
         select(MarginTrading)
-        .where(MarginTrading.trade_date <= trade_date)
+        .where(MarginTrading.trade_date < trade_date)
         .order_by(MarginTrading.trade_date.desc())
         .limit(1)
     )).scalar_one_or_none()
