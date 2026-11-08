@@ -114,3 +114,104 @@ jobs:
         run: npm run test:sparkline
       - name: Palette unit tests
         run: npm run test:palette
+
+  frontend-browser:
+    name: frontend browser acceptance
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gfna_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DATABASE: gfna_test
+      SCHEDULER_ENABLED: '0'
+      AUTO_CREATE_TABLES: '0'
+      CATCH_UP_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Migrate test database
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Seed demo data and downstream
+        working-directory: backend
+        run: |
+          END=$(python - <<'PY'
+          from datetime import date, timedelta
+          d = date.today()
+          while d.weekday() >= 5:
+              d -= timedelta(days=1)
+          print(d.isoformat())
+          PY
+          )
+          PYTHONPATH=. python scripts/pipeline_cli.py demo
+          for task in features scores sector_scores; do
+            PYTHONPATH=. python scripts/pipeline_cli.py "$task" --date "$END"
+          done
+      - name: Start backend
+        working-directory: backend
+        run: |
+          PYTHONPATH=. nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat /tmp/api.log
+          exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install and build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Start preview
+        working-directory: frontend
+        run: |
+          nohup npm run preview -- --host 127.0.0.1 --port 4173 --strictPort > /tmp/preview.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4173/ > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat /tmp/preview.log
+          exit 1
+      - name: Browser acceptance (4 viewports x 2 themes x 5 pages)
+        working-directory: backend
+        run: PYTHONPATH=. python scripts/visual_acceptance.py --base-url http://127.0.0.1:4173 --output artifacts/visual
+      - name: Upload screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-acceptance
+          path: backend/artifacts/visual
+          if-no-files-found: warn
+          retention-days: 14

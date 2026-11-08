@@ -589,6 +589,37 @@
   兜底）；构建产物必须整体部署，不能只替换 `index.html`。
 - 代价：约 1 小时。
 
+### P3-4 视口与生产验收（已完成 11-08）
+
+- 问题：多视口/明暗验收此前散落在 gitignore 的临时脚本里，内置浏览器视口长期只有
+  ~430px；1920、浅色主题与生产构建没有统一、可重复的断言，也没有 CI 截图产物。
+- 方案：新增 `backend/scripts/visual_acceptance.py`（Playwright，已是后端依赖）：
+  - 四档视口 375×812 / 768×1024 / 1440×900 / 1920×1080 × 明暗两主题 ×
+    5 个核心页面（首页 / 盘后分析 / 量化选股 / 纸面组合 / 个股 600519），共 40 个用例；
+  - 每个用例断言：主标题可见且相符、导航常驻、文档无横向溢出
+    （`scrollWidth <= innerWidth + 1`）、正文无 `NaN` / `undefined` / `-0.0%`、
+    `html.dark` 与主题一致且同页同视口下明暗背景色必须不同、无未捕获 JS 异常；
+    网络资源加载失败只记 warning（不把外链图片 404 当成布局失败）；
+  - 每个用例输出视口截图，汇总写 `results.json`（含 metrics 与失败原因），
+    任一失败以非零退出码结束；支持 `--only-pages / --viewports / --themes` 缩跑。
+  - CI 新增 `frontend-browser` 任务（ubuntu-22.04，兼容 Playwright 1.42）：
+    Postgres 服务 → 迁移 → `demo` 种子 + features/scores/sector_scores →
+    uvicorn → `npm ci && build` → `vite preview` → 运行同一脚本，
+    上传 `visual-acceptance` artifact（截图 + results.json，保留 14 天）。
+- 验收（真实后端 + P3-1 生产构建 + `vite preview`，本地）：
+  - **40/40 passed**，无溢出、无假值、无未捕获异常、无资源告警；
+  - 明暗主题背景色逐页逐视口均不同；盘后评分榜 10 行且 ≥768 宽度显示 10 条
+    sparkline、375 宽度隐藏走势列；个股页 7 个 canvas 正常渲染；
+  - 首轮 4 个失败均为脚本定位问题（“盘后分析”先命中移动端隐藏导航项导致等待超时），
+    收窄到 `main` 内定位后全绿，页面本身无回归；
+  - 产物：`backend/var/visual_acceptance/results.json` 与 40 张
+    `{page}-{w}x{h}-{theme}.png`（本地 gitignored，CI 走 artifact）。
+- 遗留：CI 用离线 demo 数据，验证的是布局/主题/交互基线，不覆盖真实数据业务正确性；
+  截图只截当前视口，不做整页长图；CI 与 frontend 任务并行，不等待 P3-1 构建产物
+  （各自独立构建）；Playwright 1.42 在 ubuntu-22.04 上验证，升级 runner 或 Playwright
+  需同步复核。
+- 代价：约 2 小时。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -718,7 +749,7 @@
 | P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 完成（11-08） |
 | P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 完成（11-08） |
 | P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 完成（11-08） |
-| P3-4 | P3 | 视口与生产验收 | 1d | W5 | P3-1 | 待开始 |
+| P3-4 | P3 | 视口与生产验收 | 1d | W5 | P3-1 | 完成（11-08） |
 
 ## 17. 立即可执行的前 5 步
 
