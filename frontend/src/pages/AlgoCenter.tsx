@@ -8,7 +8,7 @@
  * - 回测面板：POST /backtest/{algo_code}，绩效指标 + 净值曲线 + 成交明细 + 导出。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { CalendarDays, Download, History } from 'lucide-react'
 import { useAlgoList, useAlgoRun, useAlgoRuns, useAlgoRunDetail } from '../hooks/useAlgo'
@@ -45,6 +45,7 @@ function shortRunId(runId: string): string {
 
 export default function AlgoCenter() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   /** 已应用过的 ?algo=，避免列表后台刷新时重置用户改过的参数 */
   const appliedAlgoParam = useRef<string | null>(null)
@@ -107,6 +108,23 @@ export default function AlgoCenter() {
     setSelectedCode(first.algo_code)
     setParams(buildDefaultParams(first))
   }, [algoList, searchParams, selectedCode])
+
+  // #ladder 深链（/ladder 重定向、外部链接）：等开场幕布交还滚动后再定位
+  useEffect(() => {
+    if (location.hash !== '#ladder') return
+    const started = performance.now()
+    let frame = 0
+    const scrollWhenReady = () => {
+      const shell = document.querySelector('.app-shell')
+      if (shell?.classList.contains('is-intro-ready') || performance.now() - started > 5000) {
+        document.getElementById('ladder')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+      frame = requestAnimationFrame(scrollWhenReady)
+    }
+    frame = requestAnimationFrame(scrollWhenReady)
+    return () => cancelAnimationFrame(frame)
+  }, [location.hash])
 
   // ---- 交互 ----
   const handleSelect = useCallback(

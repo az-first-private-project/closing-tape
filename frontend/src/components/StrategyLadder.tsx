@@ -92,7 +92,11 @@ export default function StrategyLadder({
   )
 
   return (
-    <section className="card p-4 sm:p-5 space-y-4" aria-labelledby="ladder-title">
+    <section
+      id="ladder"
+      className="card p-4 sm:p-5 space-y-4 scroll-mt-20"
+      aria-labelledby="ladder-title"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="ladder-title" className="flex items-center gap-2 text-[14px] font-semibold">

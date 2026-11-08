@@ -4,6 +4,7 @@
  * /article/:id 新闻详情
  * /dashboard   盘后分析（原 /dashboard-v3）
  * /algo-center 选股中心
+ * /ladder      策略天梯（重定向到 /algo-center#ladder）
  * /paper       纸面组合跟踪
  * /stocks/:code 个股详情
  * /watchlist   自选股与信号提醒
@@ -11,7 +12,7 @@
  * /about       关于
  * *            404
  */
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import HomePage from './pages/HomePage'
 import DetailPage from './pages/DetailPage'
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/article/:id" element={<DetailPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/algo-center" element={<AlgoCenter />} />
+        <Route path="/ladder" element={<Navigate to="/algo-center#ladder" replace />} />
         <Route path="/paper" element={<PaperPage />} />
         <Route path="/stocks/:code" element={<StockDetailPage />} />
         <Route path="/watchlist" element={<WatchlistPage />} />

@@ -758,6 +758,7 @@ POST `/api/v1/paper/portfolio/{algo_code}/sync` → `202` 语义（HTTP 200）�
 | `/article/:id` | 新闻详情（保留） |
 | `/dashboard` | 盘后分析（原 `/dashboard-v3`，旧新闻统计页删除） |
 | `/algo-center` | 选股中心（参数/run 元信息/CSV、纸面跟踪入口） |
+| `/ladder` | 重定向到 `/algo-center#ladder`（策略天梯锚点） |
 | `/paper` | 纸面组合跟踪（V6 T11） |
 | `/stocks/:code` | 个股详情（新增） |
 | `/jobs` | 任务监控（新增） |

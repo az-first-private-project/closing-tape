@@ -509,6 +509,23 @@
   `end` 仍原样接受，不在本次范围。
 - 代价：约 1 小时。
 
+### P3-3 /ladder 独立路由（已完成 11-08）
+
+- 问题：外部链接或书签直接访问 `/ladder` 命中 404；策略天梯只能从选股中心手动下滚。
+- 方案：`/ladder` 用 `<Navigate to="/algo-center#ladder" replace />` 重定向；
+  `StrategyLadder` 根节点增加 `id="ladder"` 与 `scroll-mt-20`；`AlgoCenter` 增加
+  hash 定位 effect，等开场幕布交还滚动（`.app-shell.is-intro-ready`，5s 兜底超时）
+  后再 `scrollIntoView`。纯前端改动，不涉及接口与数据。
+- 验收（真实浏览器，Playwright Chromium 1440×900）：
+  - 直接访问 `/ladder` → 地址栏 `/algo-center#ladder`，页面无 404 文案；
+  - `#ladder` 存在且可见，`scrollY=108`，区块顶边 `top=86`（避开固定导航），
+    首屏即「策略天梯」；截图 `backend/var/p3_3_ladder_route.png`；
+  - Console 仅既有两条 React Router warning，无 error。
+  - `npm run build` 通过（主包 1029.20 kB / gzip 302.01 kB，较 P2-9 +0.88 kB）。
+- 遗留：hash 定位依赖天梯区块已渲染；若未来改为按需加载/条件渲染，需要把定位逻辑
+  挂到区块挂载后。开场幕布禁用（`?intro=0`、reduced-motion）时直接定位，路径一致。
+- 代价：约 20 分钟。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -637,7 +654,7 @@
 | P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 待授权 |
 | P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 待开始 |
 | P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 待开始 |
-| P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 待开始 |
+| P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 完成（11-08） |
 | P3-4 | P3 | 视口与生产验收 | 1d | W5 | P3-1 | 待开始 |
 
 ## 17. 立即可执行的前 5 步
