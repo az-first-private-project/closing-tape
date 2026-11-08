@@ -526,6 +526,37 @@
   挂到区块挂载后。开场幕布禁用（`?intro=0`、reduced-motion）时直接定位，路径一致。
 - 代价：约 20 分钟。
 
+### P3-2 评分榜 sparkline（已完成 11-08）
+
+- 问题：`ScoreRanking` 只有当日综合分，源码留有 `TODO(T14)`「评分历史未接入」；无法从
+  评分榜看出板块评分是在走强还是走弱。
+- 数据现状：`sector_score` 目前仅有 **13 个评分日**（2026-10-21 ~ 11-06，每日 447–480 行），
+  不是 30 个自然日；因此接口以“实际存在的评分日”为共同横轴，而不是固定 30 天日历。
+- 方案：
+  - 新增 `GET /api/v1/market/sector-scores/sparkline?codes=&days=30&end=`（契约 3.6）：
+    `codes` 去重保序、最多 100 个；`days` 5–120；`end` 默认库内最新评分日；
+    响应 `{end, days, dates[], items[{sector_code, scores[]}]}`，`scores` 与 `dates`
+    等长，某日无评分填 `null`，不补 0、不前值填充；未知代码返回全 `null` 而非报错。
+  - 前端 `ScoreRanking` 只对 TOP 10 请求 30 日序列（`useSectorScoreSparkline`，缓存键含
+    排序去重后的代码 + days + end），复用 `Sparkline`（固定 `domain=[0,10]`）；0/1 个
+    有效点显示 `—`，不画灰色假线；`sm` 以下隐藏走势列；日期切换时 `end` 跟随所选交易日。
+- 自测：
+  - `backend/tests/test_sector_score_sparkline.py`：无 DB 时 8 通过 1 跳过；
+    `GFNA_TEST_DB=1` 时 9 通过（含与 dashboard top-10 的末值/日期/区间一致性）。
+  - 真实浏览器（Playwright Chromium，1440×900，`?intro=0`）：
+    - 最新日 11-06：10 行、10 个可见 sparkline，`data-points=13`、`data-missing=0`，
+      tooltip `光伏设备 · 近 13 个评分日综合评分 · 末值 7.1 · 区间 3.6 – 7.1 · 13 点`，
+      单次批量请求（`apiRequests=1`）；
+    - 切换 2026-10-21（当日仅一天评分历史）：10 行全部 `—`、0 个 sparkline SVG；
+    - 切换 2026-10-23：10 个 sparkline、3 个点；
+    - 375px 视口：10 个 SVG 在 DOM 中但可见数为 0，`scrollWidth=375=innerWidth` 无横向溢出；
+    - Console 仅两条既有 React Router warning，无 error。
+  - `npm run build` 通过（主包 1030.70 kB / gzip 302.55 kB，较 P3-3 +1.50 kB）。
+- 遗留：只有 13 个评分日，30/60 日走势在补齐评分前无法呈现；2026-10-21 的评分行可能
+  含演示期数据（清理未授权，与评分榜现状一致，未在本项处理）；移动端隐藏走势列；
+  接口按评分日取点而非自然日，跨长假时相邻点间隔会变大。
+- 代价：约 1.5 小时。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -653,7 +684,7 @@
 | P2-9 | P2 | 回测默认结束日 | 1h | W3 | — | 完成（11-08） |
 | P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 待授权 |
 | P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 待开始 |
-| P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 待开始 |
+| P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 完成（11-08） |
 | P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 完成（11-08） |
 | P3-4 | P3 | 视口与生产验收 | 1d | W5 | P3-1 | 待开始 |
 

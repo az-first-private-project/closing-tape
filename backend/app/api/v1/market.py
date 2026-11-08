@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import BENCHMARK_INDEX, INDEX_MAP
-from app.core.errors import DataUnavailableError
+from app.core.errors import DataUnavailableError, InvalidParamError
 from app.core.logging import get_logger
 from app.db.models import (
     DailyReport, DimSectorMember, DimStock, FactSectorDaily, FactStockDaily, MarginTrading,
@@ -166,6 +166,90 @@ async def get_sectors(
         return {"trade_date": None, "items": []}
     items = await _query_sectors(db, resolved, sector_type)
     return {"trade_date": resolved.isoformat(), "count": len(items), "items": items}
+
+
+#: 评分榜 sparkline 一次最多覆盖的板块数（榜单只取 Top 10，留足余量）
+_MAX_SCORE_CODES = 100
+_MAX_SECTOR_CODE_LEN = 32
+
+
+def _parse_sector_codes(raw: str) -> list[str]:
+    """逗号分隔板块代码 → 去重保序；非法或超量直接 422。"""
+    codes: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if len(part) > _MAX_SECTOR_CODE_LEN or any(ch.isspace() for ch in part):
+            raise InvalidParamError(f"无效板块代码: {part!r}", detail={"sector_code": part})
+        if part not in seen:
+            seen.add(part)
+            codes.append(part)
+    if not codes:
+        raise InvalidParamError("codes 至少包含 1 个板块代码")
+    if len(codes) > _MAX_SCORE_CODES:
+        raise InvalidParamError(
+            f"codes 最多 {_MAX_SCORE_CODES} 个，收到 {len(codes)} 个"
+        )
+    return codes
+
+
+def _align_sector_scores(
+    codes: list[str], dates: list[date], rows: list[tuple[str, date, Any]]
+) -> list[dict]:
+    """把稀疏评分行对齐到共同横轴：缺分日期填 null，不用 0 或前值补齐。"""
+    values = {(code, trade_date): _f(score) for code, trade_date, score in rows}
+    return [
+        {"sector_code": code, "scores": [values.get((code, day)) for day in dates]}
+        for code in codes
+    ]
+
+
+@router.get("/sector-scores/sparkline")
+async def get_sector_score_sparkline(
+    codes: str = Query(..., description="逗号分隔板块代码（最多 100 个）"),
+    days: int = Query(30, ge=5, le=120, description="最近 N 个评分日"),
+    end: Optional[date] = Query(None, description="截止交易日，默认最新评分日"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量近 N 个评分日综合分序列（P3-2 评分榜 sparkline）。
+
+    横轴取库内实际存在的评分日（≤ end，最多 days 个）；某板块当日无评分时
+    该点为 null，由前端断线并提示缺数据。
+    """
+    wanted = _parse_sector_codes(codes)
+    target = end or (await db.execute(
+        select(func.max(SectorScore.trade_date))
+    )).scalar()
+    if target is None:
+        return {"end": None, "days": days, "dates": [], "items": []}
+
+    axis = (await db.execute(
+        select(SectorScore.trade_date)
+        .where(SectorScore.trade_date <= target)
+        .distinct()
+        .order_by(SectorScore.trade_date.desc())
+        .limit(days)
+    )).scalars().all()
+    dates = sorted(axis)
+    if not dates:
+        return {"end": target.isoformat(), "days": days, "dates": [], "items": []}
+
+    rows = (await db.execute(
+        select(SectorScore.sector_code, SectorScore.trade_date, SectorScore.composite_score)
+        .where(
+            SectorScore.sector_code.in_(wanted),
+            SectorScore.trade_date >= dates[0],
+            SectorScore.trade_date <= target,
+        )
+    )).all()
+    return {
+        "end": target.isoformat(),
+        "days": days,
+        "dates": [day.isoformat() for day in dates],
+        "items": _align_sector_scores(wanted, dates, rows),
+    }
 
 
 @router.get("/temperature")

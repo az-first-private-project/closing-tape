@@ -8,6 +8,7 @@ import type {
   MarketTemperature,
   SectorDetail,
   SectorList,
+  SectorScoreSparkline,
   SectorType,
   TemperatureSeries,
 } from '../types/market'
@@ -46,6 +47,23 @@ export function fetchSectors(
 ): Promise<SectorList> {
   return request<SectorList>('/market/sectors', {
     query: { trade_date: tradeDate ?? undefined, sector_type: sectorType },
+  })
+}
+
+/**
+ * 板块综合评分近 N 个评分日序列（P3-2 评分榜 sparkline）
+ * 横轴为库内实际评分日；缺分日期返回 null，由前端断线显示。
+ */
+export function fetchSectorScoreSparkline(
+  codes: string[],
+  options: { days?: number; end?: string } = {},
+): Promise<SectorScoreSparkline> {
+  return request<SectorScoreSparkline>('/market/sector-scores/sparkline', {
+    query: {
+      codes: codes.join(','),
+      days: options.days ?? 30,
+      end: options.end || undefined,
+    },
   })
 }
 

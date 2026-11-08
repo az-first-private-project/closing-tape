@@ -5,9 +5,9 @@
  * - useTradeCalendar：拉取最近 N 天交易日历，供日期选择器使用。
  */
 import { useQuery } from '@tanstack/react-query'
-import { fetchDashboard, fetchIndexSeries } from '../api/market'
+import { fetchDashboard, fetchIndexSeries, fetchSectorScoreSparkline } from '../api/market'
 import { fetchTradeCalendar } from '../api/meta'
-import type { DashboardData, IndexSeriesResponse } from '../types/market'
+import type { DashboardData, IndexSeriesResponse, SectorScoreSparkline } from '../types/market'
 
 /** 本地日期 → YYYY-MM-DD */
 function localDateString(date: Date): string {
@@ -34,6 +34,24 @@ export function useIndexSeries(days = 60, tradeDate?: string, enabled = true) {
     enabled,
     staleTime: 5 * 60 * 1000,
     refetchInterval: tradeDate ? false : 10 * 60 * 1000,
+  })
+}
+
+/** 板块综合评分近 N 个评分日序列（P3-2 评分榜 sparkline） */
+export function useSectorScoreSparkline(
+  codes: string[],
+  days = 30,
+  end?: string,
+  enabled = true,
+) {
+  const unique = [...new Set(codes.filter(Boolean))].sort()
+  return useQuery<SectorScoreSparkline>({
+    queryKey: ['sector-score-sparkline', unique, days, end || 'latest'],
+    queryFn: () => fetchSectorScoreSparkline(unique, { days, end }),
+    enabled: enabled && unique.length > 0,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: end ? false : 10 * 60 * 1000,
+    placeholderData: (previousData) => previousData,
   })
 }
 

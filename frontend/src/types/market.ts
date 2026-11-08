@@ -114,6 +114,22 @@ export interface SectorQuote {
 
 export type SectorType = 'industry' | 'concept'
 
+/** 板块评分序列（P3-2 评分榜 sparkline） */
+export interface SectorScoreSparklineItem {
+  sector_code: string
+  /** 与响应 dates 等长；当日无评分为 null，不用 0 补齐 */
+  scores: (number | null)[]
+}
+
+/** GET /api/v1/market/sector-scores/sparkline */
+export interface SectorScoreSparkline {
+  end: string | null
+  days: number
+  /** 库内实际存在的评分日，升序 */
+  dates: string[]
+  items: SectorScoreSparklineItem[]
+}
+
 /** GET /api/v1/market/sectors 响应（T4） */
 export interface SectorList {
   trade_date: string | null

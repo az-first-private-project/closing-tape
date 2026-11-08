@@ -544,7 +544,7 @@ export default function DashboardPage() {
           {/* ========== 热力图 + 评分榜 ========== */}
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <SectorHeatmap tradeDate={data.trade_date} />
-            <ScoreRanking sectors={sectors} stats={data.stats} />
+            <ScoreRanking sectors={sectors} stats={data.stats} tradeDate={data.trade_date} />
           </section>
 
           {/* ========== 领涨 / 领跌 Top5 ========== */}

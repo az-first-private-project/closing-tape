@@ -5,14 +5,13 @@
  *  - 评分统一 0–10 分制，评分条宽度 = score/10 * 100%；
  *  - 未评分（composite_score === null）显示「未评分」，绝不用 5 分兜底；
  *  - 展示已评分板块数 / 总板块数。
- *
- * TODO(T14): 板块综合分历史尚无接口，暂不接入 30 日 sparkline。
- * 需要 /market/sectors 增加 days 序列或独立的 sector score history 端点；
- * 不为 sparkline 单独新增重接口。
+ *  - P3-2：每行接入近 30 个评分日综合分 sparkline（批量接口一次取回
+ *    Top 10 的序列）；无历史时显示「—」，缺分日期断线，不用 0 补齐。
  *
  * 视觉：榜单化的排行条——前三名铜色奖牌，三面评分压缩为微型量条，
- * 综合分作为每行最重的读数。
+ * 走势线提示动能方向，综合分作为每行最重的读数。
  */
+import { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   Bar,
@@ -25,12 +24,16 @@ import {
   YAxis,
 } from 'recharts'
 import type { DashboardStats, SectorQuote } from '../types/market'
+import { useSectorScoreSparkline } from '../hooks/useDashboard'
 import { fmtPct, fmtScore, pctColor, scorePercent } from '../lib/format'
 import { chartColor } from '../lib/color'
+import Sparkline from './Sparkline'
 
 interface Props {
   sectors: SectorQuote[]
   stats?: DashboardStats
+  /** 仪表盘解析后的交易日；sparkline 以此为截止日 */
+  tradeDate?: string
   onSelect?: (sectorCode: string) => void
 }
 
@@ -62,7 +65,69 @@ function ScoreBar({ value, color, title }: { value: number | null; color: string
   )
 }
 
-export default function ScoreRanking({ sectors, stats, onSelect }: Props) {
+/** 单行走势：Top 10 由整页一次批量请求覆盖，单行不再发请求 */
+function ScoreSparkline({
+  sectorName,
+  scores,
+  points,
+  loading,
+  failed,
+}: {
+  sectorName: string
+  scores?: (number | null)[]
+  points: number
+  loading: boolean
+  failed: boolean
+}) {
+  const validCount = scores?.filter((value) => value !== null).length ?? 0
+  if (loading) {
+    return <span className="inline-block h-[22px] w-[72px]" aria-hidden="true" />
+  }
+  // 0/1 个有效点画不出走势：统一显示「—」，不渲染灰色假线
+  if (validCount <= 1) {
+    return (
+      <span
+        className="text-[11px] text-muted-foreground"
+        title={failed ? '评分历史加载失败' : validCount === 0 ? '暂无评分历史' : '评分历史不足'}
+      >
+        —
+      </span>
+    )
+  }
+  return (
+    <Sparkline
+      values={scores}
+      days={30}
+      width={72}
+      height={22}
+      domain={[0, 10]}
+      color="var(--color-brass)"
+      label={`${sectorName} · 近 ${points || scores.length} 个评分日综合评分`}
+      formatValue={(value) => value.toFixed(1)}
+      className="ml-auto w-[72px]"
+    />
+  )
+}
+
+export default function ScoreRanking({ sectors, stats, tradeDate, onSelect }: Props) {
+  // 只对「已评分」板块排序取 Top 10
+  const { scored, top } = useMemo(() => {
+    const scoredRows = sectors.filter((sector) => sector.composite_score !== null)
+    const topRows = [...scoredRows]
+      .sort((left, right) => (right.composite_score ?? 0) - (left.composite_score ?? 0))
+      .slice(0, 10)
+    return { scored: scoredRows, top: topRows }
+  }, [sectors])
+  const topCodes = useMemo(() => top.map((sector) => sector.sector_code), [top])
+  const history = useSectorScoreSparkline(topCodes, 30, tradeDate, top.length > 0)
+  const historyMap = useMemo(() => {
+    const map = new Map<string, (number | null)[]>()
+    for (const item of history.data?.items ?? []) {
+      map.set(item.sector_code, item.scores)
+    }
+    return map
+  }, [history.data])
+
   if (!sectors.length) {
     return (
       <div className="card flex h-[300px] items-center justify-center p-6 text-[12px] text-muted-foreground">
@@ -71,13 +136,9 @@ export default function ScoreRanking({ sectors, stats, onSelect }: Props) {
     )
   }
 
-  // 只对「已评分」板块排序取 Top 10
-  const scored = sectors.filter((sector) => sector.composite_score !== null)
-  const top = [...scored]
-    .sort((left, right) => (right.composite_score ?? 0) - (left.composite_score ?? 0))
-    .slice(0, 10)
   const scoredCount = stats?.scored_sectors ?? scored.length
   const totalCount = stats?.total_sectors ?? sectors.length
+  const historyLoading = history.isLoading && !history.data
 
   return (
     <div className="card p-4">
@@ -113,6 +174,7 @@ export default function ScoreRanking({ sectors, stats, onSelect }: Props) {
                 onClick={onSelect ? () => onSelect(sector.sector_code) : undefined}
                 className={`row-accent group relative grid w-full grid-cols-[1.5rem_minmax(0,1fr)_auto_2.6rem] items-center gap-3
                   rounded-lg px-2 py-1.5 text-left transition-colors duration-200 hover:bg-muted/40
+                  sm:grid-cols-[1.5rem_minmax(0,1fr)_auto_4.75rem_2.6rem]
                   ${onSelect ? 'cursor-pointer' : ''}`}
               >
                 {/* 排名 */}
@@ -138,6 +200,17 @@ export default function ScoreRanking({ sectors, stats, onSelect }: Props) {
                       title={dimension.title}
                     />
                   ))}
+                </div>
+
+                {/* 30 个评分日综合分走势（小屏隐藏，避免挤压名称与评分） */}
+                <div className="hidden text-right sm:block">
+                  <ScoreSparkline
+                    sectorName={sector.sector_name}
+                    scores={historyMap.get(sector.sector_code)}
+                    points={history.data?.dates.length ?? 0}
+                    loading={historyLoading}
+                    failed={history.isError}
+                  />
                 </div>
 
                 {/* 综合分 */}

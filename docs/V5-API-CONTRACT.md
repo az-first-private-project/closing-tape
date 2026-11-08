@@ -213,6 +213,21 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 - `is_partial` / `partial_member_count`：名单是否仅为 partial 样本，以及该样本的成员数（完整名单为 `false / null`）。partial 板块的 `up_count/down_count/market_cap` 不可用，前端必须显示「名单不完整 · 样本 N 只」并用「不适用」代替家数/市值，不能把样本数当成完整家数。
 - `up_count` / `down_count` 在部分同花顺概念板块上恒为 `null`（源头不提供），前端显示「不适用」，**不得**按 0 渲染。
 
+### 3.6 GET `/api/v1/market/sector-scores/sparkline?codes=&days=30&end=`
+批量板块评分序列（P3-2 评分榜 sparkline）。`codes` 为逗号分隔板块代码（去重保序，最多 100 个）；
+`days` 为最近 N 个**评分日**，取值 5–120，默认 30；`end` 为截止交易日，默认库内最新评分日。
+```json
+{ "end": "2026-11-06", "days": 30,
+  "dates": ["2026-10-21", "2026-10-22", "…", "2026-11-06"],
+  "items": [ { "sector_code": "THS_光伏设备",
+               "scores": [6.21, 6.96, 7.08, null, "…"] } ] }
+```
+- `dates` 是 `sector_score` 中实际存在的评分日（升序、最多 `days` 个），不是自然日日历；当前库内仅 13 个评分日，因此 30 日请求返回 13 个点。
+- `scores` 与 `dates` **等长**；某板块某评分日无记录时填 `null`，**不补 0、不前值填充**，前端渲染为 `—` 或断线。
+- 未知板块代码不报错，返回全 `null` 序列；库内无任何评分时返回 `{ "end": null, "days": 30, "dates": [], "items": [] }`。
+- 参数校验失败（`codes` 为空、含空白/超长代码、超过 100 个）返回 `422 INVALID_PARAM`，`detail.sector_code` 指明违规代码。
+- 前端 `ScoreRanking` 仅对 TOP 10 板块请求 30 日序列并复用 `Sparkline`（0/1 个有效点显示 `—`，不画假线）；`sm` 以下隐藏走势列。
+
 ## 4. 个股（E4）
 
 ### 4.1 GET `/api/v1/stocks/{code}`
