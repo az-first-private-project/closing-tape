@@ -8,13 +8,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi import BackgroundTasks
 
 from app.api.v1 import backtest as backtest_api
-from app.core.errors import InvalidParamError
+from app.core.errors import DataUnavailableError, InvalidParamError
 
 
 class _Request:
@@ -32,6 +32,24 @@ class _FakeDb:
 
     async def commit(self) -> None:
         self.commits += 1
+
+
+class _ScalarResult:
+    def __init__(self, value) -> None:
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+
+class _ScalarDb:
+    """只提供 max(trade_date) 查询结果的假会话。"""
+
+    def __init__(self, value) -> None:
+        self._value = value
+
+    async def execute(self, statement):
+        return _ScalarResult(self._value)
 
 
 def _create(db: _FakeDb, background: BackgroundTasks, **overrides):
@@ -97,6 +115,37 @@ def test_create_backtest_rejects_invalid_range_before_enqueue() -> None:
 
     assert db.added == []
     assert background.tasks == []
+
+
+def test_default_end_date_follows_latest_market_data() -> None:
+    latest = date(2026, 11, 6)
+    assert asyncio.run(backtest_api._default_end_date(_ScalarDb(latest))) == latest
+
+    future = date.today() + timedelta(days=3)
+    assert asyncio.run(backtest_api._default_end_date(_ScalarDb(future))) == date.today()
+
+    with pytest.raises(DataUnavailableError):
+        asyncio.run(backtest_api._default_end_date(_ScalarDb(None)))
+
+
+def test_create_backtest_defaults_end_to_latest_trade_date(monkeypatch) -> None:
+    async def fake_data_start(algo_code, db):
+        return None
+
+    async def fake_default_end(db):
+        return date(2026, 11, 6)
+
+    monkeypatch.setattr(backtest_api, "_data_start", fake_data_start)
+    monkeypatch.setattr(backtest_api, "_default_end_date", fake_default_end)
+    db, background = _FakeDb(), BackgroundTasks()
+
+    result = _create(db, background, start=None, end=None)
+
+    record = db.added[0]
+    assert record.end_date == date(2026, 11, 6)
+    assert record.start_date == date(2025, 11, 6)
+    assert result["end_date"] == "2026-11-06"
+    assert result["start_date"] == "2025-11-06"
 
 
 def test_execute_backtest_passes_through_and_swallows_failure(monkeypatch) -> None:

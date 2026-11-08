@@ -20,7 +20,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BACKTEST
-from app.core.errors import InvalidParamError, NotFoundError, UnknownAlgoError
+from app.core.errors import (
+    DataUnavailableError, InvalidParamError, NotFoundError, UnknownAlgoError,
+)
 from app.core.logging import get_logger
 from app.db.models import (
     BacktestRun, DimStock, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
@@ -75,6 +77,25 @@ async def _data_start(algo_code: str, db: AsyncSession) -> date | None:
             select(func.min(FactStockDaily.trade_date)).where(FactStockDaily.pe_ttm.isnot(None))
         )).scalar()
     return None
+
+
+async def _default_end_date(db: AsyncSession) -> date:
+    """默认结束日：库内最新有行情的交易日，且不晚于今天。
+
+    与 ``/health.latest_trade_date`` 同源（``fact_stock_daily.max(trade_date)``）。
+    直接取 ``date.today()`` 会在周末/节假日或当日行情尚未落库时把非交易日
+    写进回测区间，而净值曲线实际只到上一个交易日。
+    """
+    latest = (await db.execute(
+        select(func.max(FactStockDaily.trade_date))
+    )).scalar()
+    if latest is None:
+        raise DataUnavailableError(
+            "数据库中尚无个股行情数据",
+            next_action="POST /api/v1/admin/ingest/daily_snapshot",
+            detail={"dataset": "fact_stock_daily"},
+        )
+    return min(date.today(), latest)
 
 
 def _collect_strategy_params(algo_code: str, query: dict) -> dict:
@@ -187,7 +208,7 @@ async def create_backtest(
     request: Request,
     background_tasks: BackgroundTasks,
     start: Optional[date] = Query(None, description="默认近 1 年"),
-    end: Optional[date] = Query(None, description="默认最新交易日"),
+    end: Optional[date] = Query(None, description="默认库内最新行情交易日"),
     rebalance_days: int = Query(BACKTEST.rebalance_days, ge=1, le=250),
     max_positions: int = Query(BACKTEST.max_positions, ge=1, le=100),
     benchmark: str = Query(BACKTEST.benchmark_code),
@@ -206,7 +227,8 @@ async def create_backtest(
         raise UnknownAlgoError(f"未知策略: {algo_code}",
                                detail={"available": sorted(SPECS.keys())})
 
-    end = end or date.today()
+    if end is None:
+        end = await _default_end_date(db)
     start = start or (end - timedelta(days=365))
     if start >= end:
         raise InvalidParamError("start 必须早于 end")

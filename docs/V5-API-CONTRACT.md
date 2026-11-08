@@ -507,7 +507,8 @@ PUT 请求体（两个字段均可选，只传一个时另一个保持不变）�
 
 ### 6.1 POST `/api/v1/backtest/{algo_code}` — 创建异步回测任务（P2-4）
 
-Query：`start`（默认近 1 年）、`end`（默认 today，引擎按可用交易日截断）、
+Query：`start`（默认近 1 年）、`end`（默认库内最新行情交易日 = `/health.latest_trade_date`，
+且不晚于今天；显式传入则原样使用）、
 `rebalance_days=20`、`max_positions=20`、`benchmark=sh000300`、`commission=0.00025`、
 `stamp_tax=0.001`、`slippage=0.001`、以及策略参数（同 5.2）。
 
@@ -519,6 +520,8 @@ Query：`start`（默认近 1 年）、`end`（默认 today，引擎按可用交
   "poll": "/api/v1/backtest/b7d1…" }
 ```
 
+- 省略 `end` 时，响应与落库的 `end_date` 是**解析后的最新行情交易日**，不是自然日
+  `today`；周末、节假日或当日行情未落库不会把非交易日写进回测区间。
 - 参数错误（未知策略、`start >= end`、区间超过 6 年、数据起点晚于 `end`）仍在 POST
   阶段返回 4xx，**不会入队**。
 - 入队即落 `backtest_run.status=queued` 并提交；后台任务随后改为 `running`，
