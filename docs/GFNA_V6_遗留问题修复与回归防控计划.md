@@ -451,6 +451,39 @@
   该按钮只打开命令面板，不替代桌面新闻搜索框（窄屏仍无新闻关键词搜索入口）。
 - 代价：约 1 小时。
 
+### P2-7 历史 run 信号快照版本（已完成 11-08）
+
+- 问题：重构前的 run 没有 `metrics.triggered` / `score_breakdown`。前端只凭字段缺失
+  判断“旧版本”，无法区分“旧快照”与“当前版本但该信号缺依据”；统计侧也无法按版本筛选。
+- 方案：`stg_run` 新增 `signal_schema SMALLINT NOT NULL`（1=旧版无结构化依据，2=当前）。
+  迁移 `0010_stg_run_signal_schema` 先按默认 1 加列，仅用已落库 JSONB 证据回填：
+  `metrics ? 'triggered' OR metrics ? 'score_breakdown'` 的 run 标为 2，再把默认值改为 2；
+  不重算、不推断、不改写任何信号数据。
+- 后端：`runner.SIGNAL_SCHEMA_VERSION = 2`，新 run 写入该值；`_run_meta` 与 `list_runs`
+  返回 `signal_schema`（未落库对象兜底 1）。**不批量重跑历史 run**：重跑会生成新 run 并把
+  同参数旧 success run 置为 `superseded`，改变历史与统计口径。
+- 前端：`AlgoRun.signal_schema` + `isLegacySignalSnapshot()`；`RunMetaPanel` 仅对
+  a3/b1–b5 且 `signal_schema<2`、`signal_count>0` 的 run 显示「旧版本快照」徽章（title 带
+  版本号）；`SignalExplanation` 对旧快照显示“无拆解/无逐条依据”，对当前版本缺字段显示
+  “当前版本未记录该信号…”，两种提示不再混用。a1/a2/a4 本身无可解释依据，不显示徽章。
+- 数据对账（gfna_db）：迁移前 head `0009`，1019 个 run；迁移后 `signal_schema=2` 366 个、
+  `=1` 653 个；`signal_schema=1` 且存在结构化证据的 run = 0，结构化证据 run 全部为 2；
+  列类型 `smallint NOT NULL DEFAULT 2`。迁移同时应用到 `gfna_test`。
+- 验收（Playwright 1440×900，真实前后端）：
+  - 当前 a3 run（schema 2）：无徽章，展开首行显示评分拆解（“条形长度 = 分项得分 / 10”）。
+  - 历史 a3 run `989c8220`（schema 1，20 信号）：徽章可见且 title 含“信号快照 schema 1”，
+    展开显示“该 run 为旧版本快照，无评分拆解”，无拆解条。
+  - a4 历史 run（schema 1、50 信号）：无徽章、无展开列（策略本身无可解释依据，不误报）。
+  - Console 仅既有 React Router 两条 warning，无 error。
+- 回归：`tests/test_run_signal_schema.py`（4 例）、`tests/integration/test_run_signal_schema_sql.py`
+  （1 例，gfna_test 默认值）；相关 run/strategy 单测 43 例通过。`npm run build` 通过
+  （主包 1028.32 kB / gzip 301.75 kB，较 P2-6 +0.63 kB）。
+- 遗留：历史 run 的“可复现重算”未执行（批量重算会污染历史与统计），仅保留只读标注；
+  确需最新依据需用户显式执行或强制刷新。历史 run 下拉仅列最近 10 条，更早的旧 run 需
+  通过 run_id 直达（本次验收用真实 onChange 注入，不改接口/数据）；a1/a2/a4 存量 run 仍为
+  schema 1，仅表示写入版本，不产生依据缺失提示。
+- 代价：约 0.5 天。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -573,7 +606,7 @@
 | P2-4 | P2 | 回测异步化 | 1–2d | W4 | P2-2 | 完成（11-08） |
 | P2-5 | P2 | 共识榜批量 kline | 0.5d | W4 | — | 完成（11-08） |
 | P2-6 | P2 | 移动端命令面板 | 1h | W3 | — | 完成（11-08） |
-| P2-7 | P2 | 历史 run 元数据标注 | 0.5–1d | W4 | — | 待开始 |
+| P2-7 | P2 | 历史 run 元数据标注 | 0.5–1d | W4 | — | 完成（11-08） |
 | P2-8 | P2 | 测试隔离与残留清理 | 0.5d | W3 | W0-5 | 待授权 |
 | P2-9 | P2 | 回测默认结束日 | 1h | W3 | — | 待开始 |
 | P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 待授权 |

@@ -46,6 +46,8 @@ export interface AlgoRun {
   universe_count: number | null
   signal_count: number | null
   data_version: string | null
+  /** 信号快照 schema：1=旧版无结构化依据，2=当前（triggered/score_breakdown） */
+  signal_schema?: number | null
   params: AlgoParamsSnapshot
   /** 后端额外返回：running / success / failed */
   status?: string | null
@@ -100,6 +102,24 @@ export type AlgoMetricValue =
   | TriggeredCondition[]
   | ScoreBreakdown
   | Record<string, AlgoMetricScalar>
+
+/** 当前信号快照 schema（与后端 runner.SIGNAL_SCHEMA_VERSION 对齐） */
+export const CURRENT_SIGNAL_SCHEMA = 2
+
+/** 有逐条依据 / 评分拆解的策略 */
+export function supportsSignalExplanation(algo?: string | null): boolean {
+  return algo === 'a3' || /^b[1-5]$/.test(algo ?? '')
+}
+
+/** 旧版信号快照：缺版本号也按旧版处理（旧后端不返回该字段） */
+export function isLegacySignalSnapshot(
+  algo: string | null | undefined,
+  signalSchema?: number | null,
+): boolean {
+  if (!supportsSignalExplanation(algo)) return false
+  if (signalSchema === null || signalSchema === undefined) return true
+  return signalSchema < CURRENT_SIGNAL_SCHEMA
+}
 
 /** 读取逐条依据；旧 run 没有该字段时返回 null */
 export function rowTriggered(row: AlgoStockRow): TriggeredCondition[] | null {

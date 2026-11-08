@@ -52,6 +52,9 @@ from app.strategy import strategies as strat
 
 logger = logging.getLogger(__name__)
 
+#: 信号快照 schema：1=旧版无结构化依据，2=当前（triggered/score_breakdown）
+SIGNAL_SCHEMA_VERSION = 2
+
 #: 缓存查找时回看的历史 run 条数（同一 (algo, date) 下参数组合通常远小于该值）
 _CACHE_LOOKBACK = 50
 
@@ -299,6 +302,7 @@ def _run_meta(run: StgRun) -> dict:
         "universe_count": int(run.universe_count or 0),
         "signal_count": int(run.signal_count or 0),
         "data_version": run.data_version,
+        "signal_schema": int(run.signal_schema or 1),
         "params": strat.jsonable(run.params or {}),
         "status": run.status,
     }
@@ -518,6 +522,7 @@ async def _run_strategy_impl(
         universe_count=0,
         signal_count=0,
         data_version=version,
+        signal_schema=SIGNAL_SCHEMA_VERSION,
         is_backtest=bool(is_backtest),
         status="running",
     )
@@ -675,6 +680,7 @@ async def list_runs(
             "universe_count": int(run.universe_count or 0),
             "signal_count": int(run.signal_count or 0),
             "data_version": run.data_version,
+            "signal_schema": int(run.signal_schema or 1),
             "params": strat.jsonable(run.params or {}),
             "status": run.status,
             "error": run.error,
@@ -685,6 +691,7 @@ async def list_runs(
 
 
 __all__ = [
+    "SIGNAL_SCHEMA_VERSION",
     "params_fingerprint",
     "data_version",
     "latest_trade_date",

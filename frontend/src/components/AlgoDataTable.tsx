@@ -8,6 +8,7 @@ import { useMemo } from 'react'
 import { Info } from 'lucide-react'
 import {
   rowScore,
+  supportsSignalExplanation,
   type AlgoMetricScalar,
   type AlgoParamsSnapshot,
   type AlgoStockRow,
@@ -26,6 +27,8 @@ interface Props {
   fullDesc?: string | null
   /** run 参数快照（底部固定行） */
   params?: AlgoParamsSnapshot | null
+  /** run 信号快照 schema（区分旧版无依据与当前版本缺字段） */
+  signalSchema?: number | null
   /** B4/B5 的 run 级市场门槛（0 信号时解释原因） */
   marketGate?: MarketGate | null
 }
@@ -134,11 +137,6 @@ function prettifyMetricKey(key: string): string {
 /** 固定列 + 结构化说明字段（后者不铺成平表列） */
 const FIXED_KEYS = new Set(['rank', 'code', 'name', 'composite_score', 'triggered', 'score_breakdown'])
 
-/** 有逐条依据 / 评分拆解的策略 */
-function isExplainable(algo?: string): boolean {
-  return algo === 'a3' || /^b[1-5]$/.test(algo ?? '')
-}
-
 function fmtGateValue(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : value.toFixed(2)
 }
@@ -166,9 +164,10 @@ export default function AlgoDataTable({
   csvFilename,
   fullDesc,
   params,
+  signalSchema,
   marketGate,
 }: Props) {
-  const explainable = isExplainable(algo)
+  const explainable = supportsSignalExplanation(algo)
   const gateNotice = marketGateNotice(algo, marketGate)
   const gateBlocked = marketGate?.passed === false
   /**
@@ -263,6 +262,7 @@ export default function AlgoDataTable({
                   row={row}
                   fullDesc={fullDesc}
                   params={params}
+                  signalSchema={signalSchema}
                 />
               )
             : undefined

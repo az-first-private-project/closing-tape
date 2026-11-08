@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, PrimaryKeyConstraint,
-    String, Text, desc,
+    SmallInteger, String, Text, desc,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -36,6 +36,10 @@ class StgRun(Base):
     signal_count: Mapped[int] = mapped_column(Integer, default=0)
 
     data_version: Mapped[str | None] = mapped_column(String(32), comment="数据版本(最新交易日+行数指纹)")
+    signal_schema: Mapped[int] = mapped_column(
+        SmallInteger, default=2, server_default="2",
+        comment="信号快照 schema：1=旧版无结构化依据，2=当前（triggered/score_breakdown）",
+    )
     is_backtest: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="success",
                                         comment="running/success/failed/superseded")

@@ -379,6 +379,7 @@ export default function AlgoCenter() {
                 {result.run && (
                   <RunMetaPanel
                     run={result.run}
+                    algo={result.algo}
                     fromCache={result.from_cache}
                     tradeDate={result.trade_date}
                     refreshing={runMutation.isPending}
@@ -394,6 +395,7 @@ export default function AlgoCenter() {
                     selectedAlgo?.algo_code === result.algo ? selectedAlgo.full_desc : undefined
                   }
                   params={result.run?.params}
+                  signalSchema={result.run?.signal_schema}
                   marketGate={result.market_gate}
                   onRowClick={(row) => navigate(`/stocks/${row.code}`)}
                   csvFilename={`${result.algo}_${result.trade_date}_signals.csv`}

@@ -4,12 +4,14 @@
  * - B1–B5：展示同一份 CONDITION_SPECS 的逐条求值结果，market 条件单独分组；
  * - A3：读取 run 中的 score_breakdown（来源 fact_stock_score_daily.detail），
  *   用 0–10 分条展示分项贡献，不新增前端计算；
- * - 旧 run 没有结构化依据时显示降级提示，不伪造全通过列表。
+ * - 依据缺失时按 run.signal_schema 区分“旧版快照”与“当前版本缺字段”，
+ *   不伪造全通过列表。
  */
 import type { ReactNode } from 'react'
 import { Info } from 'lucide-react'
 import { scorePercent } from '../lib/format'
 import {
+  isLegacySignalSnapshot,
   rowBreakdown,
   rowTriggered,
   type AlgoMetricScalar,
@@ -25,6 +27,8 @@ interface Props {
   row: AlgoStockRow
   fullDesc?: string | null
   params?: AlgoParamsSnapshot | null
+  /** run.signal_schema；旧版（<2）与当前版本缺字段要给出不同提示 */
+  signalSchema?: number | null
 }
 
 const OP_TEXT: Record<string, string> = {
@@ -202,8 +206,9 @@ function paramsText(params?: AlgoParamsSnapshot | null): string {
   return entries.join(' · ')
 }
 
-export default function SignalExplanation({ algo, row, fullDesc, params }: Props) {
+export default function SignalExplanation({ algo, row, fullDesc, params, signalSchema }: Props) {
   const isA3 = algo === 'a3'
+  const legacySnapshot = isLegacySignalSnapshot(algo, signalSchema)
   const triggered = rowTriggered(row)
   const breakdown = rowBreakdown(row)
   const stockItems = (triggered ?? []).filter((item) => item.scope !== 'market')
@@ -216,7 +221,13 @@ export default function SignalExplanation({ algo, row, fullDesc, params }: Props
     body = breakdown ? (
       <BreakdownView breakdown={breakdown} />
     ) : (
-      <DegradedHint text="该 run 为旧版本快照，无评分拆解。" />
+      <DegradedHint
+        text={
+          legacySnapshot
+            ? '该 run 为旧版本快照，无评分拆解。'
+            : '当前版本 run 未记录该信号的评分拆解（当日评分明细可能缺失）。'
+        }
+      />
     )
   } else if (triggered && triggered.length > 0) {
     body = (
@@ -245,7 +256,15 @@ export default function SignalExplanation({ algo, row, fullDesc, params }: Props
       </div>
     )
   } else {
-    body = <DegradedHint text="该 run 为旧版本快照，无逐条依据。" />
+    body = (
+      <DegradedHint
+        text={
+          legacySnapshot
+            ? '该 run 为旧版本快照，无逐条依据。'
+            : '当前版本 run 未记录该信号的逐条依据。'
+        }
+      />
+    )
   }
 
   return (

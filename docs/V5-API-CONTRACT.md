@@ -278,7 +278,8 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 { "algo": "b1", "algo_name": "双均线动量突破", "trade_date": "2026-10-21",
   "run": { "run_id": "9f2c…", "created_at": "2026-10-21T16:02:11+08:00",
            "elapsed_ms": 812, "universe_count": 5382, "signal_count": 20,
-           "data_version": "2026-10-21:b5382", "params": { "pe_max": 50, "limit": 20 } },
+           "data_version": "2026-10-21:b5382", "signal_schema": 2,
+           "params": { "pe_max": 50, "limit": 20 } },
   "from_cache": true, "count": 20,
   "data": [ { "code": "600519", "name": "贵州茅台", "rank": 1,
               "score": 22.3, "composite_score": 7.4,
@@ -291,7 +292,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
   **`composite_score` 才是 0–10 的综合因子得分**（可能为 null）。前端"得分"列请用后者。
 - **参数必须真生效**：不同 `pe_max` 必须产生不同 `run_id` 与不同结果。
 - `data[].metrics` 为策略依据的完整指标，前端表格列由 `metrics` 动态生成。
-- `run` 额外字段：`status`（running/success/failed/superseded；superseded 表示同参数旧 run 已被新 run 取代，仍可审计但不参与统计）、失败时 `error`、回测 run 带 `is_backtest`。
+- `run` 额外字段：`status`（running/success/failed/superseded；superseded 表示同参数旧 run 已被新 run 取代，仍可审计但不参与统计）、失败时 `error`、回测 run 带 `is_backtest`、快照版本 `signal_schema`（见下）。
 
 **run 级市场门槛 `market_gate`（仅 B4/B5，V6 T7 补充）**
 
@@ -320,9 +321,14 @@ b4/b5 每次响应顶层带 `market_gate`（新 run 与缓存 run 均按 `trade_
 - `op` / `threshold` 仅比较类条件返回；`notna` 与市场门槛没有 `threshold`，`actual` 为原始值或整体布尔。
 - `detail` 为人类可读字段快照；所有值均为 JSON 原生类型（numpy / Decimal 已在后端转换）。
 - 条件组（如「阳线或收涨」「趋势支撑」）折叠为一条，`actual/passed` 为组整体布尔值。
-- **旧 run 兼容**：重构前的缓存 run 没有 `triggered`，前端显示「该 run 为旧版本快照，无逐条依据」，
-  不得渲染成空列表或伪造全通过。升级后对最新交易日执行
-  `POST /api/v1/algo/{algo_code}/refresh`（a3/a4/b1–b5 共 7 个）刷新缓存，详见 CHANGELOG 7.8。
+- **快照版本 `run.signal_schema`**（P2-7）：`1` = 重构前的历史 run，`metrics` 不含
+  `triggered` / `score_breakdown`；`2` = 当前 run，按策略写入结构化依据。前端对
+  `signal_schema < 2` 且存在信号的 run 显示「旧版本快照」，对 `schema=2` 但单条信号
+  缺字段显示“当前版本未记录该信号依据”，不得混为一谈、渲染成空列表或伪造全通过。
+- 历史 run **只读标注，不批量重算**：重跑会生成新 run 并把同参数旧成功 run 置为
+  `superseded`，改变历史与统计口径；确需最新依据时由用户显式执行或强制刷新。
+- a1/a2/a4 本身不产生结构化依据，`signal_schema` 只表示该 run 写入时的版本，前端不据此
+  展示依据缺失提示。
 
 **A3 评分拆解 `metrics.score_breakdown`（仅 A3，V6 T7）**
 
@@ -352,7 +358,7 @@ b4/b5 每次响应顶层带 `market_gate`（新 run 与缓存 run 均按 `trade_
 | GET | `/api/v1/algo/{algo_code}/export.csv?trade_date=&…` | `text/csv`（UTF-8 BOM；列=排名/代码/名称/综合得分(0-10)/排序分/metrics 动态列） |
 | POST | `/api/v1/algo/{algo_code}/refresh` | 忽略缓存重跑（默认参数） |
 
-`RunSummary`：`{run_id, algo_code, trade_date, created_at, elapsed_ms, universe_count, signal_count, data_version, status, is_backtest}`。
+`RunSummary`：`{run_id, algo_code, trade_date, created_at, elapsed_ms, universe_count, signal_count, data_version, signal_schema, status, is_backtest}`。
 
 ### 5.4 GET `/api/v1/algo/ladder?window=60&horizon=20&trade_date=`
 

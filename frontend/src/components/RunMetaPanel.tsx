@@ -5,14 +5,16 @@
  * 参数快照 / from_cache，并提供「强制刷新」（force_refresh=true）入口。
  */
 import { useState } from 'react'
-import { Check, Copy, Cpu, Database, GitBranch, RefreshCw, Timer, TrendingUp } from 'lucide-react'
-import type { AlgoParamValue, AlgoRun } from '../types/algo'
+import { Check, Copy, Cpu, Database, GitBranch, History, RefreshCw, Timer, TrendingUp } from 'lucide-react'
+import { isLegacySignalSnapshot, type AlgoParamValue, type AlgoRun } from '../types/algo'
 import type { Freshness } from '../types/common'
 import { fmtDateTime, fmtDuration, fmtInt } from '../lib/format'
 import FreshnessBadge from './FreshnessBadge'
 
 interface RunMetaPanelProps {
   run: AlgoRun
+  /** 策略代码：判断该 run 是否本应有结构化信号依据 */
+  algo?: string
   fromCache: boolean
   tradeDate: string | null
   /** 数据新鲜度（可选，后端若在结果里附带则一并展示） */
@@ -56,6 +58,7 @@ const SHORT_RUN_ID_LENGTH = 12
 
 export default function RunMetaPanel({
   run,
+  algo,
   fromCache,
   tradeDate,
   freshness,
@@ -63,6 +66,9 @@ export default function RunMetaPanel({
   refreshing = false,
 }: RunMetaPanelProps) {
   const [copied, setCopied] = useState(false)
+  /** 有信号但快照版本落后：明确提示依据不可展开，而不是让用户以为功能缺失 */
+  const legacySnapshot =
+    isLegacySignalSnapshot(algo, run.signal_schema) && (run.signal_count ?? 0) > 0
 
   const handleCopy = async () => {
     try {
@@ -102,6 +108,15 @@ export default function RunMetaPanel({
               title={run.error ?? undefined}
             >
               run {run.status}
+            </span>
+          )}
+          {legacySnapshot && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/40 text-muted-foreground"
+              title={`信号快照 schema ${run.signal_schema ?? 1}：该 run 产生于结构化信号依据上线前，无法展开逐条依据/评分拆解；如需最新依据请重新执行。`}
+            >
+              <History className="w-3 h-3" />
+              旧版本快照
             </span>
           )}
         </div>
