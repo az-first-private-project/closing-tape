@@ -77,7 +77,7 @@ echo -e "${YELLOW}  Ctrl+C 停止${NC}"
 cd "$SCRIPT_DIR/backend"
 export PYTHONPATH="$SCRIPT_DIR/backend:${PYTHONPATH:-}"
 exec python -m uvicorn app.main:app \
-  --host "${SERVER_HOST:-0.0.0.0}" \
+  --host "${SERVER_HOST:-127.0.0.1}" \
   --port "${SERVER_PORT:-8000}" \
   --reload \
   --log-level "$(echo "${LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"

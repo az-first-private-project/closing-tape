@@ -20,7 +20,8 @@ services:
     ports:
       # 本机若已装 PostgreSQL 并占用 5432，映射到 5433 可避免 "port is already allocated"
       # 容器内的 backend 仍通过服务名 postgres:5432 连接，不受影响
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+      # 只绑 127.0.0.1：数据库不对局域网暴露（单机自用边界，P1-3）
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -66,7 +67,8 @@ services:
       # 30s 会把尝试掐死在 EM 阶段，THS 兜底永远轮不到。放宽到 240s。
       FETCH_TIMEOUT_SEC: ${FETCH_TIMEOUT_SEC:-240}
     ports:
-      - "8000:8000"
+      # 只绑 127.0.0.1：后端 API 不对局域网暴露，前端 Nginx 在容器网络内直连（P1-3）
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,7 +81,8 @@ services:
     container_name: gfna-frontend
     restart: unless-stopped
     ports:
-      - "5173:80"
+      # 只绑 127.0.0.1：页面仅供本机访问（单机自用边界，P1-3）
+      - "127.0.0.1:5173:80"
     depends_on:
       - backend
 

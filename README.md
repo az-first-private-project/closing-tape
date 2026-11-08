@@ -67,6 +67,12 @@ npm run dev                     # 默认 http://127.0.0.1:5173
 > .\start-local.ps1 -Demo    # 空库时先灌演示数据
 > .\start-local.ps1 -Stop    # 停止
 > ```
+>
+> **访问边界（单机自用）**：本机启动与 Docker 部署都只绑定 `127.0.0.1`，页面和 API
+> 不对局域网或公网开放。自选状态固定为 `app_watchlist_state(id=1)` 单行，同一后端的
+> 所有浏览器共享一份；这是单用户设计，不做伪多租户隔离。需要跨设备访问时优先用
+> SSH 隧道或 Tailscale；确有公网需求再在反向代理层加 Basic Auth，不要把端口改成
+> `0.0.0.0`。
 
 **Playwright（新闻爬虫用，可选）**：只装 Python 包不够，还需要浏览器内核：
 
@@ -266,7 +272,7 @@ docs/                V5 方案、API 契约、架构、变更清单
 # 前提：启动 Docker Desktop（否则报 npipe dockerDesktopLinuxEngine 找不到）
 docker compose up -d --build        # 首次约 5–10 分钟
 docker compose logs -f backend
-# 浏览器：http://localhost:3000   (前端 Nginx，/api 反代到 backend:8000)
+# 浏览器：http://127.0.0.1:5173   (前端 Nginx，/api 反代到 backend:8000)
 ```
 
 镜像已包含：
