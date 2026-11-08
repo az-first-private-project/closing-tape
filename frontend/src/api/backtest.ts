@@ -7,18 +7,21 @@ import type {
   BacktestGridDetail,
   BacktestGridRequest,
   BacktestGridRetryResponse,
+  BacktestJobResponse,
   BacktestOptions,
   BacktestResult,
+  BacktestStatusResponse,
   BacktestTradesResponse,
 } from '../types/backtest'
 
 /**
- * 运行回测（6.1 POST /backtest/{algo_code}）
+ * 创建回测任务（6.1 POST /backtest/{algo_code}）
+ * 立即返回 bt_id 与 queued 状态，实际计算在后台；用 fetchBacktestStatus 轮询。
  * 全部参数走 query string：基础参数 + 策略参数（同 5.2）。
  */
-export function runBacktest(algoCode: string, options: BacktestOptions = {}): Promise<BacktestResult> {
+export function runBacktest(algoCode: string, options: BacktestOptions = {}): Promise<BacktestJobResponse> {
   const { params, ...baseOptions } = options
-  return request<BacktestResult>(`/backtest/${encodeURIComponent(algoCode)}`, {
+  return request<BacktestJobResponse>(`/backtest/${encodeURIComponent(algoCode)}`, {
     method: 'POST',
     query: {
       start: baseOptions.start || undefined,
@@ -32,6 +35,11 @@ export function runBacktest(algoCode: string, options: BacktestOptions = {}): Pr
       ...(params ?? {}),
     },
   })
+}
+
+/** 轮询回测任务状态（6.2）：只取状态与错误，成功后再取完整结果 */
+export function fetchBacktestStatus(btId: string): Promise<BacktestStatusResponse> {
+  return request<BacktestStatusResponse>(`/backtest/${encodeURIComponent(btId)}`)
 }
 
 /** 按 bt_id 查询回测结果（6.2） */

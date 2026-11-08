@@ -2,15 +2,17 @@
  * 回测 Hook（契约第 6 节）
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ApiError } from '../api/client'
 import {
   createBacktestGrid,
   fetchBacktest,
   fetchBacktestGrid,
+  fetchBacktestStatus,
   fetchBacktestTrades,
   retryBacktestGrid,
   runBacktest,
 } from '../api/backtest'
-import type { BacktestGridRequest, BacktestOptions } from '../types/backtest'
+import type { BacktestGridRequest, BacktestOptions, BacktestResult } from '../types/backtest'
 
 export interface BacktestVariables {
   algoCode: string
@@ -22,10 +24,45 @@ export interface BacktestGridVariables {
   request: BacktestGridRequest
 }
 
+/** 轮询间隔与前端等待上限；后端任务不受 30s HTTP 超时约束 */
+const POLL_INTERVAL_MS = 1500
+const POLL_TIMEOUT_MS = 10 * 60 * 1000
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 等待后台回测结束：queued/running 时轮询，成功后再取完整结果。 */
+async function waitBacktest(btId: string): Promise<BacktestResult> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+  for (;;) {
+    const status = await fetchBacktestStatus(btId)
+    if (status.status === 'success') return fetchBacktest(btId)
+    if (status.status === 'failed') {
+      throw new ApiError({
+        code: 'BACKTEST_FAILED',
+        status: 200,
+        message: status.error || '回测执行失败',
+      })
+    }
+    if (Date.now() >= deadline) {
+      throw new ApiError({
+        code: 'BACKTEST_TIMEOUT',
+        status: 0,
+        message: '前端等待回测超时（10 分钟），后台任务可能仍在运行',
+      })
+    }
+    await sleep(POLL_INTERVAL_MS)
+  }
+}
+
 /** 回测是用户显式点击触发的操作，使用 useMutation 而非 query */
 export function useBacktest() {
   return useMutation({
-    mutationFn: (variables: BacktestVariables) => runBacktest(variables.algoCode, variables.options),
+    mutationFn: async (variables: BacktestVariables) => {
+      const job = await runBacktest(variables.algoCode, variables.options)
+      return waitBacktest(job.bt_id)
+    },
   })
 }
 

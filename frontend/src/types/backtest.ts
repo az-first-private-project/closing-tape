@@ -106,7 +106,29 @@ export interface BacktestTradesResponse {
   items: BacktestTrade[]
 }
 
-/** POST /api/v1/backtest/{algo_code} 响应（6.1） */
+/** POST /api/v1/backtest/{algo_code} 响应（6.1，异步任务） */
+export interface BacktestJobResponse {
+  bt_id: string
+  algo: string
+  /** 创建即入队；执行状态由 GET /backtest/{bt_id} 获取 */
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  start_date: string
+  end_date: string
+  requested_start: string
+  effective_start: string
+  start_trimmed: boolean
+  poll: string
+}
+
+/** GET /api/v1/backtest/{bt_id} 轮询用状态（执行中字段可能为空） */
+export interface BacktestStatusResponse {
+  bt_id: string
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  error: string | null
+  elapsed_ms?: number | null
+}
+
+/** GET /api/v1/backtest/{bt_id} 响应（6.2） */
 export interface BacktestResult {
   bt_id: string
   algo: string
@@ -116,6 +138,8 @@ export interface BacktestResult {
   metrics: BacktestMetrics
   equity_curve: EquityPoint[]
   trades: BacktestTrade[]
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  error: string | null
   created_at: string | null
   /** T9 派生视图是否可用（旧记录曲线/成交为空时为 false） */
   extras_available: boolean

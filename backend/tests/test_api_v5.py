@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import os
+import time
 import uuid
 from datetime import date, timedelta
 
@@ -53,6 +54,25 @@ from app.strategy.strategies import SPECS  # noqa: E402
 def client():
     with TestClient(app) as c:
         yield c
+
+
+def wait_backtest(client, bt_id: str, timeout: float = 120.0) -> dict:
+    """P2-4：POST 只入队，轮询 GET 直到 success/failed。
+
+    TestClient 会等 BackgroundTasks 执行完才返回响应，通常首次 GET 即成功；
+    保留轮询是为了在真实异步执行下也能稳定通过。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        resp = client.get(f"/api/v1/backtest/{bt_id}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        if body["status"] in ("success", "failed"):
+            break
+        assert time.monotonic() < deadline, f"回测 {bt_id} 等待超时"
+        time.sleep(0.2)
+    assert body["status"] == "success", body.get("error")
+    return body
 
 
 @pytest.fixture
@@ -351,8 +371,12 @@ def test_backtest_runs_and_persists(client):
     latest = client.get("/api/v1/market/dashboard").json()["trade_date"]
     resp = client.post(f"/api/v1/backtest/a3?rebalance_days=20&max_positions=5&end={latest}")
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["bt_id"]
+    job = resp.json()
+    assert job["bt_id"]
+    assert job["status"] in ("queued", "running", "success")
+    assert job["poll"] == f"/api/v1/backtest/{job['bt_id']}"
+
+    body = wait_backtest(client, job["bt_id"])
     metrics = body["metrics"] or {}
     for key in ("total_return", "annual_return", "max_drawdown", "sharpe"):
         assert key in metrics, f"绩效指标缺少 {key}"
@@ -532,7 +556,7 @@ def test_backtest_grid_end_to_end_and_reuse(client):
         f"&start={requested_start}&end={latest}"
     )
     assert single.status_code == 200, single.text
-    base = single.json()
+    base = wait_backtest(client, single.json()["bt_id"])
 
     payload = {
         "start_date": base["start_date"],

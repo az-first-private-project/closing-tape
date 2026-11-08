@@ -1,14 +1,15 @@
 """
 回测 API（方案 D4/D5）
 ======================
-POST /api/v1/backtest/{algo_code}          发起回测（同步执行，1 年内约 3–10 秒）
-GET  /api/v1/backtest/{bt_id}              查询结果
+POST /api/v1/backtest/{algo_code}          创建回测任务（立即返回，后台执行）
+GET  /api/v1/backtest/{bt_id}              查询结果（queued/running/success/failed）
 GET  /api/v1/backtest/{bt_id}/export.csv   净值曲线导出
 """
 from __future__ import annotations
 
 import csv
 import io
+import uuid
 from datetime import date, timedelta
 from typing import Any, Optional
 
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BACKTEST
 from app.core.errors import InvalidParamError, NotFoundError, UnknownAlgoError
+from app.core.logging import get_logger
 from app.db.models import (
     BacktestRun, DimStock, FactFeatureDaily, FactStockDaily, FactStockScoreDaily,
 )
@@ -30,6 +32,7 @@ from app.strategy.grid import create_grid, execute_grid, get_grid, requeue_faile
 from app.strategy.strategies import SPECS
 
 router = APIRouter(prefix="/api/v1/backtest", tags=["回测"])
+logger = get_logger(__name__)
 
 
 class GridRequest(BaseModel):
@@ -155,10 +158,34 @@ async def _load_extras(
     )
 
 
+async def execute_backtest(
+    *,
+    bt_id: str,
+    algo_code: str,
+    start: date,
+    end: date,
+    strategy_params: dict,
+    bt_params: dict,
+) -> None:
+    """后台执行回测；成功/失败都由引擎落库，异常只记日志不向事件循环抛出。"""
+    try:
+        await run_backtest(
+            algo_code=algo_code,
+            start=start,
+            end=end,
+            strategy_params=strategy_params,
+            bt_params=bt_params,
+            bt_id=bt_id,
+        )
+    except Exception:  # noqa: BLE001 - 失败已写入 backtest_run.status=failed
+        logger.exception("后台回测失败 bt_id=%s algo=%s", bt_id, algo_code)
+
+
 @router.post("/{algo_code}")
 async def create_backtest(
     algo_code: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     start: Optional[date] = Query(None, description="默认近 1 年"),
     end: Optional[date] = Query(None, description="默认最新交易日"),
     rebalance_days: int = Query(BACKTEST.rebalance_days, ge=1, le=250),
@@ -169,9 +196,11 @@ async def create_backtest(
     slippage: float = Query(BACKTEST.slippage_rate, ge=0, le=0.02),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """跑一次回测并落库。**同步返回**，前端展示 loading。
+    """创建回测任务并立即返回，实际计算在后台执行。
 
-    策略参数从 query string 按该策略的 `params_schema` 收集（B1–B5 参数各异）。
+    同步阶段只做参数校验与数据起点裁剪（失败直接 4xx）；执行期错误（数据不足等）
+    落 ``backtest_run.status=failed``，由前端轮询 GET 获取。策略参数从 query string
+    按该策略的 `params_schema` 收集（B1–B5 参数各异）。
     """
     if algo_code not in SPECS:
         raise UnknownAlgoError(f"未知策略: {algo_code}",
@@ -207,27 +236,37 @@ async def create_backtest(
         "stamp_tax_rate": stamp_tax,
         "slippage_rate": slippage,
     }
-    result = await run_backtest(
+    bt_id = str(uuid.uuid4())
+    db.add(BacktestRun(
+        bt_id=bt_id,
+        algo_code=algo_code,
+        start_date=start,
+        end_date=end,
+        params={**bt_params, "strategy": dict(strategy_params)},
+        status="queued",
+    ))
+    # 先提交 queued 行：后台任务使用独立会话，必须能读到它
+    await db.commit()
+    background_tasks.add_task(
+        execute_backtest,
+        bt_id=bt_id,
         algo_code=algo_code,
         start=start,
         end=end,
         strategy_params=strategy_params,
         bt_params=bt_params,
-        db=db,
     )
-    # 区间裁剪信息放在响应顶层（不进 bt_params：回测模块对参数做严格白名单校验）
-    result["requested_start"] = requested_start.isoformat()
-    result["effective_start"] = start.isoformat()
-    result["start_trimmed"] = trimmed
-    result.update(await _load_extras(
-        result.get("equity_curve"),
-        result.get("trades"),
-        date.fromisoformat(result["start_date"]),
-        date.fromisoformat(result["end_date"]),
-        result.get("params"),
-        db,
-    ))
-    return result
+    return {
+        "bt_id": bt_id,
+        "algo": algo_code,
+        "status": "queued",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "requested_start": requested_start.isoformat(),
+        "effective_start": start.isoformat(),
+        "start_trimmed": trimmed,
+        "poll": f"/api/v1/backtest/{bt_id}",
+    }
 
 
 @router.post("/{algo_code}/grid")

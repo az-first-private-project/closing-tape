@@ -485,16 +485,41 @@ PUT 请求体（两个字段均可选，只传一个时另一个保持不变）�
 
 ## 6. 回测（D4/D5）
 
-### 6.1 POST `/api/v1/backtest/{algo_code}`
-Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positions=20`、
-`benchmark=sh000300`、`commission=0.00025`、`stamp_tax=0.001`、`slippage=0.001`、
-以及策略参数（同 5.2）。
-响应：
+### 6.1 POST `/api/v1/backtest/{algo_code}` — 创建异步回测任务（P2-4）
+
+Query：`start`（默认近 1 年）、`end`（默认 today，引擎按可用交易日截断）、
+`rebalance_days=20`、`max_positions=20`、`benchmark=sh000300`、`commission=0.00025`、
+`stamp_tax=0.001`、`slippage=0.001`、以及策略参数（同 5.2）。
+
+同步阶段只做参数校验与数据起点裁剪，**立即返回任务信封**，计算在后台执行：
+```json
+{ "bt_id": "b7d1…", "algo": "a3", "status": "queued",
+  "start_date": "2025-10-21", "end_date": "2026-10-21",
+  "requested_start": "2025-10-21", "effective_start": "2025-10-21", "start_trimmed": false,
+  "poll": "/api/v1/backtest/b7d1…" }
+```
+
+- 参数错误（未知策略、`start >= end`、区间超过 6 年、数据起点晚于 `end`）仍在 POST
+  阶段返回 4xx，**不会入队**。
+- 入队即落 `backtest_run.status=queued` 并提交；后台任务随后改为 `running`，
+  成功写 `metrics/equity_curve/trades`，失败写 `status=failed` + `error`。
+- 客户端必须轮询 `poll` 指向的 6.2；回测时长（可达数十秒）不再受 HTTP 30 秒超时约束。
+- 后台任务运行在 API 进程内：进程重启时，超过 2 小时的 `running/queued` 行由启动清理
+  标为 failed；2 小时内重启的任务会停留在原状态，需要重新提交。
+- **契约变更**：旧版 POST 同步返回的完整结果（metrics/曲线/成交/6.4 派生视图）
+  现在只在 6.2 的 `success` 响应中出现。
+
+### 6.2 GET `/api/v1/backtest/{bt_id}` — 状态与结果
+
+`GET /api/v1/backtest/{bt_id}/export.csv` — 净值曲线 CSV（含月度收益与回撤段，见 6.4）。
+
+详情响应始终包含：
 ```json
 { "bt_id": "b7d1…", "algo": "a3", "start_date": "2025-10-21", "end_date": "2026-10-21",
-  "params": { "rebalance_days": 20, "max_positions": 20, "benchmark": "sh000300",
-              "commission": 0.00025, "stamp_tax": 0.001, "slippage": 0.001,
+  "params": { "rebalance_days": 20, "max_positions": 20, "benchmark_code": "sh000300",
+              "commission_rate": 0.00025, "stamp_tax_rate": 0.001, "slippage_rate": 0.001,
               "strategy": { "pe_max": 50 } },
+  "status": "success", "error": null,
   "metrics": { "total_return": 0.183, "annual_return": 0.181, "max_drawdown": -0.121,
                "sharpe": 1.42, "sortino": 1.9, "win_rate": 0.57, "profit_loss_ratio": 1.8,
                "turnover": 3.4, "excess_return": 0.052, "benchmark_return": 0.131,
@@ -513,7 +538,13 @@ Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positi
                                              "value": 200100.0, "count": 2 } ] } ],
   "created_at": "…" }
 ```
-### 6.2 GET `/api/v1/backtest/{bt_id}` — 同上；`GET /api/v1/backtest/{bt_id}/export.csv` — 净值曲线 CSV（含月度收益与回撤段，见 6.4）。
+
+- `status ∈ queued | running | success | failed`，轮询间隔建议 1–2 秒。
+- `queued/running`：`metrics/equity_curve/trades` 为 `null`，`extras_available=false`，
+  四个派生数组为空；`error=null`。
+- `failed`：`error` 为失败原因，其余结果字段为 `null`；失败记录不自动重试，可重新 POST。
+- `success`：字段与旧版同步响应一致，6.4 五项派生视图全部可用。
+- 回测不存在返回 404 `NOT_FOUND`；`export.csv` 在未完成时只输出表头与空 block。
 
 ### 6.3 GET `/api/v1/backtest/{bt_id}/trades?code=`
 ```json
@@ -528,7 +559,7 @@ Query：`start`（默认近 1 年）、`end`、`rebalance_days=20`、`max_positi
 
 ### 6.4 回测增强视图（T9）
 
-GET/POST 响应在 6.1 字段之外追加以下五项，全部由已落库的 `equity_curve` / `trades` 派生，**不重跑回测**：
+GET 成功的详情响应在 6.2 字段之外追加以下五项，全部由已落库的 `equity_curve` / `trades` 派生，**不重跑回测**：
 
 - `extras_available`：`equity_curve` 与 `trades` 均非空才为 true；旧记录返回 false，四个数组均为空。
 - `monthly_returns`：`[{ym, ret, benchmark, excess}]`，单位 %。

@@ -377,6 +377,33 @@
   故净值整体漂移），跨数据版本不承诺历史净值不变；检查点 JSONB 体积随持仓数增长。
 - 代价：约 1.5 天。
 
+### P2-4 回测异步化（已完成 11-08）
+
+- `POST /backtest/{algo_code}` 改为「校验 + 入队」：同步阶段只做未知策略、区间、数据起点
+  裁剪等可快速判定的校验，落 `backtest_run.status=queued` 并 commit 后，通过 FastAPI
+  `BackgroundTasks` 调度 `execute_backtest`，立即返回任务信封
+  （`bt_id/status=queued/start_date/end_date/requested_start/effective_start/start_trimmed/poll`）。
+- 后台执行复用原 `run_backtest` 引擎（`db=None` 自建会话，`bt_id` 已存在），成功/失败都由
+  引擎落库；执行器只记日志，不把异常抛回事件循环。HTTP 请求不再承担 19–21s 的回测时长。
+- `GET /backtest/{bt_id}` 成为唯一结果入口：始终返回 `status/error`，`queued/running` 时
+  metrics/曲线/成交为 null、派生视图为空，`success` 时与旧同步响应完全一致。
+- 前端 `useBacktest` 改为「POST 入队 + 每 1.5s 轮询 + 10 分钟上限」，mutation 接口不变，
+  `BacktestPanel` 无需改动；失败时把后端 `error` 转成 `BACKTEST_FAILED` 展示。
+- 启动清理已覆盖 `queued/running` 的 `BacktestRun`：进程重启后超过 2 小时的遗留行标 failed，
+  不会永久占着「运行中」。
+- 验收：新增 3 个单测（入队不内联执行、非法区间不入队、执行器透传并吞掉异常）；全量单测
+  518 passed / 51 skipped；回测 API 集成 2 passed（21.7s，含矩阵复用）；`npm run build`
+  通过（主包 1026.67 kB / gzip 301.28 kB）。
+- 真实路径：POST a3 一年区间 **47ms** 返回 queued，紧接着 GET 为 queued；轮询 9 次
+  （1.5s 间隔）12.7s 后 success，metrics/243 点净值/164 笔成交/extras 齐全，CSV 673 行、
+  4 个 block 正常。浏览器点击「运行回测」400ms 内显示「回测中…」，后台完成后按钮恢复、
+  结果与导出按钮出现，Console 无新增 error（仅既有 React Router warning）；网络记录为
+  1 次 POST + 7 次 GET 轮询。
+- 遗留：POST 响应是 breaking change（已同步前端与测试，无其他消费方）；后台任务在 API
+  进程内执行，无持久队列，进程重启后 2 小时内不会自动判失败、也不会自动续跑；前端轮询
+  最长 10 分钟，超时后后台任务仍继续，页面需重新刷新查看；多标签页会各自轮询，无并发上限。
+- 代价：约 0.5 天。
+
 ## 8. P3 详细方案（4 项）
 
 | 编号 | 问题 | 方案 | 验收 | 代价 |
@@ -496,7 +523,7 @@
 | P2-1 | P2 | partial 板块提示 | 1h | W3 | P1-1 | 完成（11-08） |
 | P2-2 | P2 | 矩阵复用关联 | 0.5–1d | W4 | — | 完成（11-08） |
 | P2-3 | P2 | 纸面增量重算 | 1–2d | W4 | — | 完成（11-08） |
-| P2-4 | P2 | 回测异步化 | 1–2d | W4 | P2-2 | 待开始 |
+| P2-4 | P2 | 回测异步化 | 1–2d | W4 | P2-2 | 完成（11-08） |
 | P2-5 | P2 | 共识榜批量 kline | 0.5d | W4 | — | 待开始 |
 | P2-6 | P2 | 移动端命令面板 | 1h | W3 | — | 待开始 |
 | P2-7 | P2 | 历史 run 元数据标注 | 0.5–1d | W4 | — | 待开始 |
