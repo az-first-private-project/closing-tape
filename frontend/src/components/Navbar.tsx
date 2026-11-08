@@ -168,6 +168,20 @@ export default function Navbar() {
               })}
             </div>
 
+            {/* 窄屏搜索框隐藏，命令面板入口收进右侧操作区 */}
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(PALETTE_OPEN_EVENT))}
+              aria-label="打开命令面板"
+              title="搜索股票、策略或页面"
+              className="group grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-transparent
+                text-muted-foreground transition-all duration-300 md:hidden
+                hover:border-border hover:bg-secondary/60 hover:text-brass
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Search className="h-[17px] w-[17px]" />
+            </button>
+
             <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-border/80" />
 
             <button
