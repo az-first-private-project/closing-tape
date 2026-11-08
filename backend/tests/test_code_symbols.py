@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from app.core.constants import board_of, exchange_of, is_stock_code, limit_pct_of
@@ -66,3 +68,29 @@ def test_is_stock_code_excludes_bonds_and_b_shares(
 ) -> None:
     """810xxx 是北交所定向可转债、200/900 是 B 股，都不能进 A 股股票池。"""
     assert is_stock_code(code) is expected
+
+
+def test_snapshot_moneyflow_rows_skip_non_stock() -> None:
+    pd = pytest.importorskip("pandas")
+    from app.ingest.service import _moneyflow_rows
+
+    frame = pd.DataFrame(
+        [
+            {"code": "600519", "main_net_t0": 1.0, "main_net_5d": 2.0},
+            {"code": "810011", "main_net_t0": 3.0, "main_net_5d": 4.0},
+            {"code": "900901", "main_net_t0": 5.0, "main_net_5d": 6.0},
+            {"code": "000001", "main_net_t0": 7.0, "main_net_5d": 8.0},
+            {"code": "810011", "main_net_t0": 9.0, "main_net_5d": 10.0},
+        ]
+    )
+    rows = _moneyflow_rows(frame, date(2026, 11, 4))
+    assert [row["code"] for row in rows] == ["600519", "000001"]
+
+
+def test_bulk_moneyflow_rows_skip_non_stock() -> None:
+    from app.ingest.bulk_backfill import _moneyflow_rows
+
+    trade_date = date(2026, 11, 4)
+    items = [{"trade_date": trade_date, "net_amount": 1.0}]
+    assert _moneyflow_rows("810011", items, trade_date, trade_date) == []
+    assert _moneyflow_rows("600519", items, trade_date, trade_date)[0]["code"] == "600519"

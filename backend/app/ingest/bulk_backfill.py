@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import config
-from app.core.constants import is_st_name, limit_prices
+from app.core.constants import is_st_name, is_stock_code, limit_prices
 from app.core.logging import get_logger
 from app.core.status import QualityStatus
 from app.db.models import DimStock, FactMoneyflow, FactStockDaily, TradeCalendar
@@ -501,6 +501,9 @@ def _moneyflow_rows(
     start: date,
     end: date,
 ) -> list[dict[str, Any]]:
+    # 810xxx 定向可转债、B 股没有 A 股资金流，写库会污染下游聚合
+    if not is_stock_code(code):
+        return []
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         trade_date = item["trade_date"]
@@ -544,7 +547,11 @@ async def backfill_moneyflow(
     started = time.perf_counter()
     end_date = end or await last_completed_trade_date(db)
     start_date = start or (end_date - timedelta(days=420))
-    code_list = await _resolve_codes(codes, db)
+    resolved = await _resolve_codes(codes, db)
+    code_list = [code for code in resolved if is_stock_code(code)]
+    dropped = sorted(set(resolved) - set(code_list))
+    if dropped:
+        logger.warning("资金流回补跳过非 A 股代码：%s", dropped[:20])
     completed = set() if force else _load_state("moneyflow", end_date)
     pending = [code for code in code_list if code not in completed]
 

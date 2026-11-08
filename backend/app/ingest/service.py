@@ -908,6 +908,9 @@ def _moneyflow_rows(
         code = str(record.get("code") or "").zfill(6)
         if not code.isdigit() or len(code) != 6 or code in seen:
             continue
+        # 资金流排行会混入 810xxx 定向可转债、B 股，进入 fact_moneyflow 会污染聚合
+        if not is_stock_code(code):
+            continue
         seen.add(code)
         rows.append(
             {

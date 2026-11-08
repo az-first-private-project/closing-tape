@@ -509,6 +509,29 @@
   `end` 仍原样接受，不在本次范围。
 - 代价：约 1 小时。
 
+### P2-10 无效资金流代码清理（已完成 11-08）
+
+- 问题：`fact_moneyflow` 混入北交所定向可转债 810011/810013/810014（优机定转、
+  万通定转、莱特定转），三只均无 A 股行情与股本。股票池同步已把 `dim_stock` 中
+  三码置为 `status=9`，但日更资金流按榜单原样落库，历史回补的显式 `codes` 也未校验，
+  不做入库过滤仍会再次写入。
+- 预览：三码各 1 行，均为 2026-11-04、`src=akshare`；`dim_stock` 中三码
+  `status=9`、活跃数 0；清理后 `fact_moneyflow` 的 5583 个 distinct code 全部通过
+  `is_stock_code`，无其他非 A 股代码。
+- 清理：单次执行
+  `DELETE FROM fact_moneyflow WHERE code IN ('810011','810013','810014')`，
+  before=3 / deleted=3 / after=0；总行数 1604743→1604740，11-04 行数 5584→5581，
+  无孤儿代码。
+- 校验：日更 `service._moneyflow_rows` 与历史回补 `bulk_backfill._moneyflow_rows`
+  在落库前按 `is_stock_code` 过滤；`backfill_moneyflow` 的代码列表（含显式 `codes`）
+  同样过滤并记录跳过，非法代码不再进入 `fact_moneyflow`。
+- 回归：`tests/test_code_symbols.py` 新增 2 例（快照 DataFrame 跳过 810xxx/900xxx；
+  历史回补 810011 返回空），`test_code_symbols.py + test_ingest.py` 77 passed / 1 skipped。
+- 遗留：上游榜单仍可能返回非 A 股代码，现在入库处静默过滤；若需监控榜单异常，
+  可在采集层增加过滤计数告警，本次未做。`dim_stock` 中 33 个非 A 股存量行保留
+  `status=9` 作为股票池审计痕迹，不删除。
+- 代价：约 15 分钟。
+
 ### P3-3 /ladder 独立路由（已完成 11-08）
 
 - 问题：外部链接或书签直接访问 `/ladder` 命中 404；策略天梯只能从选股中心手动下滚。
@@ -745,7 +768,7 @@
 | P2-7 | P2 | 历史 run 元数据标注 | 0.5–1d | W4 | — | 完成（11-08） |
 | P2-8 | P2 | 测试隔离与残留清理 | 0.5d | W3 | W0-5 | 待授权 |
 | P2-9 | P2 | 回测默认结束日 | 1h | W3 | — | 完成（11-08） |
-| P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 待授权 |
+| P2-10 | P2 | 无效资金流代码清理 | 15min | W3 | 授权 | 完成（11-08） |
 | P3-1 | P3 | 前端分包 | 0.5–1d | W5 | — | 完成（11-08） |
 | P3-2 | P3 | 评分榜 sparkline | 0.5d | W5 | — | 完成（11-08） |
 | P3-3 | P3 | `/ladder` 路由 | 15min | W5 | — | 完成（11-08） |
