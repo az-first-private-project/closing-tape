@@ -42,10 +42,12 @@ async def _seed(db) -> None:
 async def test_archived_jobs_hidden_by_default_but_queryable(db_session) -> None:
     await _seed(db_session)
 
-    default_view = await list_jobs(limit=50, task=TASK, status=None, db=db_session)
+    default_view = await list_jobs(
+        limit=50, offset=0, task=TASK, status=None, db=db_session
+    )
     assert [item["status"] for item in default_view["items"]] == ["success"]
 
     archived = await list_jobs(
-        limit=50, task=TASK, status="archived", db=db_session
+        limit=50, offset=0, task=TASK, status="archived", db=db_session
     )
     assert [item["status"] for item in archived["items"]] == ["archived"]

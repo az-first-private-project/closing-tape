@@ -30,7 +30,9 @@ numpy==2.2.6
 
 # ==================== AI（DeepSeek，OpenAI 兼容）====================
 openai==1.13.3
-httpx==0.28.1
+# starlette 0.36.3 的 TestClient 仍向 httpx.Client 传 app=；
+# httpx 0.28 已移除该参数，二者组合会让所有 TestClient 用例在 CI 直接 TypeError
+httpx==0.27.2
 
 # ==================== 新闻爬虫（可选链路，情绪因子输入）====================
 scrapy==2.11.1
