@@ -12,6 +12,16 @@ function toComparable(value: unknown): string {
   return String(value)
 }
 
+/** run 参数快照 → 参数面板值（布尔转字符串、null 丢弃） */
+export function paramsFromSnapshot(snapshot: AlgoParamsSnapshot | null | undefined): AlgoParams {
+  const result: AlgoParams = {}
+  Object.entries(snapshot ?? {}).forEach(([key, value]) => {
+    if (typeof value === 'number' || typeof value === 'string') result[key] = value
+    else if (typeof value === 'boolean') result[key] = String(value)
+  })
+  return result
+}
+
 /** 参数面板当前值（缺省回落 schema 默认值）→ 可比较字符串 */
 export function panelParamsForCompare(
   algo: AlgoMeta | null,

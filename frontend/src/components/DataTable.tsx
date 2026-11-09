@@ -5,13 +5,19 @@
  * - 传入 csvFilename 时显示「导出 CSV」按钮（纯前端导出当前数据）；
  * - 服务端 CSV 导出（如 /algo/{code}/export.csv）由页面单独调用 api/client 的 downloadCsv。
  */
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Download } from 'lucide-react'
 import { downloadText, toCsv } from '../lib/csv'
 import RangeNotice from './RangeNotice'
 
 /** 单元格原始值（排序与 CSV 导出用） */
 export type DataTableValue = string | number | boolean | null | undefined
+
+/** 排序状态（供页面持久化后回传） */
+export interface DataTableSortState {
+  key: string
+  direction: 'asc' | 'desc'
+}
 
 export interface DataTableColumn<T> {
   key: string
@@ -29,8 +35,16 @@ interface DataTableProps<T> {
   columns: DataTableColumn<T>[]
   rows: T[]
   rowKey: (row: T, index: number) => string
-  onRowClick?: (row: T) => void
-  initialSort?: { key: string; direction: 'asc' | 'desc' }
+  onRowClick?: (row: T, rowKey: string) => void
+  /** null = 明确不排序；undefined = 使用调用方默认或表格自然顺序 */
+  initialSort?: DataTableSortState | null
+  /** 恢复展开行 / 选中行 / 表格滚动（仅在挂载时生效，配合 key 切换 run） */
+  initialExpandedKey?: string | null
+  initialActiveKey?: string | null
+  initialScrollTop?: number | null
+  onSortChange?: (sort: DataTableSortState | null) => void
+  onExpandedChange?: (expandedKey: string | null) => void
+  onScrollTopChange?: (scrollTop: number) => void
   csvFilename?: string
   emptyText?: string
   footer?: ReactNode
@@ -82,6 +96,12 @@ export default function DataTable<T>({
   rowKey,
   onRowClick,
   initialSort,
+  initialExpandedKey,
+  initialActiveKey,
+  initialScrollTop,
+  onSortChange,
+  onExpandedChange,
+  onScrollTopChange,
   csvFilename,
   emptyText = '暂无数据',
   footer,
@@ -90,10 +110,22 @@ export default function DataTable<T>({
   total,
   rangeNote,
 }: DataTableProps<T>) {
-  const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(
-    initialSort ?? null,
-  )
-  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const [sort, setSort] = useState<DataTableSortState | null>(initialSort ?? null)
+  const [expandedKey, setExpandedKey] = useState<string | null>(initialExpandedKey ?? null)
+  const [activeKey, setActiveKey] = useState<string | null>(initialActiveKey ?? null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const scrollRestored = useRef(false)
+  const lastScrollTop = useRef<number | null>(null)
+
+  /** 恢复表格内部滚动位置：只在挂载后执行一次，避免排序/展开时抢滚动 */
+  useLayoutEffect(() => {
+    if (scrollRestored.current) return
+    scrollRestored.current = true
+    const element = scrollRef.current
+    if (!element || initialScrollTop === null || initialScrollTop === undefined) return
+    if (initialScrollTop > 0) element.scrollTop = initialScrollTop
+  }, [initialScrollTop])
+
 
   /** 排序后的行（rows 顺序不变时计算结果稳定） */
   const sortedRows = useMemo(() => {
@@ -104,14 +136,29 @@ export default function DataTable<T>({
     return [...rows].sort((left, right) => compareValues(resolveValue(left, column), resolveValue(right, column)) * factor)
   }, [rows, columns, sort])
 
-  /** 点击表头切换排序 */
+  /** 点击表头切换排序（asc → desc → 不排序） */
   const handleSort = (column: DataTableColumn<T>) => {
     if (!column.sortable) return
-    setSort((previous) => {
-      if (!previous || previous.key !== column.key) return { key: column.key, direction: 'asc' }
-      if (previous.direction === 'asc') return { key: column.key, direction: 'desc' }
-      return null
-    })
+    let next: DataTableSortState | null
+    if (!sort || sort.key !== column.key) next = { key: column.key, direction: 'asc' }
+    else if (sort.direction === 'asc') next = { key: column.key, direction: 'desc' }
+    else next = null
+    setSort(next)
+    onSortChange?.(next)
+  }
+
+  const handleExpandedChange = (key: string | null) => {
+    setExpandedKey(key)
+    onExpandedChange?.(key)
+  }
+
+  /** 表格内部滚动：同步上报（页面侧只更新 ref + 防抖落盘），离开前可取到最新值 */
+  const handleScroll = () => {
+    if (!onScrollTopChange) return
+    const top = scrollRef.current?.scrollTop ?? 0
+    if (lastScrollTop.current === top) return
+    lastScrollTop.current = top
+    onScrollTopChange(top)
   }
 
   /** 导出当前表格数据为 CSV */
@@ -144,7 +191,12 @@ export default function DataTable<T>({
         )}
       </div>
 
-      <div className="overflow-x-auto overflow-y-auto scrollbar-thin" style={maxHeight ? { maxHeight } : undefined}>
+      <div
+        ref={scrollRef}
+        onScroll={onScrollTopChange ? handleScroll : undefined}
+        className="overflow-x-auto overflow-y-auto scrollbar-thin"
+        style={maxHeight ? { maxHeight } : undefined}
+      >
         <table className="w-full text-sm">
           <thead className="table-sticky">
             <tr className="border-b border-border/80">
@@ -192,17 +244,30 @@ export default function DataTable<T>({
               sortedRows.map((row, index) => {
                 const key = rowKey(row, index)
                 const expanded = expandedKey === key
+                const active = activeKey === key
+                const handleRowClick = onRowClick
+                  ? () => {
+                      // 离开前同步一次滚动值：即使最后一帧的 scroll 事件被节流也不丢位置
+                      if (onScrollTopChange) {
+                        const top = scrollRef.current?.scrollTop ?? 0
+                        lastScrollTop.current = top
+                        onScrollTopChange(top)
+                      }
+                      setActiveKey(key)
+                      onRowClick(row, key)
+                    }
+                  : undefined
                 return (
                   <Fragment key={key}>
                     <tr
-                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      onClick={handleRowClick}
                       onKeyDown={
-                        onRowClick
+                        handleRowClick
                           ? (event) => {
                               if (event.target !== event.currentTarget) return
                               if (event.key !== 'Enter' && event.key !== ' ') return
                               event.preventDefault()
-                              onRowClick(row)
+                              handleRowClick()
                             }
                           : undefined
                       }
@@ -211,14 +276,14 @@ export default function DataTable<T>({
                         onRowClick
                           ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
                           : ''
-                      } ${expanded ? 'bg-brass/[0.05]' : ''}`}
+                      } ${expanded || active ? 'bg-brass/[0.05]' : ''}`}
                     >
                       {renderExpanded && (
                         <td className="px-2 py-2 text-center">
                           <button
                             onClick={(event) => {
                               event.stopPropagation()
-                              setExpandedKey(expanded ? null : key)
+                              handleExpandedChange(expanded ? null : key)
                             }}
                             aria-expanded={expanded}
                             aria-label={expanded ? '收起信号依据' : '展开信号依据'}

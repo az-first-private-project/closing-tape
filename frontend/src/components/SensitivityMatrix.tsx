@@ -5,7 +5,7 @@
  * 热力图看超额/回撤等指标，点击单格可展开完整 T9 回测视图。
  * 扫描中 3s 轮询；标签页隐藏或矩阵完成即停止（见 useBacktestGridDetail）。
  */
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LayoutGrid, Play, RotateCw } from 'lucide-react'
 import {
@@ -15,6 +15,13 @@ import {
   useBacktestGridRetry,
 } from '../hooks/useBacktest'
 import { fetchHealth } from '../api/meta'
+import { ApiError } from '../api/client'
+import {
+  clearGridState,
+  loadGridState,
+  saveGridState,
+  type GridMetric,
+} from '../lib/backtestSession'
 import type { AlgoParams } from '../types/algo'
 import type { BacktestGridCell, BacktestGridMetrics } from '../types/backtest'
 import { trendHeat, type HeatStyle } from '../lib/color'
@@ -33,7 +40,7 @@ interface SensitivityMatrixProps {
   active: boolean
 }
 
-type MetricKey = 'excess' | 'drawdown' | 'sharpe' | 'win' | 'trades'
+type MetricKey = GridMetric
 
 const METRIC_OPTIONS: { key: MetricKey; label: string }[] = [
   { key: 'excess', label: '超额收益' },
@@ -150,28 +157,56 @@ export default function SensitivityMatrix({
   defaultPositions,
   active,
 }: SensitivityMatrixProps) {
-  const [start, setStart] = useState(defaultStart || todayString())
+  const [saved] = useState(() => loadGridState(algoCode))
+  const [start, setStart] = useState(saved?.start || defaultStart || todayString())
   // 默认结束日取库内最新交易日，避免「行情落后于自然日」时整张矩阵失败
-  const [endOverride, setEndOverride] = useState('')
+  const [endOverride, setEndOverride] = useState(saved?.endOverride ?? '')
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: fetchHealth, staleTime: 5 * 60 * 1000 })
   const latestTradeDate =
     healthQuery.data?.latest_trade_date || healthQuery.data?.trade_date || ''
   const end = endOverride || latestTradeDate || todayString()
   const [rebalanceValues, setRebalanceValues] = useState(() =>
-    uniqueSorted([defaultRebalanceDays, 20, 40], 1, 250),
+    uniqueSorted(saved?.rebalanceDays ?? [defaultRebalanceDays, 20, 40], 1, 250),
   )
   const [positionValues, setPositionValues] = useState(() =>
-    uniqueSorted([defaultPositions, Math.max(5, Math.round(defaultPositions / 2))], 1, 100),
+    uniqueSorted(
+      saved?.maxPositions ?? [defaultPositions, Math.max(5, Math.round(defaultPositions / 2))],
+      1,
+      100,
+    ),
   )
-  const [gridId, setGridId] = useState<string | null>(null)
-  const [metric, setMetric] = useState<MetricKey>('excess')
-  const [selectedBtId, setSelectedBtId] = useState<string | null>(null)
+  const [gridId, setGridId] = useState<string | null>(saved?.gridId ?? null)
+  const [metric, setMetric] = useState<MetricKey>(saved?.metric ?? 'excess')
+  const [selectedBtId, setSelectedBtId] = useState<string | null>(saved?.selectedBtId ?? null)
 
   const gridMutation = useBacktestGrid()
   const detailQuery = useBacktestGridDetail(gridId, active)
   const retryMutation = useBacktestGridRetry(gridId)
   const detail = detailQuery.data
   const cellDetail = useBacktestDetail(selectedBtId)
+
+  // 矩阵 ID、两轴取值与选中格随策略持久化，路由切换或刷新后恢复
+  useEffect(() => {
+    saveGridState(algoCode, {
+      gridId,
+      start,
+      endOverride,
+      rebalanceDays: rebalanceValues,
+      maxPositions: positionValues,
+      metric,
+      selectedBtId,
+    })
+  }, [algoCode, gridId, start, endOverride, rebalanceValues, positionValues, metric, selectedBtId])
+
+  // grid_id 已不存在（后端清理/过期）时丢弃残留记录，回到未扫描状态
+  useEffect(() => {
+    const error = detailQuery.error
+    if (gridId && error instanceof ApiError && error.status === 404) {
+      clearGridState(algoCode, gridId)
+      setGridId(null)
+      setSelectedBtId(null)
+    }
+  }, [algoCode, gridId, detailQuery.error])
 
   const rebalancePresets = useMemo(
     () => uniqueSorted([5, 10, 15, 20, 30, 40, 60, defaultRebalanceDays], 1, 250),

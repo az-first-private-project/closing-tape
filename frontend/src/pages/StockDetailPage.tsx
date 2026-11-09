@@ -7,7 +7,7 @@
  * - 所属板块、最近信号（该股是否出现在各算法最近一次 run 中）。
  */
 import { lazy, Suspense, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, CalendarDays, Radio, RefreshCw } from 'lucide-react'
 import { useKline, useStock, useStockSignals } from '../hooks/useStock'
@@ -149,6 +149,11 @@ function FeaturesPanel({ features, latest }: { features: StockFeatures; latest: 
 export default function StockDetailPage() {
   const { code = '' } = useParams<{ code: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  /** 从选股结果点进来：返回必须走 history back，保留列表的 URL 与滚动状态 */
+  const fromAlgoCenter = Boolean(
+    (location.state as { fromAlgoCenter?: boolean } | null)?.fromAlgoCenter,
+  )
   const [searchParams, setSearchParams] = useSearchParams()
   /** 空字符串 = 最新交易日；否则为历史回看日期 */
   const [selectedDate, setSelectedDate] = useState('')
@@ -241,13 +246,23 @@ export default function StockDetailPage() {
     >
       {/* 返回 + 历史日期选择 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link
-          to="/algo-center"
-          className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass"
-        >
-          <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-0.5" />
-          返回选股中心
-        </Link>
+        {fromAlgoCenter ? (
+          <button
+            onClick={() => navigate(-1)}
+            className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass"
+          >
+            <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-0.5" />
+            返回选股结果
+          </button>
+        ) : (
+          <Link
+            to="/algo-center"
+            className="group inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition-colors hover:text-brass"
+          >
+            <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-x-0.5" />
+            返回选股中心
+          </Link>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-2.5 py-1.5 transition-colors hover:border-brass/40">
             <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />

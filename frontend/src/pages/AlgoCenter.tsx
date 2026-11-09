@@ -7,15 +7,15 @@
  *   动态列结果表格、Top10 评分图、CSV 导出、历史 run 切换；
  * - 回测面板：POST /backtest/{algo_code}，绩效指标 + 净值曲线 + 成交明细 + 导出。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { CalendarDays, Download, History } from 'lucide-react'
 import { useAlgoList, useAlgoRun, useAlgoRuns, useAlgoRunDetail } from '../hooks/useAlgo'
 import { useTradeCalendar } from '../hooks/useDashboard'
 import { downloadAlgoCsv } from '../api/algo'
 import { ApiError } from '../api/client'
-import type { AlgoMeta, AlgoParams, AlgoResult } from '../types/algo'
+import type { AlgoMeta, AlgoParams, AlgoResult, AlgoStockRow } from '../types/algo'
 import { rowScore } from '../types/algo'
 import AlgoCard from '../components/AlgoCard'
 import AlgoParamPanel from '../components/AlgoParamPanel'
@@ -28,7 +28,18 @@ import BacktestPanel from '../components/BacktestPanel'
 import StrategyLadder from '../components/StrategyLadder'
 import ConsensusBoard from '../components/ConsensusBoard'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
-import { diffPanelAgainstRun } from '../lib/algoParams'
+import type { DataTableSortState } from '../components/DataTable'
+import { diffPanelAgainstRun, paramsFromSnapshot } from '../lib/algoParams'
+import { loadSelectedAlgo, saveSelectedAlgo } from '../lib/backtestSession'
+import {
+  buildAlgoUrlSearch,
+  loadAlgoContext,
+  loadAlgoTableState,
+  readAlgoUrlState,
+  saveAlgoContext,
+  saveAlgoTableState,
+  type StoredAlgoTableState,
+} from '../lib/algoSession'
 import { fmtInt } from '../lib/format'
 
 /** 从 params_schema 生成默认参数（布尔默认值转字符串传入 query） */
@@ -46,24 +57,72 @@ function shortRunId(runId: string): string {
   return runId.length > 10 ? `…${runId.slice(-10)}` : runId
 }
 
+/** 表格状态的默认值（无历史记录时） */
+const DEFAULT_TABLE_STATE: Omit<StoredAlgoTableState, 'savedAt'> = {
+  sort: { key: 'rank', direction: 'asc' },
+  expandedKey: null,
+  activeKey: null,
+  scrollTop: 0,
+  pageScrollY: 0,
+}
+
+/** 启动状态：URL 优先，缺失项回落到会话缓存 */
+interface BootState {
+  /** URL 中的 ?algo=（用于校验策略是否仍存在） */
+  urlAlgo: string | null
+  algoCode: string
+  /** null = URL 与会话都没有参数，等 run 快照或 schema 默认值 */
+  params: AlgoParams | null
+  selectedDate: string
+  runId: string | null
+  tableState: StoredAlgoTableState | null
+}
+
+function resolveBootState(locationSearch: string): BootState {
+  const url = readAlgoUrlState(new URLSearchParams(locationSearch))
+  const lastAlgo = loadSelectedAlgo() ?? ''
+  const algoCode = url.algoCode ?? lastAlgo
+  const stored = algoCode ? loadAlgoContext(algoCode) : null
+  const runId = url.runId ?? stored?.runId ?? null
+  return {
+    urlAlgo: url.algoCode,
+    algoCode,
+    params: url.params ?? stored?.params ?? null,
+    selectedDate: url.selectedDate !== null ? url.selectedDate : (stored?.selectedDate ?? ''),
+    runId,
+    tableState: runId ? loadAlgoTableState(runId) : null,
+  }
+}
+
 export default function AlgoCenter() {
   const navigate = useNavigate()
   const location = useLocation()
-  const [searchParams, setSearchParams] = useSearchParams()
-  /** 已应用过的 ?algo=，避免列表后台刷新时重置用户改过的参数 */
-  const appliedAlgoParam = useRef<string | null>(null)
 
   // ---- 算法清单 ----
   const algoListQuery = useAlgoList()
   const algoList = algoListQuery.data ?? []
 
   // ---- 页面状态 ----
-  const [selectedCode, setSelectedCode] = useState('')
-  const [params, setParams] = useState<AlgoParams>({})
+  /** 启动时一次性解析 URL / 会话：URL 优先，缺失项回落到持久化缓存 */
+  const bootRef = useRef<BootState | null>(null)
+  if (bootRef.current === null) bootRef.current = resolveBootState(location.search)
+  const boot = bootRef.current
+
+  /** 本地记住当前策略：离开页面再回来仍能看到该策略的后台回测 */
+  const [selectedCode, setSelectedCode] = useState(boot.algoCode)
+  const [params, setParams] = useState<AlgoParams>(boot.params ?? {})
+  /** 已初始化过参数的策略，避免列表刷新覆盖用户改过的参数 */
+  const seededParamsFor = useRef<string | null>(boot.params ? boot.algoCode : null)
+  /** 启动自 run 但 URL/会话都没有参数：等 run 明细返回后用快照回填 */
+  const snapshotSeedPending = useRef(!!boot.runId && !boot.params)
   /** 空字符串 = 自动（该策略最近数据就绪日）；否则为指定交易日 */
-  const [selectedDate, setSelectedDate] = useState('')
-  /** 非空表示正在查看某次历史 run 的明细 */
-  const [historyRunId, setHistoryRunId] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState(boot.selectedDate)
+  /** 非空表示正在查看某次 run 的明细（含启动时从 URL/会话恢复的 run） */
+  const [historyRunId, setHistoryRunId] = useState<string | null>(boot.runId)
+  /** 启动恢复的 run：用于来源标记与 404 清理 */
+  const [restoredRunId, setRestoredRunId] = useState<string | null>(boot.runId)
+  /** 恢复的 run 已不存在时的说明 */
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
@@ -88,29 +147,70 @@ export default function AlgoCenter() {
     [algoList, selectedCode],
   )
 
-  // 列表加载后：优先应用 ?algo= 深链（命令面板/外部链接），否则默认选中第一个启用中的算法
+  // 列表加载后：校验启动时恢复的策略；失效时回落到 URL 指定或第一个启用中的算法
   useEffect(() => {
     if (algoList.length === 0) return
-    const requested = searchParams.get('algo')
-    if (requested) {
-      const requestedAlgo = algoList.find((algo) => algo.algo_code === requested)
-      if (requestedAlgo) {
-        if (appliedAlgoParam.current !== requested) {
-          appliedAlgoParam.current = requested
-          setSelectedCode(requested)
-          setParams(buildDefaultParams(requestedAlgo))
-          setHistoryRunId(null)
-          setExportError(null)
-        }
-        return
+    const current = algoList.find((algo) => algo.algo_code === selectedCode) ?? null
+    if (current) {
+      // 只补一次 schema 默认值；run 快照稍后到达时会覆盖
+      if (seededParamsFor.current !== selectedCode) {
+        seededParamsFor.current = selectedCode
+        setParams(buildDefaultParams(current))
       }
+      return
     }
-    appliedAlgoParam.current = null
-    if (selectedCode && algoList.some((algo) => algo.algo_code === selectedCode)) return
-    const first = algoList.find((algo) => algo.is_active !== false) ?? algoList[0]
-    setSelectedCode(first.algo_code)
-    setParams(buildDefaultParams(first))
-  }, [algoList, searchParams, selectedCode])
+    const requested = boot.urlAlgo
+      ? (algoList.find((algo) => algo.algo_code === boot.urlAlgo) ?? null)
+      : null
+    const fallback = requested ?? algoList.find((algo) => algo.is_active !== false) ?? algoList[0]
+    seededParamsFor.current = fallback.algo_code
+    setSelectedCode(fallback.algo_code)
+    setParams(buildDefaultParams(fallback))
+    setHistoryRunId(null)
+    setRestoredRunId(null)
+    setExportError(null)
+  }, [algoList, selectedCode, boot.urlAlgo])
+
+  // 记住当前策略：导航离开/返回、F5 后仍停在离开前的策略上
+  useEffect(() => {
+    if (selectedCode) saveSelectedAlgo(selectedCode)
+  }, [selectedCode])
+
+  /** 启动恢复的 run：策略/参数冲突时 run 优先（URL/algo 与 run 不一致） */
+  const bootAligned = useRef(false)
+  useEffect(() => {
+    const data = historyQuery.data
+    if (!data || !historyRunId || bootAligned.current) return
+    if (historyRunId !== boot.runId || algoList.length === 0) return
+    bootAligned.current = true
+    if (data.algo !== selectedCode) {
+      if (!algoList.some((algo) => algo.algo_code === data.algo)) return
+      seededParamsFor.current = data.algo
+      snapshotSeedPending.current = false
+      setSelectedCode(data.algo)
+      setParams(paramsFromSnapshot(data.run.params))
+      return
+    }
+    if (snapshotSeedPending.current) {
+      seededParamsFor.current = selectedCode
+      snapshotSeedPending.current = false
+      setParams(paramsFromSnapshot(data.run.params))
+    }
+  }, [historyQuery.data, historyRunId, boot.runId, selectedCode, algoList])
+
+  /** 恢复的 run 已不存在：清掉失效恢复点，回到可重新执行的空态 */
+  useEffect(() => {
+    if (!historyRunId || !historyQuery.isError || historyRunId !== restoredRunId) return
+    const error = historyQuery.error
+    if (!(error instanceof ApiError) || error.status !== 404) return
+    setHistoryRunId(null)
+    setRestoredRunId(null)
+    setRestoreNotice(`上次恢复的 run ${shortRunId(historyRunId)} 已不存在，请重新执行算法。`)
+    if (selectedCode) {
+      const context = loadAlgoContext(selectedCode)
+      if (context) saveAlgoContext({ ...context, runId: null })
+    }
+  }, [historyQuery.isError, historyQuery.error, historyRunId, restoredRunId, selectedCode])
 
   // #ladder 深链（/ladder 重定向、外部链接）：等开场幕布交还滚动后再定位
   useEffect(() => {
@@ -133,20 +233,17 @@ export default function AlgoCenter() {
   const handleSelect = useCallback(
     (code: string) => {
       const algo = algoList.find((item) => item.algo_code === code) ?? null
+      seededParamsFor.current = code
+      snapshotSeedPending.current = false
       setSelectedCode(code)
       setParams(buildDefaultParams(algo))
       setHistoryRunId(null)
+      setRestoredRunId(null)
+      setRestoreNotice(null)
       setExportError(null)
       runMutation.reset()
-      // 手动换策略后 URL 不再代表当前策略，清掉深链参数
-      if (searchParams.has('algo')) {
-        appliedAlgoParam.current = null
-        const next = new URLSearchParams(searchParams)
-        next.delete('algo')
-        setSearchParams(next, { replace: true })
-      }
     },
-    [algoList, runMutation, searchParams, setSearchParams],
+    [algoList, runMutation],
   )
 
   const handleParamChange = useCallback((key: string, value: number | string) => {
@@ -173,6 +270,8 @@ export default function AlgoCenter() {
     (forceRefresh = false) => {
       if (!selectedCode) return
       setHistoryRunId(null)
+      setRestoredRunId(null)
+      setRestoreNotice(null)
       setExportError(null)
       // 发起新执行即清空旧结果，避免把旧 run 误读为本次参数的结果
       runMutation.reset()
@@ -191,19 +290,38 @@ export default function AlgoCenter() {
     (value: string) => {
       setSelectedDate(value)
       setHistoryRunId(null)
+      setRestoredRunId(null)
+      setRestoreNotice(null)
       setExportError(null)
       runMutation.reset()
     },
     [runMutation],
   )
 
+  /** 手动切换历史 run：不改参数面板，只切换展示的 run 快照 */
+  const handleHistoryChange = useCallback((value: string) => {
+    setHistoryRunId(value || null)
+    setRestoredRunId(null)
+    setRestoreNotice(null)
+    setExportError(null)
+  }, [])
+
   // ---- 结果来源：历史 run 明细 或 本次执行结果 ----
   const result: AlgoResult | null = historyRunId ? (historyQuery.data ?? null) : (runMutation.data ?? null)
   const resultLoading = historyRunId ? historyQuery.isLoading : runMutation.isPending
   const resultError = historyRunId ? historyQuery.error : runMutation.error
   const runOptions = runsQuery.data?.items ?? []
-  /** 结果来源三态：本次执行 / 缓存结果 / 历史 run */
-  const resultSource: RunSource = historyRunId ? 'history' : result?.from_cache ? 'cache' : 'live'
+  const displayedRunId = result?.run?.run_id ?? null
+  /** 结果来源：本次执行 / 缓存结果 / 历史 run / 会话恢复 */
+  const resultSource: RunSource = historyRunId
+    ? restoredRunId === historyRunId
+      ? 'restored'
+      : 'history'
+    : result?.from_cache
+      ? 'cache'
+      : 'live'
+  /** run 明细尚未就绪（加载/失败）时不改写 URL 与上下文，避免丢掉恢复点 */
+  const runStateSettled = !historyRunId || historyQuery.isSuccess
   /** 参数面板与当前展示 run 的差异（不平移结果，只提示） */
   const panelDiff = useMemo(
     () => diffPanelAgainstRun(selectedAlgo, params, result?.run, selectedDate, result?.trade_date),
@@ -214,16 +332,10 @@ export default function AlgoCenter() {
    * 导出参数：始终使用当前展示 run 的参数快照（含 limit），
    * 参数面板未提交的修改不会影响导出范围。
    */
-  const exportParams = useMemo<AlgoParams>(() => {
-    const snapshot = result?.run?.params
-    if (!snapshot) return {}
-    const converted: AlgoParams = {}
-    Object.entries(snapshot).forEach(([key, value]) => {
-      if (typeof value === 'number' || typeof value === 'string') converted[key] = value
-      else if (typeof value === 'boolean') converted[key] = String(value)
-    })
-    return converted
-  }, [result?.run])
+  const exportParams = useMemo<AlgoParams>(
+    () => paramsFromSnapshot(result?.run?.params),
+    [result?.run],
+  )
 
   const displayedLimit = result?.run?.params?.limit
 
@@ -246,6 +358,158 @@ export default function AlgoCenter() {
     }
   }, [exportParams, result, selectedCode])
 
+  /**
+   * URL 同步：algo / date / run / p.* 全量写入当前历史条目（replace），
+   * 刷新与返回时优先按 URL 还原。直接改地址栏而不触发路由重渲染，避免循环。
+   */
+  const syncUrl = useCallback(() => {
+    if (!selectedCode || !selectedAlgo || !runStateSettled) return
+    const next = buildAlgoUrlSearch({
+      algoCode: selectedCode,
+      selectedDate,
+      runId: displayedRunId,
+      params,
+      algo: selectedAlgo,
+    })
+    const query = next.toString()
+    const pathname = window.location.pathname
+    const hash = window.location.hash
+    const target = `${pathname}${query ? `?${query}` : ''}${hash}`
+    const current = `${pathname}${window.location.search}${hash}`
+    if (target !== current) window.history.replaceState(window.history.state, '', target)
+  }, [displayedRunId, params, runStateSettled, selectedAlgo, selectedCode, selectedDate])
+
+  useEffect(() => {
+    syncUrl()
+  }, [syncUrl])
+
+  /** 会话上下文（按策略）：参数、交易日、当前展示的 run */
+  useEffect(() => {
+    if (!selectedCode || !selectedAlgo || !runStateSettled) return
+    saveAlgoContext({
+      algoCode: selectedCode,
+      params,
+      selectedDate,
+      runId: displayedRunId,
+    })
+  }, [displayedRunId, params, runStateSettled, selectedAlgo, selectedCode, selectedDate])
+
+  /** 表格状态（按 run）：排序 / 展开 / 选中行 / 内部滚动 / 页面滚动 */
+  const tableInitial = useMemo(
+    () => (displayedRunId ? loadAlgoTableState(displayedRunId) : null),
+    [displayedRunId],
+  )
+  const tableStateRef = useRef<StoredAlgoTableState | null>(null)
+  const tableRunIdRef = useRef<string | null>(null)
+  const tableSaveTimer = useRef<number | null>(null)
+  const displayedRunIdRef = useRef<string | null>(null)
+  displayedRunIdRef.current = displayedRunId
+
+  useEffect(() => {
+    if (tableRunIdRef.current === displayedRunId) return
+    tableRunIdRef.current = displayedRunId
+    tableStateRef.current = tableInitial
+  }, [displayedRunId, tableInitial])
+
+  const tableBaseFor = useCallback((runId: string): StoredAlgoTableState => {
+    if (tableStateRef.current && tableRunIdRef.current === runId) return tableStateRef.current
+    return loadAlgoTableState(runId) ?? { ...DEFAULT_TABLE_STATE, savedAt: 0 }
+  }, [])
+
+  const writeTableState = useCallback(
+    (patch: Partial<StoredAlgoTableState>) => {
+      const runId = displayedRunIdRef.current
+      if (!runId) return
+      tableRunIdRef.current = runId
+      tableStateRef.current = { ...tableBaseFor(runId), ...patch, savedAt: Date.now() }
+      if (tableSaveTimer.current !== null) window.clearTimeout(tableSaveTimer.current)
+      tableSaveTimer.current = window.setTimeout(() => {
+        tableSaveTimer.current = null
+        const currentRunId = displayedRunIdRef.current
+        if (currentRunId && tableStateRef.current) {
+          saveAlgoTableState(currentRunId, tableStateRef.current)
+        }
+      }, 200)
+    },
+    [tableBaseFor],
+  )
+
+  const flushTableState = useCallback(
+    (patch: Partial<StoredAlgoTableState> = {}) => {
+      if (tableSaveTimer.current !== null) {
+        window.clearTimeout(tableSaveTimer.current)
+        tableSaveTimer.current = null
+      }
+      const runId = displayedRunIdRef.current
+      if (!runId) return
+      tableRunIdRef.current = runId
+      tableStateRef.current = { ...tableBaseFor(runId), ...patch, savedAt: Date.now() }
+      saveAlgoTableState(runId, tableStateRef.current)
+    },
+    [tableBaseFor],
+  )
+
+  useEffect(
+    () => () => {
+      if (tableSaveTimer.current !== null) window.clearTimeout(tableSaveTimer.current)
+    },
+    [],
+  )
+
+  /** 跟踪页面滚动（同步更新 ref，落盘由 writeTableState 防抖） */
+  useEffect(() => {
+    let lastY = window.scrollY
+    const onScroll = () => {
+      const current = window.scrollY
+      if (current === lastY) return
+      lastY = current
+      writeTableState({ pageScrollY: current })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [writeTableState])
+
+  /** 返回时恢复页面滚动：等结果渲染后执行一次，跳过全局 smooth 动画 */
+  const pageScrollRestored = useRef(false)
+  useLayoutEffect(() => {
+    if (pageScrollRestored.current || !result) return
+    pageScrollRestored.current = true
+    if (boot.runId && result.run?.run_id === boot.runId) {
+      const target = boot.tableState?.pageScrollY ?? 0
+      if (target > 0) window.scrollTo({ top: target, behavior: 'instant' as ScrollBehavior })
+    }
+  }, [result, boot.runId, boot.tableState])
+
+  const handleTableSortChange = useCallback(
+    (sort: DataTableSortState | null) => {
+      writeTableState({ sort })
+    },
+    [writeTableState],
+  )
+
+  const handleTableExpandedChange = useCallback(
+    (expandedKey: string | null) => {
+      writeTableState({ expandedKey })
+    },
+    [writeTableState],
+  )
+
+  const handleTableScrollTop = useCallback(
+    (scrollTop: number) => {
+      writeTableState({ scrollTop })
+    },
+    [writeTableState],
+  )
+
+  /** 结果行 → 个股详情：先落表格/滚动状态，再 SPA 跳转 */
+  const handleRowClick = useCallback(
+    (row: AlgoStockRow, rowKey: string) => {
+      flushTableState({ activeKey: rowKey, pageScrollY: window.scrollY })
+      syncUrl()
+      navigate(`/stocks/${row.code}`, { state: { fromAlgoCenter: true } })
+    },
+    [flushTableState, navigate, syncUrl],
+  )
 
   /** Top10 排序指标对比图数据 */
   const chartData = useMemo(
@@ -326,7 +590,7 @@ export default function AlgoCenter() {
               <span className="eyebrow shrink-0">Run</span>
               <select
                 value={historyRunId ?? ''}
-                onChange={(event) => setHistoryRunId(event.target.value || null)}
+                onChange={(event) => handleHistoryChange(event.target.value)}
                 className="min-w-0 max-w-[14rem] cursor-pointer bg-transparent text-[12px] font-medium text-foreground focus:outline-none"
               >
                 <option value="">当前运行结果</option>
@@ -415,8 +679,11 @@ export default function AlgoCenter() {
               />
             ) : !result ? (
               <EmptyState
-                title="尚未执行算法"
-                description="调整左侧参数后点击「执行算法」。不同参数会产生不同 run_id 与不同结果，参数修改本身不会自动请求。"
+                title={restoreNotice ? '上次的结果已失效' : '尚未执行算法'}
+                description={
+                  restoreNotice ??
+                  '调整左侧参数后点击「执行算法」。不同参数会产生不同 run_id 与不同结果，参数修改本身不会自动请求。'
+                }
               />
             ) : (
               <>
@@ -435,6 +702,7 @@ export default function AlgoCenter() {
 
                 {/* 结果表格：动态 metrics 列 */}
                 <AlgoDataTable
+                  key={result.run?.run_id ?? `${result.algo}_${result.trade_date}`}
                   data={result.data ?? []}
                   algo={result.algo}
                   fullDesc={
@@ -449,7 +717,14 @@ export default function AlgoCenter() {
                       ? `本 run 按返回数量上限 limit=${displayedLimit} 保存信号；导出 CSV 使用同一 run 参数`
                       : '导出 CSV 使用当前展示 run 的参数快照'
                   }
-                  onRowClick={(row) => navigate(`/stocks/${row.code}`)}
+                  initialSort={tableInitial ? tableInitial.sort : undefined}
+                  initialExpandedKey={tableInitial?.expandedKey ?? null}
+                  initialActiveKey={tableInitial?.activeKey ?? null}
+                  initialScrollTop={tableInitial?.scrollTop ?? 0}
+                  onSortChange={handleTableSortChange}
+                  onExpandedChange={handleTableExpandedChange}
+                  onScrollTopChange={handleTableScrollTop}
+                  onRowClick={handleRowClick}
                   csvFilename={`${result.algo}_${result.trade_date}_signals.csv`}
                 />
 

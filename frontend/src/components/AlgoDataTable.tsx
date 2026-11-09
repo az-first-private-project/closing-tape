@@ -15,14 +15,14 @@ import {
   type MarketGate,
 } from '../types/algo'
 import { fmtMetricValue } from '../lib/format'
-import DataTable, { type DataTableColumn } from './DataTable'
+import DataTable, { type DataTableColumn, type DataTableSortState } from './DataTable'
 import RangeNotice from './RangeNotice'
 import SignalExplanation from './SignalExplanation'
 
 interface Props {
   data: AlgoStockRow[]
   algo?: string
-  onRowClick?: (row: AlgoStockRow) => void
+  onRowClick?: (row: AlgoStockRow, rowKey: string) => void
   csvFilename?: string
   /** 策略说明（底部固定行） */
   fullDesc?: string | null
@@ -36,6 +36,14 @@ interface Props {
   total?: number | null
   /** 额外范围说明（如 run 按 limit 截断） */
   rangeNote?: string
+  /** 恢复的表格状态（页面按 run 持久化后回传；undefined 表示无历史状态） */
+  initialSort?: DataTableSortState | null
+  initialExpandedKey?: string | null
+  initialActiveKey?: string | null
+  initialScrollTop?: number | null
+  onSortChange?: (sort: DataTableSortState | null) => void
+  onExpandedChange?: (expandedKey: string | null) => void
+  onScrollTopChange?: (scrollTop: number) => void
 }
 
 /** 无综合评分时，「得分」列展示各策略的排序指标 */
@@ -173,6 +181,13 @@ export default function AlgoDataTable({
   marketGate,
   total,
   rangeNote,
+  initialSort,
+  initialExpandedKey,
+  initialActiveKey,
+  initialScrollTop,
+  onSortChange,
+  onExpandedChange,
+  onScrollTopChange,
 }: Props) {
   const explainable = supportsSignalExplanation(algo)
   const gateNotice = marketGateNotice(algo, marketGate)
@@ -257,7 +272,13 @@ export default function AlgoDataTable({
         rows={data}
         rowKey={(row, index) => `${row.code}-${index}`}
         onRowClick={onRowClick}
-        initialSort={{ key: 'rank', direction: 'asc' }}
+        initialSort={initialSort === undefined ? { key: 'rank', direction: 'asc' } : initialSort}
+        initialExpandedKey={initialExpandedKey}
+        initialActiveKey={initialActiveKey}
+        initialScrollTop={initialScrollTop}
+        onSortChange={onSortChange}
+        onExpandedChange={onExpandedChange}
+        onScrollTopChange={onScrollTopChange}
         csvFilename={csvFilename}
         emptyText={gateBlocked ? '市场环境未满足，本次无信号' : '本次运行没有选股信号'}
         maxHeight="520px"

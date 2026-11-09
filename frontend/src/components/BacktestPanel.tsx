@@ -5,13 +5,14 @@
  * 参数敏感性：rebalance_days × max_positions 矩阵 → POST /backtest/{algo_code}/grid
  * 两个标签页共用同一份回测结果视图（BacktestResultView）。
  */
-import { useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Download, FlaskConical } from 'lucide-react'
 import { useBacktest } from '../hooks/useBacktest'
 import { downloadBacktestCsv } from '../api/backtest'
 import { ApiError } from '../api/client'
+import { getActiveBacktest, loadPanelState, savePanelState } from '../lib/backtestSession'
 import type { AlgoParams } from '../types/algo'
-import { EmptyState, ErrorState } from './StateViews'
+import { EmptyState, ErrorState, LoadingState } from './StateViews'
 import BacktestResultView from './BacktestResultView'
 import SensitivityMatrix from './SensitivityMatrix'
 
@@ -50,12 +51,22 @@ export default function BacktestPanel({
   changedKeys = [],
   resultRunId,
 }: BacktestPanelProps) {
-  const mutation = useBacktest()
+  const mutation = useBacktest(algoCode)
+  const [savedPanel] = useState(() => loadPanelState(algoCode))
+  const [savedTask] = useState(() => getActiveBacktest(algoCode))
+  const appliedTaskRef = useRef<string | null>(savedTask?.btId ?? null)
 
-  const [tab, setTab] = useState<PanelTab>('single')
-  const [start, setStart] = useState(defaultStartDate)
+  const [tab, setTab] = useState<PanelTab>(savedPanel?.tab ?? 'single')
+  const [start, setStart] = useState(
+    () => savedTask?.start || savedPanel?.start || defaultStartDate(),
+  )
   // B 系列是短线策略，默认持有 5 个交易日；A3/A4 维持 20 日
-  const [rebalanceDays, setRebalanceDays] = useState(() => (algoCode.startsWith('b') ? 5 : 20))
+  const [rebalanceDays, setRebalanceDays] = useState(
+    () =>
+      savedTask?.rebalanceDays ??
+      savedPanel?.rebalanceDays ??
+      (algoCode.startsWith('b') ? 5 : 20),
+  )
   // 持仓数与「返回数量」绑定：回测持有算法本次返回的全部标的，不再单独设一个默认 20
   const strategyLimit = Number(strategyParams.limit)
   const boundPositions =
@@ -66,6 +77,45 @@ export default function BacktestPanel({
   const [exportError, setExportError] = useState<string | null>(null)
 
   const result = mutation.data
+
+  // POST 在离开页面后才返回时，任务记录晚到，补全面板输入
+  useEffect(() => {
+    const task = mutation.task
+    if (!task || appliedTaskRef.current === task.btId) return
+    appliedTaskRef.current = task.btId
+    if (task.start) setStart(task.start)
+    if (typeof task.rebalanceDays === 'number') setRebalanceDays(task.rebalanceDays)
+  }, [mutation.task])
+
+  // 面板输入随策略持久化，路由切换或刷新后恢复
+  useEffect(() => {
+    savePanelState(algoCode, { tab, start, rebalanceDays })
+  }, [algoCode, tab, start, rebalanceDays])
+
+  const statusLabel = mutation.submitting
+    ? '提交中'
+    : mutation.status === 'running'
+      ? '运行中'
+      : mutation.status === 'queued'
+        ? '排队中'
+        : '连接中'
+
+  const errorTitle =
+    mutation.error instanceof ApiError && mutation.error.code === 'BACKTEST_TIMEOUT'
+      ? '回测等待超时'
+      : mutation.retry
+        ? '回测状态获取失败'
+        : '回测执行失败'
+
+  const loadingText = mutation.submitting
+    ? '正在提交回测任务…'
+    : mutation.status === 'running'
+      ? '回测运行中，可离开页面，返回后自动续接…'
+      : mutation.status === 'queued'
+        ? '回测已排队，正在等待后台执行…'
+        : mutation.isPending
+          ? '正在连接回测任务…'
+          : '正在加载回测结果…'
 
   /** 发起回测 */
   const handleRun = () => {
@@ -221,28 +271,43 @@ export default function BacktestPanel({
           <div className="flex items-end">
             <button
               onClick={handleRun}
-              disabled={mutation.isPending}
+              disabled={mutation.isBusy}
               className="btn btn-primary w-full"
             >
-              {mutation.isPending ? (
+              {mutation.isBusy ? (
                 <span className="skeleton h-4 w-4 rounded-full" aria-hidden="true" />
               ) : (
                 <FlaskConical className="w-4 h-4" />
               )}
-              {mutation.isPending ? '回测中…' : '运行回测'}
+              {mutation.isPending ? '回测中…' : mutation.isBusy ? '加载中…' : '运行回测'}
             </button>
           </div>
         </div>
 
         {exportError && <p className="text-xs text-alert">{exportError}</p>}
 
+        {mutation.isPending && (
+          <div
+            role="status"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-brass/30 bg-brass/[0.06] px-3 py-2 text-[12px] text-brass-strong dark:text-brass"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-brass animate-pulse" aria-hidden="true" />
+              后台回测{statusLabel}
+            </span>
+            <span className="text-muted-foreground">可离开页面，返回后自动续接</span>
+          </div>
+        )}
+
         {mutation.isError ? (
           <ErrorState
-            title="回测执行失败"
+            title={errorTitle}
             error={mutation.error}
-            onRetry={handleRun}
+            onRetry={mutation.retry ?? handleRun}
             className="border-0 bg-transparent p-6"
           />
+        ) : mutation.isBusy ? (
+          <LoadingState text={loadingText} className="border-0 shadow-none" />
         ) : !result ? (
           <EmptyState
             title="尚未运行回测"

@@ -13,6 +13,7 @@ import {
   GitBranch,
   History,
   RefreshCw,
+  RotateCcw,
   Timer,
   TrendingUp,
   Zap,
@@ -22,8 +23,8 @@ import type { Freshness } from '../types/common'
 import { fmtDateTime, fmtDuration, fmtInt } from '../lib/format'
 import FreshnessBadge from './FreshnessBadge'
 
-/** 结果来源：本次执行 / 缓存结果 / 历史 run（U01 三态显式区分） */
-export type RunSource = 'live' | 'cache' | 'history'
+/** 结果来源：本次执行 / 缓存结果 / 历史 run / 会话恢复（U01 显式区分） */
+export type RunSource = 'live' | 'cache' | 'history' | 'restored'
 
 interface RunMetaPanelProps {
   run: AlgoRun
@@ -60,6 +61,12 @@ const SOURCE_META: Record<
     label: '历史 run',
     hint: '从历史 run 列表载入，不是本次执行',
     icon: History,
+    className: 'border-brass/45 bg-brass/10 text-brass-strong dark:text-brass',
+  },
+  restored: {
+    label: '已恢复',
+    hint: '按 URL / 会话记录恢复的上一次结果，不是本次执行',
+    icon: RotateCcw,
     className: 'border-brass/45 bg-brass/10 text-brass-strong dark:text-brass',
   },
 }
