@@ -426,7 +426,7 @@ def test_snapshots_capture_holdings_cost_and_cash() -> None:
     holding = second["holdings"][0]
     assert holding["code"] == "000001"
     assert holding["shares"] % 100 == 0
-    assert holding["cost"] == pytest.approx(10.0125)  # 含佣金
+    assert holding["cost"] == pytest.approx(10.011)  # 含佣金
     assert holding["weight"] > 0.98
     assert second["cash_ratio"] < 0.02
     assert second["pending_orders"] == []

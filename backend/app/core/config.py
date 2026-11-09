@@ -141,8 +141,8 @@ class BacktestConfig:
     max_positions: int = _env_int("BT_MAX_POSITIONS", 20)     # 持仓 20 只
     position_sizing: str = "equal"                            # 等权
     benchmark_code: str = _env("BT_BENCHMARK", "sh000300")    # 基准：沪深300
-    commission_rate: float = _env_float("BT_COMMISSION", 0.00025)   # 佣金 万2.5（双边）
-    stamp_tax_rate: float = _env_float("BT_STAMP_TAX", 0.001)       # 印花税 千1（卖出）
+    commission_rate: float = _env_float("BT_COMMISSION", 0.0001)    # 佣金 万1（双边，全佣）
+    stamp_tax_rate: float = _env_float("BT_STAMP_TAX", 0.0005)      # 印花税 万5（仅卖出）
     slippage_rate: float = _env_float("BT_SLIPPAGE", 0.001)         # 滑点 千1
     min_commission: float = _env_float("BT_MIN_COMMISSION", 5.0)    # 最低 5 元佣金
     initial_cash: float = _env_float("BT_INITIAL_CASH", 1_000_000.0)

@@ -62,8 +62,8 @@ def _create(db: _FakeDb, background: BackgroundTasks, **overrides):
         "rebalance_days": 20,
         "max_positions": 5,
         "benchmark": "sh000300",
-        "commission": 0.00025,
-        "stamp_tax": 0.001,
+        "commission": 0.0001,
+        "stamp_tax": 0.0005,
         "slippage": 0.001,
         "db": db,
     }

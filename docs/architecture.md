@@ -131,7 +131,7 @@ calendar → universe → index → sector(东财,空则同花顺兜底) → sec
    │ 对每个调仓日 T：
    ├─ run_strategy(T) 取信号（只用 ≤T 的数据）
    ├─ T+1 开盘成交（涨停/跌停/停牌/无数据 → 不可成交并记 reason）
-   ├─ 费用：佣金 max(金额×万2.5, 5) + 印花税(卖) + 滑点
+   ├─ 费用：佣金 max(金额×万1, 5) + 印花税(卖，万5) + 滑点
    ├─ 持仓市值：units × close × adj_factor（后复权）
    └─ 记录 nav / benchmark
    ▼

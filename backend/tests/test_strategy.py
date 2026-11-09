@@ -743,8 +743,8 @@ def test_simulate_uses_next_open_and_lot_size() -> None:
     params = BacktestParams(
         rebalance_days=20,
         max_positions=1,
-        commission_rate=0.00025,
-        stamp_tax_rate=0.001,
+        commission_rate=0.0001,
+        stamp_tax_rate=0.0005,
         slippage_rate=0.001,
         min_commission=5.0,
         initial_cash=100_000.0,
@@ -772,8 +772,8 @@ def test_simulate_uses_next_open_and_lot_size() -> None:
     assert buys[0]["reason"] == "rebalance"
     assert adjusted_ok is True
 
-    # 精确资金流：100000 / (10.01*100) 手 → 9900 股；佣金 24.77；净值 = (现金 + 9900*10.5)/100000
-    expected_cash = 100_000.0 - round(10.01 * 9900, 2) - round(max(10.01 * 9900 * 0.00025, 5.0), 2)
+    # 精确资金流：100000 / (10.01*100) 手 → 9900 股；佣金 9.91；净值 = (现金 + 9900*10.5)/100000
+    expected_cash = 100_000.0 - round(10.01 * 9900, 2) - round(max(10.01 * 9900 * 0.0001, 5.0), 2)
     expected_nav = round((expected_cash + 9900 * 10.5) / 100_000.0, 6)
     assert curve[1]["nav"] == pytest.approx(expected_nav, abs=1e-6)
 

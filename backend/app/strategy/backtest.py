@@ -5,7 +5,7 @@
   - 每 ``rebalance_days``（默认 20）个交易日调仓一次，持仓 ``max_positions``（默认 20）只等权；
   - 基准 ``sh000300``（沪深300）；
   - **T 日收盘出信号 → T+1 开盘成交**；持有到下一次调仓（不做止损/止盈）；
-  - 成本：佣金 0.00025（双边）、最低 5 元/笔；印花税 0.001（仅卖出）；
+  - 成本：佣金 0.0001（双边，全佣）、最低 5 元/笔；印花税 0.0005（仅卖出）；
     滑点 0.001（买入价 = open×(1+slip)，卖出价 = open×(1-slip)）；
   - 涨停/跌停/停牌不可成交（用 ``fact_stock_daily.is_limit_up/is_limit_down/is_suspended``）：
     买不进就跳过并记录 reason，卖不出就继续持有并在下一次调仓再试；
@@ -153,8 +153,8 @@ class BacktestParams:
     rebalance_days: int = 20
     max_positions: int = 20
     benchmark_code: str = "sh000300"
-    commission_rate: float = 0.00025
-    stamp_tax_rate: float = 0.001
+    commission_rate: float = 0.0001
+    stamp_tax_rate: float = 0.0005
     slippage_rate: float = 0.001
     min_commission: float = 5.0
     initial_cash: float = 1_000_000.0
