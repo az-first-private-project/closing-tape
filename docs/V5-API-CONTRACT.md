@@ -588,8 +588,8 @@ PUT 请求体（两个字段均可选，只传一个时另一个保持不变）�
 
 Query：`start`（默认近 1 年）、`end`（默认库内最新行情交易日 = `/health.latest_trade_date`，
 且不晚于今天；显式传入则原样使用）、
-`rebalance_days=20`、`max_positions=20`、`benchmark=sh000300`、`commission=0.00025`、
-`stamp_tax=0.001`、`slippage=0.001`、以及策略参数（同 5.2）。
+`rebalance_days=20`、`max_positions=20`、`benchmark=sh000300`、`commission=0.0001`、
+`stamp_tax=0.0005`、`slippage=0.001`、以及策略参数（同 5.2）。
 
 同步阶段只做参数校验与数据起点裁剪，**立即返回任务信封**，计算在后台执行：
 ```json
@@ -619,7 +619,7 @@ Query：`start`（默认近 1 年）、`end`（默认库内最新行情交易日
 ```json
 { "bt_id": "b7d1…", "algo": "a3", "start_date": "2025-10-21", "end_date": "2026-10-21",
   "params": { "rebalance_days": 20, "max_positions": 20, "benchmark_code": "sh000300",
-              "commission_rate": 0.00025, "stamp_tax_rate": 0.001, "slippage_rate": 0.001,
+              "commission_rate": 0.0001, "stamp_tax_rate": 0.0005, "slippage_rate": 0.001,
               "strategy": { "pe_max": 50 } },
   "status": "success", "error": null,
   "metrics": { "total_return": 0.183, "annual_return": 0.181, "max_drawdown": -0.121,
