@@ -24,7 +24,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: '首页', icon: BarChart3, end: true, keywords: ['新闻', '资讯'] },
+  { to: '/', label: '新闻情报', icon: BarChart3, end: true, keywords: ['首页', '新闻', '资讯'] },
   { to: '/dashboard', label: '盘后分析', icon: TrendingUp, keywords: ['大盘', '温度', '板块'] },
   { to: '/algo-center', label: '选股中心', icon: Brain, keywords: ['策略', '天梯', '共识', '回测'] },
   { to: '/paper', label: '纸面跟踪', icon: LineChart, keywords: ['组合', '净值'] },
