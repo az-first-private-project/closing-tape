@@ -74,6 +74,13 @@
   --color-temp-3: #b3751e;
   --color-temp-4: #b4362b;
 
+  /* 市场五态状态色（V7 T1）：上攻暖红 / 修复浅橙 / 筑底浅蓝 / 向下灰蓝 / 避险深灰绿 */
+  --color-regime-trend: #be2b22;
+  --color-regime-repair: #b3751e;
+  --color-regime-bottom: #3a5ba0;
+  --color-regime-pull: #5b6b7a;
+  --color-regime-riskoff: #4a5d52;
+
   /* 图表系列色：低饱和、互相可辨，不与涨跌红绿抢注意力 */
   --color-chart-1: #3d6b8f;
   --color-chart-2: #8c6a34;
@@ -140,6 +147,12 @@
   --color-temp-2: #b9b5a6;
   --color-temp-3: #e7b45c;
   --color-temp-4: #f0655a;
+
+  --color-regime-trend: #f0655a;
+  --color-regime-repair: #e7b45c;
+  --color-regime-bottom: #7ba0d8;
+  --color-regime-pull: #93a6b5;
+  --color-regime-riskoff: #8fb3a3;
 
   --color-chart-1: #83aacb;
   --color-chart-2: #d3a55f;

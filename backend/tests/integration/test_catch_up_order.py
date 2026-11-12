@@ -42,6 +42,10 @@ async def test_margin_after_daily_outputs_and_signal_perf_last(monkeypatch) -> N
         assert day_steps[-1] == "margin"
         for earlier in ("sector_scores", "temperature", "report", "algos"):
             assert day_steps.index("margin") > day_steps.index(earlier)
+        assert day_steps.index("macro_rates") < day_steps.index("market_factors")
+        assert day_steps.index("market_factors") < day_steps.index("temperature")
+        assert day_steps.index("temperature") < day_steps.index("regime")
+        assert day_steps.index("regime") < day_steps.index("report")
         offset += len(cu.DAY_STEPS)
 
     assert names[-1] == "signal_perf"

@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger, Boolean, Date, DateTime, Index, Integer, Numeric, PrimaryKeyConstraint,
-    String, Text, func,
+    SmallInteger, String, Text, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -300,6 +300,9 @@ class MarginTrading(Base):
     short_balance: Mapped[float | None] = mapped_column(Numeric(16, 2), comment="融券余额(亿元)")
     margin_change: Mapped[float | None] = mapped_column(Numeric(16, 2), comment="日变化(亿元)")
     northward_net: Mapped[float | None] = mapped_column(Numeric(16, 2), comment="北向净流入(亿元)")
+    margin_buy_amount: Mapped[float | None] = mapped_column(
+        Numeric(24, 2), comment="沪深融资买入额合计(元)"
+    )
 
     src: Mapped[str] = mapped_column(String(16), default="akshare")
     updated_at: Mapped[datetime] = mapped_column(
@@ -379,6 +382,140 @@ class MarketTemperatureDaily(Base):
     )
 
 
+class MacroRate(Base):
+    """中债国债收益率曲线（日频）。ERP / 股债收益差 / 期限利差的输入。"""
+
+    __tablename__ = "macro_rates"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    cn_1y: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="1 年期国债收益率 %")
+    cn_10y: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="10 年期国债收益率 %")
+    term_spread: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="10Y-1Y 百分点")
+
+    src: Mapped[str] = mapped_column(String(16), default="chinabond")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class FactMarketDaily(Base):
+    """市场级原始因子日快照（V7 T1）。
+
+    只存**原始值**，标准化分位在 `market_regime.py` 里按 750 日滚动窗口计算，
+    避免把随窗口变化的分位写死进事实表。所有窗口只使用 T 日及以前的数据。
+    """
+
+    __tablename__ = "fact_market_daily"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    index_code: Mapped[str] = mapped_column(String(16), default="sh000300")
+
+    # ---- 指数趋势（沪深300）----
+    close: Mapped[float | None] = mapped_column(Numeric(14, 3))
+    high: Mapped[float | None] = mapped_column(Numeric(14, 3))
+    low: Mapped[float | None] = mapped_column(Numeric(14, 3))
+    ret_1d: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="%")
+    ret_20: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="%")
+    ema20: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    ema60: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    ema120: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    ema_slope60: Mapped[float | None] = mapped_column(Numeric(12, 8), comment="EMA60 20日斜率/close")
+    ma_alignment: Mapped[int | None] = mapped_column(SmallInteger, comment="+1/-1/0")
+    adx14: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    di_plus: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    di_minus: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    efficiency_ratio: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    choppiness: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    macd_hist: Mapped[float | None] = mapped_column(Numeric(14, 6))
+    rsi14: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    price_vs_ma120: Mapped[float | None] = mapped_column(Numeric(10, 6))
+
+    # ---- 量能 ----
+    amount: Mapped[float | None] = mapped_column(Numeric(24, 2), comment="全市场成交额(元)")
+    amount_ma20: Mapped[float | None] = mapped_column(Numeric(24, 2))
+    amount_vs_ma20: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    market_turnover: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="Σ成交额/Σ流通市值 %")
+    turnover_ma5: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    volume_price_match: Mapped[float | None] = mapped_column(Numeric(6, 4), comment="0–1")
+    industry_heat_concentration: Mapped[float | None] = mapped_column(Numeric(6, 4), comment="前5行业成交额占比")
+    capital_efficiency: Mapped[float | None] = mapped_column(Numeric(12, 6), comment="单位成交额推动涨幅")
+
+    # ---- 全A广度 ----
+    up_count: Mapped[int | None] = mapped_column(Integer)
+    down_count: Mapped[int | None] = mapped_column(Integer)
+    flat_count: Mapped[int | None] = mapped_column(Integer)
+    total_count: Mapped[int | None] = mapped_column(Integer)
+    limit_up_cnt: Mapped[int | None] = mapped_column(Integer)
+    limit_down_cnt: Mapped[int | None] = mapped_column(Integer)
+    adv_dec_ratio: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    above_ma30_ratio: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    new_high_60_ratio: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    broken_net_ratio: Mapped[float | None] = mapped_column(Numeric(6, 4))
+
+    # ---- 估值与避险 ----
+    dividend_yield: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="流通市值加权股息率 %")
+    earnings_yield: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="流通市值加权盈利收益率 %")
+    cn_1y: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    cn_10y: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    erp: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="盈利收益率-10Y")
+    bond_equity_gap: Mapped[float | None] = mapped_column(Numeric(8, 4), comment="股息率-10Y")
+    term_spread: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    defensive_rel_momentum: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="防御篮子20日超额 %")
+    margin_buy_amount: Mapped[float | None] = mapped_column(Numeric(24, 2), comment="沪深融资买入额合计(元)")
+    margin_buy_ratio: Mapped[float | None] = mapped_column(Numeric(8, 6))
+
+    # ---- 波动 ----
+    rv20: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="20日年化波动 %")
+    rv60: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="60日年化波动 %")
+    natr14: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="ATR14/close %")
+    boll_bandwidth: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="(上轨-下轨)/中轨 %")
+    max_drawdown_3m: Mapped[float | None] = mapped_column(Numeric(10, 4), comment="近60日最大回撤 %")
+
+    data_quality: Mapped[str] = mapped_column(String(16), default="full")
+    src: Mapped[str] = mapped_column(String(16), default="engine")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MarketRegimeDaily(Base):
+    """市场状态机 + 配置建议日快照（V7 T1）。"""
+
+    __tablename__ = "market_regime_daily"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    regime_code: Mapped[str] = mapped_column(String(16))
+    regime_label: Mapped[str] = mapped_column(String(16))
+    regime_since: Mapped[date] = mapped_column(Date)
+    regime_days: Mapped[int] = mapped_column(Integer, default=1)
+    note: Mapped[str | None] = mapped_column(Text)
+    headline: Mapped[str | None] = mapped_column(String(120))
+
+    confidence_score: Mapped[int | None] = mapped_column(SmallInteger)
+    confidence_level: Mapped[str | None] = mapped_column(String(8))
+    optimism_score: Mapped[int | None] = mapped_column(SmallInteger)
+    optimism_level: Mapped[str | None] = mapped_column(String(8))
+
+    group_t: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    group_m: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    group_b: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    group_v: Mapped[float | None] = mapped_column(Numeric(6, 4), comment="V_q 0–1")
+    group_q: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    group_r: Mapped[float | None] = mapped_column(Numeric(6, 4))
+
+    factors: Mapped[dict[str, Any] | None] = mapped_column(JSONB, comment="因子 raw/pct/x/group")
+    allocation: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    evidence: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    completeness: Mapped[float | None] = mapped_column(Numeric(5, 4))
+    data_quality: Mapped[str] = mapped_column(String(16), default="full")
+    stale_fields: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    src: Mapped[str] = mapped_column(String(16), default="engine")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class DailyReport(Base):
     """AI 复盘日报（独立表，终止 sector_score.ai_summary hack）。"""
 
@@ -400,5 +537,6 @@ class DailyReport(Base):
 __all__ = [
     "FactStockDaily", "FactSectorDaily", "FactFeatureDaily", "FactStockScoreDaily",
     "FactMoneyflow", "MarketIndex", "MarginTrading", "SectorScore",
-    "MarketTemperatureDaily", "DailyReport",
+    "MarketTemperatureDaily", "MacroRate", "FactMarketDaily", "MarketRegimeDaily",
+    "DailyReport",
 ]

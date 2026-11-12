@@ -25,10 +25,11 @@ from app.core.errors import DataUnavailableError, InvalidParamError
 from app.core.logging import get_logger
 from app.db.models import (
     DailyReport, DimSectorMember, DimStock, FactSectorDaily, FactStockDaily, MarginTrading,
-    MarketIndex, MarketTemperatureDaily, SectorScore,
+    MarketIndex, MarketRegimeDaily, MarketTemperatureDaily, SectorScore,
 )
 from app.db.session import get_db
 from app.engine.index_perf import WINDOW_KEYS, window_returns
+from app.engine.market_temperature import weekly_summary
 from app.services.freshness import get_freshness_items
 
 router = APIRouter(prefix="/api/v1/market", tags=["行情"])
@@ -314,6 +315,157 @@ async def get_temperature(
         "count": len(series),
         "series": series,
     }
+
+
+@router.get("/overview")
+async def get_market_overview(
+    trade_date: Optional[date] = Query(None, description="交易日，默认最新有状态数据的交易日"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """市场状态 + 配置建议 + 一周温度计（V7 T1）。
+
+    - 有状态行：返回完整 regime / allocation / thermometer / evidence；
+    - 仅有温度行（数据积累中）：regime/allocation 为 null，thermometer 可用；
+    - 两者都没有：409 DATA_NOT_READY。
+    """
+    if trade_date is None:
+        resolved = (await db.execute(
+            select(func.max(MarketRegimeDaily.trade_date))
+        )).scalar()
+        if resolved is None:
+            resolved = (await db.execute(
+                select(func.max(MarketTemperatureDaily.trade_date))
+            )).scalar()
+        if resolved is None:
+            raise DataUnavailableError(
+                "还没有市场状态数据",
+                next_action="运行每日管线（market_factors / temperature / regime 步骤）或回补脚本",
+            )
+    else:
+        resolved = trade_date
+
+    regime_row = (await db.execute(
+        select(MarketRegimeDaily).where(MarketRegimeDaily.trade_date == resolved)
+    )).scalar_one_or_none()
+
+    temp_rows = (await db.execute(
+        select(MarketTemperatureDaily)
+        .where(MarketTemperatureDaily.trade_date <= resolved)
+        .order_by(MarketTemperatureDaily.trade_date.desc())
+        .limit(5)
+    )).scalars().all()
+    latest_temp_date = temp_rows[0].trade_date if temp_rows else None
+
+    if regime_row is None and latest_temp_date != resolved:
+        raise DataUnavailableError(
+            f"{resolved.isoformat()} 没有市场状态数据",
+            next_action="确认该日是否为交易日，或先运行回补脚本",
+            detail={"trade_date": resolved.isoformat()},
+        )
+
+    thermometer = weekly_summary([
+        {
+            "trade_date": row.trade_date.isoformat(),
+            "temp_score": _f(row.temp_score),
+        }
+        for row in reversed(temp_rows)
+    ])
+    current_temp_row = next(
+        (row for row in temp_rows if row.trade_date == resolved), None
+    )
+    thermometer["components"] = (
+        current_temp_row.components if current_temp_row else None
+    )
+    thermometer["confidence"] = (
+        current_temp_row.confidence if current_temp_row else "insufficient"
+    )
+    freshness = await get_freshness_items(
+        db, ["market_regime", "market_temperature", "market_factors", "macro_rates"]
+    )
+    caveats = [
+        "阈值经 2023-09 ~ 2026-11 历史校准，市场结构变化时仍需复核",
+        "状态描述的是当前与过去，不预测未来涨跌",
+        "配置建议是风险偏好参考，不构成投资建议",
+    ]
+
+    if regime_row is None:
+        return {
+            "meta": {
+                "trade_date": resolved.isoformat(),
+                "index_used": "沪深300",
+                "data_quality": "accumulating",
+                "stale_fields": [],
+                "is_historical": False,
+                "disclaimer": "以上为基于历史数据的状态描述与配置参考，不构成投资建议，不预测涨跌。",
+            },
+            "regime": None,
+            "allocation": None,
+            "thermometer": thermometer,
+            "evidence": [],
+            "caveats": caveats,
+            "freshness": freshness,
+        }
+
+    confidence_score = int(regime_row.confidence_score or 0)
+    optimism_score = int(regime_row.optimism_score or 0)
+    return {
+        "meta": {
+            "trade_date": regime_row.trade_date.isoformat(),
+            "index_used": "沪深300",
+            "data_quality": regime_row.data_quality,
+            "stale_fields": regime_row.stale_fields or [],
+            "is_historical": await _is_historical(regime_row.trade_date, db),
+            "disclaimer": "以上为基于历史数据的状态描述与配置参考，不构成投资建议，不预测涨跌。",
+        },
+        "regime": {
+            "code": regime_row.regime_code,
+            "label": regime_row.regime_label,
+            "headline": regime_row.headline,
+            "confidence": {
+                "score": confidence_score,
+                "level": regime_row.confidence_level,
+                "plain": _confidence_plain(regime_row.confidence_level),
+            },
+            "optimism": {
+                "score": optimism_score,
+                "level": regime_row.optimism_level,
+                "plain": _optimism_plain(regime_row.optimism_level),
+            },
+            "since": regime_row.regime_since.isoformat(),
+            "days": regime_row.regime_days,
+            "note": regime_row.note or "",
+        },
+        "allocation": regime_row.allocation or None,
+        "thermometer": thermometer,
+        "evidence": regime_row.evidence or [],
+        "caveats": caveats,
+        "freshness": freshness,
+    }
+
+
+def _confidence_plain(level: str | None) -> str:
+    if level == "高":
+        return "多组信号方向一致，状态较清晰"
+    if level == "中":
+        return "判断依据比较一致，但仍需观察"
+    return "判断依据分歧较大，建议以观察为主"
+
+
+def _optimism_plain(level: str | None) -> str:
+    return {
+        "谨慎": "多空力量偏空，不宜过度乐观",
+        "偏谨慎": "多头力量偏弱，宜控制节奏",
+        "中性": "多空力量接近，不宜过度乐观",
+        "偏乐观": "多头力量占优，可适度积极",
+        "乐观": "多头力量明显占优，仍需留意波动",
+    }.get(level or "", "多空力量接近，仍需观察")
+
+
+async def _is_historical(trade_date: date, db: AsyncSession) -> bool:
+    latest = (await db.execute(
+        select(func.max(MarketRegimeDaily.trade_date))
+    )).scalar()
+    return bool(latest and trade_date < latest)
 
 
 @router.get("/sector/{sector_code}")

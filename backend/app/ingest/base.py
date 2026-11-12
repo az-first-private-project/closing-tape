@@ -475,6 +475,18 @@ class Provider(Protocol):
         """两融余额 + 北向净流入（亿元；北向可能为空，属预期内）。"""
         ...
 
+    def fetch_bond_yields(self, start: date, end: date) -> FetchResult:
+        """中债国债收益率曲线（1Y/10Y，%）。"""
+        ...
+
+    def fetch_margin_buy_sse(self, start: date, end: date) -> FetchResult:
+        """上交所区间融资买入额（元）。"""
+        ...
+
+    def fetch_margin_buy_szse(self, trade_date: date) -> FetchResult:
+        """深交所单日融资买入额（元）。"""
+        ...
+
     # ---- A6 指数 ----
     def fetch_index_daily(self, trade_date: date, include_us: bool = False) -> FetchResult:
         """指数日线（A 股四指数 + 沪深300；可选美股）。"""
@@ -525,6 +537,15 @@ class BaseProvider:
 
     def fetch_margin(self, trade_date: date) -> FetchResult:
         self._unsupported("fetch_margin")
+
+    def fetch_bond_yields(self, start: date, end: date) -> FetchResult:
+        self._unsupported("fetch_bond_yields")
+
+    def fetch_margin_buy_sse(self, start: date, end: date) -> FetchResult:
+        self._unsupported("fetch_margin_buy_sse")
+
+    def fetch_margin_buy_szse(self, trade_date: date) -> FetchResult:
+        self._unsupported("fetch_margin_buy_szse")
 
     def fetch_index_daily(self, trade_date: date, include_us: bool = False) -> FetchResult:
         self._unsupported("fetch_index_daily")
@@ -730,6 +751,21 @@ class ProviderChain:
         self, trade_date: date, *, timeout: float | None = None
     ) -> FetchResult:
         return await self.call("fetch_margin", trade_date, timeout=timeout)
+
+    async def fetch_bond_yields(
+        self, start: date, end: date, *, timeout: float | None = None
+    ) -> FetchResult:
+        return await self.call("fetch_bond_yields", start, end, timeout=timeout)
+
+    async def fetch_margin_buy_sse(
+        self, start: date, end: date, *, timeout: float | None = None
+    ) -> FetchResult:
+        return await self.call("fetch_margin_buy_sse", start, end, timeout=timeout)
+
+    async def fetch_margin_buy_szse(
+        self, trade_date: date, *, timeout: float | None = None
+    ) -> FetchResult:
+        return await self.call("fetch_margin_buy_szse", trade_date, timeout=timeout)
 
     async def fetch_index_daily(
         self, trade_date: date, include_us: bool = False, *, timeout: float | None = None

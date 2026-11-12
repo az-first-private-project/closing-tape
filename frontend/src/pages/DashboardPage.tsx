@@ -29,7 +29,7 @@ import IndexCard, {
 import SectorHeatmap from '../components/SectorHeatmap'
 import ScoreRanking from '../components/ScoreRanking'
 import AIReport from '../components/AIReport'
-import MarketTemperature from '../components/MarketTemperature'
+import MarketOverview from '../components/MarketOverview'
 import FreshnessBadge from '../components/FreshnessBadge'
 import PageHeader from '../components/PageHeader'
 import SectionHeader from '../components/SectionHeader'
@@ -445,8 +445,8 @@ export default function DashboardPage() {
         />
       ) : (
         <>
-          {/* ========== 市场温度计 ========== */}
-          <MarketTemperature tradeDate={selectedDate || undefined} />
+          {/* ========== 市场状态与配置（V7 T1） ========== */}
+          <MarketOverview tradeDate={selectedDate || undefined} />
 
           {/* ========== 自选股快捷区 ========== */}
           {watchlist.length > 0 && (

@@ -67,83 +67,131 @@ SECTOR_INDUSTRY = "industry"
 SECTOR_CONCEPT = "concept"
 
 
-# ==================== 市场温度计（V6 T3）====================
-# 温度分 = 六个子项各自归一化到 0–100 后加权平均。
-# 归一化全部使用**固定的分段断点**（原始值 → 得分），不做逐日 min-max 缩放：
-# 温度分必须跨日可比，绝不能因为今天整体偏冷就把最冷的一天算成 0 分。
-# 断点依据：2021–2025 全市场日频分布的经验分位（上涨占比 30/50/70%、
-# 涨停 20/50/80 家、站上 MA20 40/50/60%、量能 0.8/1.0/1.3 倍、年化波动 15/20/25%）。
-TEMP_SCORE_MIN = 0.0
-TEMP_SCORE_MAX = 100.0
+# ==================== 市场状态与配置仪表盘（V7 T1）====================
+# 标准化窗口：750 个交易日（约 3 年），不足 250 日不输出状态。
+MARKET_PERCENTILE_WINDOW = 750
+MARKET_PERCENTILE_MIN_PERIODS = 250
 
-#: 子项权重（合计 1.0）。跌停家数与指数波动率是**降温项**：
-#: 其断点已把"数值越大"映射为"得分越低"（direction=-1），合成公式保持统一。
-TEMP_WEIGHTS: dict[str, float] = {
-    "up_ratio": 0.30,       # 市场宽度：最直接的赚钱效应
-    "limit_up": 0.15,       # 涨停家数：短线情绪强度
-    "limit_down": 0.10,     # 跌停家数（降温）
-    "above_ma20": 0.20,     # 站上 MA20 比例：中期趋势结构
-    "amount_ratio": 0.15,   # 量能比：资金参与度
-    "index_vol": 0.10,      # 指数年化波动（降温）
+#: 五态枚举与中文标签
+REGIME_CODES = ("trend_up", "repair_up", "bottoming", "pull_down", "risk_off")
+REGIME_LABELS: dict[str, str] = {
+    "trend_up": "趋势上攻",
+    "repair_up": "震荡（向上修复）",
+    "bottoming": "震荡筑底",
+    "pull_down": "震荡（向下调整）",
+    "risk_off": "避险下跌",
 }
 
-#: 子项顺序（API/前端展示顺序，与权重字典解耦保证稳定）
-TEMP_COMPONENT_ORDER = (
-    "up_ratio", "limit_up", "limit_down",
-    "above_ma20", "amount_ratio", "index_vol",
+#: 防御行业篮子（`dim_stock.industry_l1` 现有名称）
+DEFENSIVE_INDUSTRIES = (
+    "银行", "电力", "煤炭", "公路铁路运输", "贵金属", "保险",
+    "白酒", "食品加工制造",
 )
 
-#: 子项展示元信息
-TEMP_COMPONENT_META: dict[str, dict[str, str]] = {
-    "up_ratio": {"label": "上涨占比", "unit": "%"},
+#: 配置建议的动态补充白名单（THS 行业名）
+SECTOR_WHITELIST: dict[str, tuple[str, ...]] = {
+    "defensive": DEFENSIVE_INDUSTRIES + ("公用事业", "铁路公路"),
+    "offensive": (
+        "半导体", "软件开发", "IT服务", "通信设备", "电池", "光伏设备",
+        "证券", "军工电子", "消费电子",
+    ),
+    "balanced": (
+        "白色家电", "化学制药", "中药", "医疗器械", "工业金属",
+        "汽车零部件", "食品加工制造", "银行",
+    ),
+}
+
+#: 配置建议的固定类型模板
+SECTOR_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "defensive": ("红利低波", "银行", "公用事业"),
+    "offensive": ("科技成长", "半导体", "券商"),
+    "balanced": ("宽基指数", "中盘质量", "医药"),
+}
+
+SECTOR_ROLE_LABELS: dict[str, str] = {
+    "defensive": "防御",
+    "offensive": "进攻",
+    "balanced": "均衡",
+}
+SECTOR_ROLE_DESC: dict[str, str] = {
+    "defensive": "降低组合波动",
+    "offensive": "保留向上弹性",
+    "balanced": "承接主体仓位",
+}
+
+#: 状态 → 三档基准区间（百分比，下限/上限）
+REGIME_ALLOCATION_RANGES: dict[str, dict[str, tuple[float, float]]] = {
+    "trend_up": {"defensive": (10, 20), "offensive": (55, 70), "balanced": (20, 30)},
+    "repair_up": {"defensive": (25, 35), "offensive": (30, 40), "balanced": (30, 40)},
+    "bottoming": {"defensive": (30, 40), "offensive": (15, 25), "balanced": (40, 50)},
+    "pull_down": {"defensive": (45, 60), "offensive": (10, 20), "balanced": (25, 35)},
+    "risk_off": {"defensive": (65, 80), "offensive": (0, 10), "balanced": (15, 25)},
+}
+
+#: 状态机迟滞参数
+REGIME_CONFIRM_DAYS = 3
+REGIME_MIN_RESIDENCE_DAYS = 5
+REGIME_EXIT_RELAX = 0.8
+
+#: 状态判定阈值（初始值来自提示词；2026-11 用 2023-09 ~ 2026-11 历史校准）
+REGIME_THRESHOLDS: dict[str, float] = {
+    "risk_off_r": -0.50,
+    "risk_off_v": 0.70,
+    "risk_off_m": -0.20,
+    "risk_off_t": -0.50,
+    "risk_off_dd": 0.80,
+    "risk_off_alt_v": 0.60,
+    "risk_off_alt_m": -0.30,
+    "trend_t": 0.33,
+    "trend_m": 0.15,
+    "trend_b": 0.40,
+    "trend_q": 0.20,
+    "bottom_t_abs": 0.45,
+    "bottom_v": 0.80,
+    "bottom_q1": 0.45,
+    "bottom_confirm": 2,
+    "bottom_pull_m": -0.30,
+    "repair_t_abs": 0.33,
+    "repair_m": 0.15,
+    "pull_t_abs": 0.33,
+    "pull_m": -0.15,
+    "pull_q5": 0.20,
+    "pull_q4": 0.70,
+}
+
+#: 温度计（V7 新口径，7 子项）
+TEMP7_WEIGHTS: dict[str, float] = {
+    "turnover": 0.20,
+    "amount": 0.20,
+    "limit_up": 0.15,
+    "margin_buy": 0.15,
+    "new_high_60": 0.10,
+    "rsi14_norm": 0.10,
+    "rv20_inv": 0.10,
+}
+TEMP7_COMPONENT_ORDER = tuple(TEMP7_WEIGHTS)
+TEMP7_COMPONENT_META: dict[str, dict[str, str]] = {
+    "turnover": {"label": "换手率", "unit": "%"},
+    "amount": {"label": "成交额", "unit": "元"},
     "limit_up": {"label": "涨停家数", "unit": "家"},
-    "limit_down": {"label": "跌停家数", "unit": "家"},
-    "above_ma20": {"label": "站上 MA20", "unit": "%"},
-    "amount_ratio": {"label": "量能比", "unit": "倍"},
-    "index_vol": {"label": "指数波动率", "unit": "%"},
+    "margin_buy": {"label": "融资买入占比", "unit": "%"},
+    "new_high_60": {"label": "60日新高占比", "unit": "%"},
+    "rsi14_norm": {"label": "指数 RSI", "unit": ""},
+    "rv20_inv": {"label": "波动稳定度", "unit": "%"},
 }
+TEMP7_CRITICAL_COMPONENTS = ("turnover", "amount")
+TEMP7_MIN_COMPONENTS = 5
 
-#: 归一化断点：((原始值, 得分), ...)，必须按原始值单调、得分单调不减（降温项单调不增）。
-#: 超出两端按端点截断，不外推 —— 极端值不应把温度分推到负值或 100 以上。
-TEMP_BREAKPOINTS: dict[str, tuple[tuple[float, float], ...]] = {
-    # 上涨占比 50%→50 分、70%→80 分、30%→20 分（任务书示例）
-    "up_ratio": ((0.0, 0.0), (0.30, 20.0), (0.50, 50.0), (0.70, 80.0), (1.0, 100.0)),
-    # 涨停家数：A 股常态 30–80 家，200 家以上视为极热
-    "limit_up": ((0, 5.0), (20, 25.0), (50, 50.0), (80, 70.0), (120, 85.0), (200, 100.0)),
-    # 跌停家数（降温项）：0 家不扣分，100 家以上视为极冷
-    "limit_down": ((0, 100.0), (5, 90.0), (15, 70.0), (30, 45.0), (60, 15.0), (100, 0.0)),
-    # 站上 MA20 比例：50% 为多空分界
-    "above_ma20": ((0.0, 0.0), (0.20, 10.0), (0.40, 40.0), (0.50, 50.0),
-                   (0.60, 65.0), (0.80, 90.0), (1.0, 100.0)),
-    # 量能比 = 当日全市场成交额 / 前 20 个交易日均值
-    "amount_ratio": ((0.5, 0.0), (0.8, 25.0), (1.0, 50.0),
-                     (1.3, 75.0), (1.6, 90.0), (2.0, 100.0)),
-    # 沪深300 20 日年化波动率（%）：10% 极稳，50% 以上极冷
-    "index_vol": ((10.0, 100.0), (15.0, 85.0), (20.0, 65.0),
-                  (25.0, 45.0), (35.0, 20.0), (50.0, 0.0)),
-}
+#: 五档温度（上限不含；80–100 含 100）
+TEMP_BANDS = (
+    (19.999, "冰点", 1),
+    (39.999, "清冷", 2),
+    (59.999, "平稳", 3),
+    (79.999, "温热", 4),
+    (100.0, "沸腾", 5),
+)
 
-#: 降温项（direction=-1 仅用于前端标注"降温项"，得分已由断点反转）
-TEMP_COOLING_COMPONENTS = ("limit_down", "index_vol")
-
-#: 关键子项：缺失时温度分不可信 → confidence=insufficient、总分 null。
-#: 宽度（上涨占比）是温度的基础；站上 MA20 是中期结构锚，特征覆盖率 < 阈值即视为缺失。
-TEMP_CRITICAL_COMPONENTS = ("up_ratio", "above_ma20")
-
-#: 至少有多少个可用子项才给总分；不足 → insufficient（禁止用 0 代入缺失项）
-TEMP_MIN_COMPONENTS = 4
-
-#: MA20 特征覆盖率门槛（与策略侧 `_assert_data_ready` 的 0.5 保持一致）
-TEMP_MIN_FEATURE_COVERAGE = 0.5
-
-#: 量能比窗口：前 N 个交易日全市场成交额均值；至少 N_MIN 天才计算
-TEMP_AMOUNT_MA_DAYS = 20
-TEMP_AMOUNT_MIN_DAYS = 10
-#: 取 21 个交易日所需的自然日回看（含春节长假冗余）
-TEMP_AMOUNT_LOOKBACK_DAYS = 60
-
-#: 指数波动率窗口（交易日）
-TEMP_INDEX_VOL_DAYS = 20
+SUMMARY_MIN_DAYS = 5
 
 
 # ==================== 函数 ====================

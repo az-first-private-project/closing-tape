@@ -278,53 +278,101 @@ export interface TemperatureComponents {
 
 export type TemperatureConfidence = 'ok' | 'partial' | 'insufficient'
 
-/** GET /api/v1/market/temperature?days=1 */
-export interface MarketTemperature {
+// ============================================================
+// 市场状态与配置仪表盘（V7 T1 / GET /market/overview）
+// ============================================================
+
+export type RegimeCode =
+  | 'trend_up'
+  | 'repair_up'
+  | 'bottoming'
+  | 'pull_down'
+  | 'risk_off'
+
+export interface MarketOverviewMeta {
   trade_date: string
-  up_count: number | null
-  down_count: number | null
-  flat_count: number | null
-  total_count: number | null
-  limit_up_count: number | null
-  limit_down_count: number | null
-  median_pct: number | null
-  /** 0–1 小数 */
-  above_ma20_ratio: number | null
-  /** 元 */
-  amount: number | null
-  /** 倍数 */
-  amount_vs_ma20: number | null
-  /** 百分数 */
-  index_vol_annual: number | null
-  temp_score: number | null
-  confidence: TemperatureConfidence
-  components: TemperatureComponents
-  src: string | null
-  updated_at: string | null
+  index_used: string
+  data_quality: 'full' | 'partial' | 'accumulating'
+  stale_fields: string[]
+  is_historical: boolean
+  disclaimer: string
+}
+
+export interface RegimeScore {
+  score: number
+  level: string
+  plain: string
+}
+
+export interface MarketRegimeBlock {
+  code: RegimeCode
+  label: string
+  headline: string
+  confidence: RegimeScore
+  optimism: RegimeScore
+  since: string
+  days: number
+  note: string
+}
+
+export type AllocationKey = 'defensive' | 'offensive' | 'balanced'
+
+export interface AllocationBucket {
+  key: AllocationKey
+  label: string
+  pct: number
+  sectors: string[]
+  role: string
+  reason: string
+}
+
+export interface MarketAllocation {
+  total: number
+  buckets: AllocationBucket[]
+  vs_yesterday: Partial<Record<AllocationKey, number>>
+  rebalance_note: string
+  confidence_caveat: string
+}
+
+export interface ThermometerPoint {
+  date: string
+  temp: number
+  label: string
+  /** 1–5 档 */
+  score: number
+}
+
+export interface MarketThermometer {
+  current_temp: number | null
+  current_label: string
+  current_score: number | null
+  series: ThermometerPoint[]
+  week_avg: number | null
+  week_max: number | null
+  week_min: number | null
+  week_slope: number | null
+  week_trend: string
+  emotion_conclusion: string
+  extreme_note: string
+  components?: TemperatureComponents | null
+  confidence?: TemperatureConfidence
+}
+
+export interface MarketEvidence {
+  code: string
+  name: string
+  value: string
+  percentile: number | null
+  direction: string
+  plain: string
+}
+
+export interface MarketOverview {
+  meta: MarketOverviewMeta
+  regime: MarketRegimeBlock | null
+  allocation: MarketAllocation | null
+  thermometer: MarketThermometer
+  evidence: MarketEvidence[]
+  caveats: string[]
   freshness: Freshness[]
-}
-
-/** 温度序列中的单个交易日（days>1） */
-export interface TemperatureSeriesPoint {
-  trade_date: string
-  temp_score: number | null
-  confidence: TemperatureConfidence
-  above_ma20_ratio: number | null
-  amount_vs_ma20: number | null
-  index_vol_annual: number | null
-  up_count: number | null
-  down_count: number | null
-  flat_count: number | null
-  total_count: number | null
-  limit_up_count: number | null
-  limit_down_count: number | null
-  median_pct: number | null
-  amount: number | null
-}
-
-/** GET /api/v1/market/temperature?days>1 */
-export interface TemperatureSeries {
-  trade_date: string
-  count: number
-  series: TemperatureSeriesPoint[]
 }

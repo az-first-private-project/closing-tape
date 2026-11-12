@@ -28,7 +28,8 @@ logger = get_logger(__name__)
 DEFAULT_DAILY_STEPS = (
     "calendar", "universe", "index", "sector", "sector_members", "snapshot",
     "moneyflow", "sector_agg", "margin", "valuation", "features", "scores",
-    "sector_scores", "temperature", "report", "algos", "signal_perf",
+    "sector_scores", "macro_rates", "market_factors", "temperature", "regime",
+    "report", "algos", "signal_perf",
 )
 
 # 支持 codes 定向执行的 task：这些任务的 rows 只是局部代码，不能代表数据集全量状态。
@@ -61,7 +62,10 @@ TASK_DATASET = {
     "features": "stock_features",
     "scores": "stock_scores",
     "sector_scores": "sector_scores",
+    "macro_rates": "macro_rates",
+    "market_factors": "market_factors",
     "temperature": "market_temperature",
+    "regime": "market_regime",
     "report": "daily_report",
     "algos": "algo_run",
     "signal_perf": "signal_perf",
@@ -433,10 +437,24 @@ async def _dispatch(
         rows = await score_all_sectors(resolved, db=db)
         return {"rows": await save_sector_scores(resolved, rows, db=db)}
 
+    if task == "macro_rates":
+        from app.ingest.service import collect_macro_rates
+        return await collect_macro_rates(resolved, db)
+
+    if task == "market_factors":
+        # 依赖当日行情、板块与两融/国债；必须排在 temperature/regime 之前
+        from app.engine.market_factors import compute_and_save_market_factors
+        return await compute_and_save_market_factors(resolved, db=db)
+
     if task == "temperature":
         # 依赖当日 features（MA20）与日线，必须排在 features/scores 之后
         from app.engine.market_temperature import compute_and_save_temperature
         return await compute_and_save_temperature(resolved, db=db)
+
+    if task == "regime":
+        # 依赖 fact_market_daily 与 temperature 的同日数据
+        from app.engine.market_regime import compute_and_save_regime
+        return await compute_and_save_regime(resolved, db=db)
 
     if task == "report":
         from app.services.report_generator import generate_report

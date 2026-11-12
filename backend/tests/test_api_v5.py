@@ -159,6 +159,37 @@ def test_dashboard_has_scores(client):
         assert "structured" in body["report"], "日报应带结构化结论字段（历史行可为 null）"
 
 
+def test_market_overview_contract(client):
+    """V7 T1：三块内容的结构、状态枚举与配置合计 100%。"""
+    resp = client.get("/api/v1/market/overview")
+    if resp.status_code == 409:
+        pytest.skip("测试库尚未生成 market_regime_daily")
+    assert resp.status_code == 200
+    body = resp.json()
+    for key in ("meta", "regime", "allocation", "thermometer", "evidence", "caveats", "freshness"):
+        assert key in body
+    assert body["meta"]["index_used"]
+    assert body["meta"]["disclaimer"]
+
+    thermometer = body["thermometer"]
+    assert "emotion_conclusion" in thermometer
+    assert "week_trend" in thermometer
+    assert isinstance(thermometer["series"], list)
+    assert len(thermometer["series"]) <= 5
+
+    if body["regime"] is not None:
+        assert body["regime"]["code"] in {
+            "trend_up", "repair_up", "bottoming", "pull_down", "risk_off",
+        }
+        assert 0 <= body["regime"]["confidence"]["score"] <= 100
+        assert 0 <= body["regime"]["optimism"]["score"] <= 100
+        buckets = body["allocation"]["buckets"]
+        assert sum(item["pct"] for item in buckets) == 100
+        assert all(item["pct"] % 5 == 0 for item in buckets)
+        assert all(len(item["sectors"]) >= 2 for item in buckets)
+        assert len(body["evidence"]) == 5
+
+
 def test_sector_detail(client):
     sectors = client.get("/api/v1/market/dashboard").json()["sectors"]
     code = sectors[0]["sector_code"]

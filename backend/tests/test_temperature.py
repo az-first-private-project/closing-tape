@@ -1,20 +1,9 @@
-"""
-市场温度计单测（V6 T3）
-========================
-不依赖数据库/网络：只测纯函数与 SQL 语句构造。
-
-覆盖：
-  - 分段归一化：任务书示例断点（30%→20、50%→50、70%→80）、端点截断、降温项单调递减；
-  - 六个子项权重合计 1.0、断点按原始值单调；
-  - 合成规则：缺关键子项 → insufficient + null；缺非关键子项 → partial 且权重重归一
-    （**不能给缺项补 0**）；可用子项不足 → insufficient；
-  - 市场宽度抽公共模块后输出字段不变；温度计口径可按需剔除停牌。
-"""
+"""市场温度计测试（V7 T1 新口径）"""
 from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,163 +12,179 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-pytest.importorskip("numpy", reason="numpy 未安装，跳过温度计测试")
-pytest.importorskip("sqlalchemy", reason="sqlalchemy 未安装，跳过温度计测试")
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
-from app.core.constants import (  # noqa: E402
-    TEMP_BREAKPOINTS,
-    TEMP_COMPONENT_META,
-    TEMP_COMPONENT_ORDER,
-    TEMP_COOLING_COMPONENTS,
-    TEMP_WEIGHTS,
-)
 from app.engine import report_input  # noqa: E402
 from app.engine.breadth import load_breadth  # noqa: E402
 from app.engine.market_temperature import (  # noqa: E402
     combine_components,
-    piecewise_normalize,
+    compute_temperature_frame,
+    temperature_band,
+    weekly_summary,
 )
 
 
 # ============================================================
-# 分段归一化
+# 档位与合成
 # ============================================================
 
-def test_up_ratio_breakpoints_match_taskbook():
-    """任务书示例：50%→50 分、70%→80 分、30%→20 分。"""
-    breakpoints = TEMP_BREAKPOINTS["up_ratio"]
-    assert piecewise_normalize(0.30, breakpoints) == pytest.approx(20.0)
-    assert piecewise_normalize(0.50, breakpoints) == pytest.approx(50.0)
-    assert piecewise_normalize(0.70, breakpoints) == pytest.approx(80.0)
+@pytest.mark.parametrize("score,label,rank", [
+    (0, "冰点", 1), (19, "冰点", 1),
+    (20, "清冷", 2), (39, "清冷", 2),
+    (40, "平稳", 3), (59, "平稳", 3),
+    (60, "温热", 4), (79, "温热", 4),
+    (80, "沸腾", 5), (100, "沸腾", 5),
+])
+def test_temperature_band(score, label, rank) -> None:
+    assert temperature_band(score) == (label, rank)
 
 
-def test_piecewise_interpolates_and_clamps():
-    breakpoints = TEMP_BREAKPOINTS["up_ratio"]
-    # 0.5→50、0.7→80 的中点应为 65（线性、单调）
-    assert piecewise_normalize(0.60, breakpoints) == pytest.approx(65.0)
-    # 超出两端取端点，不外推
-    assert piecewise_normalize(-0.5, breakpoints) == pytest.approx(0.0)
-    assert piecewise_normalize(1.5, breakpoints) == pytest.approx(100.0)
-    # 缺数据不得代入 0
-    assert piecewise_normalize(None, breakpoints) is None
-    assert piecewise_normalize(float("nan"), breakpoints) is None
+def test_temperature_band_missing() -> None:
+    assert temperature_band(None) is None
+    assert temperature_band(float("nan")) is None
 
 
-def test_cooling_components_are_monotonic_decreasing():
-    """跌停家数 / 指数波动率越高 → 得分越低（降温项）。"""
-    for key in TEMP_COOLING_COMPONENTS:
-        breakpoints = TEMP_BREAKPOINTS[key]
-        scores = [piecewise_normalize(raw, breakpoints) for raw, _ in breakpoints]
-        assert scores == sorted(scores, reverse=True), key
-        assert scores[0] == pytest.approx(breakpoints[0][1])
-        assert scores[-1] == pytest.approx(breakpoints[-1][1])
+ALL_ITEMS = [
+    {"key": key, "score": 60.0, "weight": weight, "available": True}
+    for key, weight in (
+        ("turnover", 0.20), ("amount", 0.20), ("limit_up", 0.15),
+        ("margin_buy", 0.15), ("new_high_60", 0.10),
+        ("rsi14_norm", 0.10), ("rv20_inv", 0.10),
+    )
+]
 
 
-def test_all_components_normalize_inside_0_100_and_monotonic():
-    for key in TEMP_COMPONENT_ORDER:
-        breakpoints = TEMP_BREAKPOINTS[key]
-        raw_values = [raw for raw, _ in breakpoints]
-        # 在断点之间取样，验证单调性与范围
-        samples: list[float] = []
-        for x0, x1 in zip(raw_values, raw_values[1:]):
-            samples.extend([x0, x0 + (x1 - x0) / 2, x1])
-        scores = [piecewise_normalize(value, breakpoints) for value in samples]
-        assert all(score is not None and 0.0 <= score <= 100.0 for score in scores), key
-        if key in TEMP_COOLING_COMPONENTS:
-            assert all(a >= b for a, b in zip(scores, scores[1:])), key
-        else:
-            assert all(a <= b for a, b in zip(scores, scores[1:])), key
-
-
-def test_weights_and_metadata_are_complete():
-    assert set(TEMP_WEIGHTS) == set(TEMP_COMPONENT_ORDER)
-    assert sum(TEMP_WEIGHTS.values()) == pytest.approx(1.0)
-    assert set(TEMP_BREAKPOINTS) == set(TEMP_COMPONENT_ORDER)
-    assert set(TEMP_COMPONENT_META) == set(TEMP_COMPONENT_ORDER)
-    for key, breakpoints in TEMP_BREAKPOINTS.items():
-        assert len(breakpoints) >= 2
-        raw_values = [raw for raw, _ in breakpoints]
-        assert raw_values == sorted(raw_values), key
-
-
-# ============================================================
-# 合成规则
-# ============================================================
-
-ALL_SCORES = {
-    "up_ratio": 80.0,
-    "limit_up": 60.0,
-    "limit_down": 40.0,
-    "above_ma20": 50.0,
-    "amount_ratio": 30.0,
-    "index_vol": 20.0,
-}
-
-
-def _items(scores: dict[str, float | None]) -> list[dict]:
-    return [
-        {
-            "key": key,
-            "score": scores.get(key),
-            "weight": TEMP_WEIGHTS[key],
-            "available": scores.get(key) is not None,
-        }
-        for key in TEMP_COMPONENT_ORDER
-    ]
-
-
-def test_combine_all_available_is_ok():
-    score, confidence, available, critical_missing = combine_components(_items(ALL_SCORES))
-    # 0.30*80 + 0.15*60 + 0.10*40 + 0.20*50 + 0.15*30 + 0.10*20 = 53.5
-    assert score == pytest.approx(53.5)
+def test_combine_all_available() -> None:
+    score, confidence, available = combine_components(ALL_ITEMS)
+    assert score == 60
     assert confidence == "ok"
-    assert available == 6
-    assert critical_missing == []
+    assert available == 7
 
 
-def test_combine_missing_noncritical_is_partial_without_zero_fill():
-    scores = dict(ALL_SCORES)
-    scores["amount_ratio"] = None
-    score, confidence, available, critical_missing = combine_components(_items(scores))
-    # 缺项权重重归一：49.0 / 0.85 ≈ 57.6，而不是把 amount_ratio 当 0 → 49.0
-    assert score == pytest.approx(57.6)
+def test_combine_missing_noncritical_renormalizes() -> None:
+    items = [dict(item) for item in ALL_ITEMS]
+    items[3] = {**items[3], "score": None, "available": False}  # margin_buy
+    items[0] = {**items[0], "score": 100.0}
+    items[1] = {**items[1], "score": 0.0}
+    score, confidence, available = combine_components(items)
     assert confidence == "partial"
-    assert available == 5
-    assert critical_missing == []
+    assert available == 6
+    assert score is not None and 0 <= score <= 100
 
 
-def test_combine_missing_above_ma20_is_insufficient():
-    scores = dict(ALL_SCORES)
-    scores["above_ma20"] = None
-    score, confidence, available, critical_missing = combine_components(_items(scores))
+def test_combine_missing_critical_is_insufficient() -> None:
+    for key in ("turnover", "amount"):
+        items = [dict(item) for item in ALL_ITEMS]
+        index = [item["key"] for item in items].index(key)
+        items[index] = {**items[index], "score": None, "available": False}
+        score, confidence, _ = combine_components(items)
+        assert score is None
+        assert confidence == "insufficient"
+
+
+def test_combine_too_few_is_insufficient() -> None:
+    items = [dict(item) for item in ALL_ITEMS]
+    for index in (2, 3, 4):
+        items[index] = {**items[index], "score": None, "available": False}
+    score, confidence, available = combine_components(items)
     assert score is None
     assert confidence == "insufficient"
-    assert available == 5
-    assert critical_missing == ["above_ma20"]
-
-
-def test_combine_missing_up_ratio_is_insufficient():
-    scores = dict(ALL_SCORES)
-    scores["up_ratio"] = None
-    score, confidence, _, critical_missing = combine_components(_items(scores))
-    assert score is None
-    assert confidence == "insufficient"
-    assert critical_missing == ["up_ratio"]
-
-
-def test_combine_too_few_components_is_insufficient():
-    scores = dict(ALL_SCORES)
-    scores["limit_up"] = None
-    scores["amount_ratio"] = None
-    scores["index_vol"] = None
-    score, confidence, available, _ = combine_components(_items(scores))
-    assert score is None
-    assert confidence == "insufficient"
-    assert available == 3
+    assert available == 4
 
 
 # ============================================================
-# 市场宽度（公共模块）
+# 全历史计算
+# ============================================================
+
+def _raw_frame(n: int = 320) -> pd.DataFrame:
+    return pd.DataFrame({
+        "trade_date": [date(2023, 1, 1) + timedelta(days=i) for i in range(n)],
+        "market_turnover": np.linspace(1.0, 2.0, n),
+        "amount": np.linspace(8e11, 1.6e12, n),
+        "limit_up_cnt": np.linspace(20, 80, n),
+        "margin_buy_ratio": np.linspace(0.05, 0.12, n),
+        "new_high_60_ratio": np.linspace(0.01, 0.1, n),
+        "rsi14": np.linspace(30, 70, n),
+        "rv20": np.linspace(30, 15, n),
+        "up_count": [2500] * n,
+        "down_count": [2500] * n,
+        "flat_count": [100] * n,
+        "total_count": [5100] * n,
+        "limit_down_cnt": [10] * n,
+        "amount_vs_ma20": [1.0] * n,
+    })
+
+
+def test_compute_temperature_frame_outputs_score() -> None:
+    frame = compute_temperature_frame(_raw_frame())
+    assert len(frame) == 320
+    assert frame.iloc[:249]["temp_score"].isna().all()
+    last = frame.iloc[-1]
+    assert last["temp_score"] is not None
+    assert 0 <= last["temp_score"] <= 100
+    assert last["confidence"] == "ok"
+    assert len(last["components"]["items"]) == 7
+
+
+def test_compute_temperature_frame_partial_and_insufficient() -> None:
+    raw = _raw_frame()
+    raw["margin_buy_ratio"] = np.nan
+    frame = compute_temperature_frame(raw)
+    assert frame.iloc[-1]["confidence"] == "partial"
+    assert frame.iloc[-1]["temp_score"] is not None
+
+    raw["amount"] = np.nan
+    frame = compute_temperature_frame(raw)
+    assert frame.iloc[-1]["confidence"] == "insufficient"
+    assert frame.iloc[-1]["temp_score"] is None
+
+
+# ============================================================
+# 一周统计
+# ============================================================
+
+def test_weekly_summary_rising() -> None:
+    series = [
+        {"trade_date": f"2026-11-0{i + 1}", "temp_score": temp}
+        for i, temp in enumerate([30, 35, 45, 55, 65])
+    ]
+    summary = weekly_summary(series)
+    assert summary["current_temp"] == 65
+    assert summary["current_label"] == "温热"
+    assert summary["week_avg"] == 46
+    assert summary["week_slope"] > 1.5
+    assert summary["week_trend"] == "升温"
+    assert "转暖" in summary["emotion_conclusion"] or "回暖" in summary["emotion_conclusion"]
+    assert len(summary["series"]) == 5
+
+
+def test_weekly_summary_cooling_and_extreme() -> None:
+    series = [
+        {"trade_date": f"2026-11-0{i + 1}", "temp_score": temp}
+        for i, temp in enumerate([85, 82, 80, 78, 76])
+    ]
+    summary = weekly_summary(series)
+    assert summary["week_slope"] < -1.5
+    assert summary["week_trend"] == "降温"
+    assert summary["current_label"] == "温热"
+    assert summary["extreme_note"] == ""
+    assert summary["series"][0]["label"] == "沸腾"
+
+    summary = weekly_summary([{"trade_date": "2026-11-06", "temp_score": 88}])
+    assert summary["current_label"] == "沸腾"
+    assert "追高" in summary["extreme_note"]
+
+
+def test_weekly_summary_empty() -> None:
+    summary = weekly_summary([])
+    assert summary["current_temp"] is None
+    assert summary["week_trend"] == "数据不足"
+    assert "数据积累" in summary["emotion_conclusion"]
+
+
+# ============================================================
+# 市场宽度（保留原测试，公共模块仍有消费者）
 # ============================================================
 
 class _FakeResult:
@@ -200,7 +205,7 @@ class _FakeSession:
         return _FakeResult(self.rows)
 
 
-def test_load_breadth_keeps_output_shape():
+def test_load_breadth_keeps_output_shape() -> None:
     session = _FakeSession([
         (2.0, True, False),
         (-1.0, False, False),
@@ -220,7 +225,7 @@ def test_load_breadth_keeps_output_shape():
     }
 
 
-def test_load_breadth_excludes_suspended_only_when_asked():
+def test_load_breadth_excludes_suspended_only_when_asked() -> None:
     session_default = _FakeSession([])
     asyncio.run(load_breadth(session_default, date(2026, 1, 5)))
     assert "is_suspended" not in str(session_default.statements[0])
@@ -230,7 +235,6 @@ def test_load_breadth_excludes_suspended_only_when_asked():
     assert "is_suspended" in str(session_temperature.statements[0])
 
 
-def test_report_input_uses_shared_breadth_module():
-    """搬移后日报侧不再保留第二份实现。"""
+def test_report_input_uses_shared_breadth_module() -> None:
     assert not hasattr(report_input, "_load_breadth")
     assert report_input.load_breadth is load_breadth

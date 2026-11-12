@@ -43,7 +43,8 @@ RANGE_STEPS = ("history_fast", "valuation_fast", "moneyflow_history")
 # 放在末尾既补齐漏跑日的数据行，又可供下一交易日的评分使用。
 DAY_STEPS = (
     "index", "sector", "sector_agg", "valuation", "features", "scores",
-    "sector_scores", "temperature", "report", "algos", "margin",
+    "macro_rates", "market_factors", "sector_scores", "temperature", "regime",
+    "report", "algos", "margin",
 )
 # 全市场单日行数下限（约 5000+ 只；低于此值视为残缺日）
 _MIN_DAILY_ROWS = 3000
@@ -209,8 +210,8 @@ async def _execute_catch_up(
             summary = await run_daily_pipeline(day, db, steps=(
                 "calendar", "universe", "index", "sector", "sector_members",
                 "snapshot", "moneyflow", "sector_agg", "margin", "valuation",
-                "features", "scores", "sector_scores", "temperature", "report",
-                "algos",
+                "features", "scores", "sector_scores", "macro_rates",
+                "market_factors", "temperature", "regime", "report", "algos",
             ))
             failed = [
                 key for key, value in summary["steps"].items()

@@ -8,9 +8,9 @@ from app.db.models.dim import (
     DimSectorMember, DimStock, DimStockDividend, DimStockFinancial,
 )
 from app.db.models.fact import (
-    DailyReport, FactFeatureDaily, FactMoneyflow, FactSectorDaily, FactStockDaily,
-    FactStockScoreDaily, MarginTrading, MarketIndex, MarketTemperatureDaily,
-    SectorScore,
+    DailyReport, FactFeatureDaily, FactMarketDaily, FactMoneyflow, FactSectorDaily,
+    FactStockDaily, FactStockScoreDaily, MacroRate, MarginTrading, MarketIndex,
+    MarketRegimeDaily, MarketTemperatureDaily, SectorScore,
 )
 from app.db.models.meta import AlgoMeta, IngestJob, MetaDataQuality, TradeCalendar
 from app.db.models.news import CrawlLog, NewsArticle, NewsSource
@@ -28,7 +28,8 @@ __all__ = [
     # 事实
     "FactStockDaily", "FactSectorDaily", "FactFeatureDaily", "FactStockScoreDaily",
     "FactMoneyflow", "MarketIndex", "MarginTrading", "SectorScore",
-    "MarketTemperatureDaily", "DailyReport",
+    "MarketTemperatureDaily", "MacroRate", "FactMarketDaily", "MarketRegimeDaily",
+    "DailyReport",
     # 元数据
     "TradeCalendar", "MetaDataQuality", "IngestJob", "AlgoMeta",
     # 策略

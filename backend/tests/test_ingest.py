@@ -32,8 +32,11 @@ from app.ingest.akshare_provider import (  # noqa: E402
     _margin_effective_date,
     _margin_map_sse,
     _margin_map_szse,
+    _normalize_bond_yields,
     _normalize_calendar,
     _normalize_index,
+    _normalize_margin_buy_sse,
+    _normalize_margin_buy_szse,
     _normalize_moneyflow,
     _normalize_sector_list,
     _normalize_sector_members,
@@ -382,21 +385,62 @@ def test_quality_daily_frame_ok() -> None:
 # ============================================================
 def test_margin_sse_yuan_to_yi() -> None:
     frame = pd.DataFrame(
-        [{"信用交易日期": "2026-10-20", "融资余额": 1.0e10, "融券余量金额": 5.0e8}]
+        [{"信用交易日期": "2026-10-20", "融资余额": 1.0e10, "融券余量金额": 5.0e8,
+          "融资买入额": 6.0e10}]
     )
     result = _margin_map_sse(frame)
     item = result[date(2026, 10, 20)]
     assert item["margin_balance"] == pytest.approx(100.0)  # 1e10 元 = 100 亿
     assert item["short_balance"] == pytest.approx(5.0)
+    assert item["margin_buy"] == pytest.approx(6.0e10)  # 元，不再换算
 
 
 def test_margin_szse_already_yi_and_uses_default_date() -> None:
     """深交所返回值没有日期列，用请求日兜底；金额已是亿元不换算。"""
-    frame = pd.DataFrame([{"融资余额": 6000.5, "融券余额": 12.3}])
+    frame = pd.DataFrame([{"融资余额": 6000.5, "融券余额": 12.3, "融资买入额": 887.84}])
     result = _margin_map_szse(frame, default_date=date(2026, 10, 20))
     item = result[date(2026, 10, 20)]
     assert item["margin_balance"] == pytest.approx(6000.5)
     assert item["short_balance"] == pytest.approx(12.3)
+    assert item["margin_buy"] == pytest.approx(8.8784e10)  # 亿元 → 元
+
+
+def test_bond_yield_normalizer_keeps_gov_curve_only() -> None:
+    frame = pd.DataFrame([
+        {"曲线名称": "中债国债收益率曲线", "日期": "2026-11-06", "1年": "1.20", "10年": "1.80"},
+        {"曲线名称": "中债中短期票据收益率曲线(AAA)", "日期": "2026-11-06",
+         "1年": "1.60", "10年": "2.10"},
+        {"曲线名称": "中债国债收益率曲线", "日期": "2026-11-05", "1年": 1.25, "10年": 1.85},
+    ])
+    result = _normalize_bond_yields(frame)
+    assert len(result) == 2
+    assert result.iloc[0]["trade_date"] == date(2026, 11, 5)
+    assert result.iloc[1]["term_spread"] == pytest.approx(0.6)
+
+
+def test_bond_yield_normalizer_handles_empty_and_missing_tenor() -> None:
+    assert _normalize_bond_yields(None).empty
+    frame = pd.DataFrame([
+        {"曲线名称": "中债国债收益率曲线", "日期": "2026-11-06", "1年": None, "10年": 1.8},
+    ])
+    result = _normalize_bond_yields(frame)
+    assert result.iloc[0]["cn_1y"] is None
+    assert result.iloc[0]["term_spread"] is None
+
+
+def test_margin_buy_normalizers() -> None:
+    sse = pd.DataFrame([
+        {"信用交易日期": "20261105", "融资买入额": 97541355443.0},
+        {"信用交易日期": "20261106", "融资买入额": 66558512113.0},
+    ])
+    normalized_sse = _normalize_margin_buy_sse(sse)
+    assert len(normalized_sse) == 2
+    assert normalized_sse.iloc[-1]["margin_buy_amount"] == pytest.approx(66558512113.0)
+
+    szse = pd.DataFrame([{"融资买入额": 887.84, "融资余额": 10901.79}])
+    normalized_szse = _normalize_margin_buy_szse(szse, date(2026, 11, 6))
+    assert normalized_szse.iloc[0]["margin_buy_amount"] == pytest.approx(8.8784e10)
+    assert _normalize_margin_buy_szse(None, date(2026, 11, 6)).empty
 
 
 def test_margin_effective_date_picks_latest_within_lookback() -> None:

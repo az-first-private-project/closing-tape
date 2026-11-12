@@ -161,6 +161,7 @@ def _parse_cn_amount(value: Any) -> float | None:
 MARGIN_DATE = ("信用交易日期", "交易日期", "日期", "date")
 MARGIN_BALANCE = ("融资余额", "融资余额(元)", "融资余额(亿元)")
 SHORT_BALANCE = ("融券余量金额", "融券余额", "融券余额(元)", "融券总额")
+MARGIN_BUY = ("融资买入额", "融资买入额(元)", "融资买入额(亿元)")
 NORTH_DATE = ("日期", "date")
 NORTH_NET = ("当日成交净买额", "当日净买额", "北向资金净流入", "northward_net")
 # 两融 T+1 披露；最新已披露日距请求日超过该天数视为"未披露/源异常"，不得落库。
@@ -746,9 +747,12 @@ def _margin_map_sse(
             continue
         margin = _num(_pick(row, MARGIN_BALANCE))
         short = _num(_pick(row, SHORT_BALANCE))
+        buy = _num(_pick(row, MARGIN_BUY))
         result[trade_date] = {
             "margin_balance": round(margin / YI, 4) if margin is not None else None,
             "short_balance": round(short / YI, 4) if short is not None else None,
+            # 买方金额统一存元；上交所原值即元
+            "margin_buy": buy,
         }
     return result
 
@@ -771,8 +775,90 @@ def _margin_map_szse(
         result[trade_date] = {
             "margin_balance": _num(_pick(row, MARGIN_BALANCE)),
             "short_balance": _num(_pick(row, SHORT_BALANCE)),
+            # 深交所融资买入额单位是亿元，统一换成元
+            "margin_buy": (
+                round(buy * YI, 2) if (buy := _num(_pick(row, MARGIN_BUY))) is not None else None
+            ),
         }
     return result
+
+
+def _normalize_bond_yields(df: pd.DataFrame | None) -> pd.DataFrame:
+    """中债收益率 → (trade_date, cn_1y, cn_10y, term_spread)。
+
+    只保留「中债国债收益率曲线」；1Y/10Y 缺失时保留 NULL。
+    """
+    columns = ["trade_date", "cn_1y", "cn_10y", "term_spread"]
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame([], columns=columns)
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        if str(_pick(row, ("曲线名称",)) or "").strip() != "中债国债收益率曲线":
+            continue
+        trade_date = _to_date(_pick(row, ("日期", "date")))
+        if trade_date is None:
+            continue
+        cn_1y = _num(_pick(row, ("1年", "1Y")))
+        cn_10y = _num(_pick(row, ("10年", "10Y")))
+        rows.append({
+            "trade_date": trade_date,
+            "cn_1y": cn_1y,
+            "cn_10y": cn_10y,
+            "term_spread": (
+                round(cn_10y - cn_1y, 4)
+                if cn_1y is not None and cn_10y is not None else None
+            ),
+        })
+    if not rows:
+        return pd.DataFrame([], columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values("trade_date")
+        .drop_duplicates("trade_date", keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def _normalize_margin_buy_sse(df: pd.DataFrame | None) -> pd.DataFrame:
+    """上交所融资买入额 → (trade_date, margin_buy_amount)，单位元。"""
+    columns = ["trade_date", "margin_buy_amount"]
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame([], columns=columns)
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        trade_date = _to_date(_pick(row, MARGIN_DATE))
+        if trade_date is None:
+            continue
+        rows.append({
+            "trade_date": trade_date,
+            "margin_buy_amount": _num(_pick(row, MARGIN_BUY)),
+        })
+    if not rows:
+        return pd.DataFrame([], columns=columns)
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values("trade_date")
+        .drop_duplicates("trade_date", keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def _normalize_margin_buy_szse(
+    df: pd.DataFrame | None, trade_date: date
+) -> pd.DataFrame:
+    """深交所融资买入额 → (trade_date, margin_buy_amount)，亿元 → 元。"""
+    columns = ["trade_date", "margin_buy_amount"]
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame([], columns=columns)
+    row = df.to_dict("records")[0]
+    buy = _num(_pick(row, MARGIN_BUY))
+    return pd.DataFrame(
+        [{
+            "trade_date": trade_date,
+            "margin_buy_amount": round(buy * YI, 2) if buy is not None else None,
+        }],
+        columns=columns,
+    )
 
 
 def _margin_effective_date(
@@ -1968,6 +2054,7 @@ class AkshareProvider(BaseProvider):
         szse_item = szse_map.get(effective_date, {})
         margin_balance = None
         short_balance = None
+        margin_buy_amount = None
         if sse_item.get("margin_balance") is not None or \
                 szse_item.get("margin_balance") is not None:
             margin_balance = round(
@@ -1980,6 +2067,11 @@ class AkshareProvider(BaseProvider):
                 (sse_item.get("short_balance") or 0.0)
                 + (szse_item.get("short_balance") or 0.0), 4,
             )
+        if sse_item.get("margin_buy") is not None and \
+                szse_item.get("margin_buy") is not None:
+            margin_buy_amount = round(
+                float(sse_item["margin_buy"]) + float(szse_item["margin_buy"]), 2
+            )
 
         rows = [
             {
@@ -1987,6 +2079,7 @@ class AkshareProvider(BaseProvider):
                 "margin_balance": margin_balance,
                 "short_balance": short_balance,
                 "northward_net": north_map.get(effective_date),
+                "margin_buy_amount": margin_buy_amount,
             }
         ]
         frame = pd.DataFrame(rows)
@@ -2012,6 +2105,69 @@ class AkshareProvider(BaseProvider):
                 "szse_available": szse_ok,
                 "north_available": north_map.get(effective_date) is not None,
             },
+        )
+
+    # ---------- 宏观利率 ----------
+    def fetch_bond_yields(self, start: date, end: date) -> FetchResult:
+        """中债国债收益率曲线（1Y/10Y，%）。
+
+        中债接口按区间返回多张曲线，这里只保留「中债国债收益率曲线」。
+        区间过长时分段调用由编排层负责（单次建议 <= 1 年）。
+        """
+        started = time.perf_counter()
+        frame = self._fetch_one(
+            ak.bond_china_yield,
+            "bond_china_yield",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+        )
+        self._throttle()
+        normalized = _normalize_bond_yields(frame)
+        return FetchResult(
+            rows=len(normalized),
+            total=len(normalized),
+            failed=0,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"data": normalized, "source": self.name},
+        )
+
+    # ---------- 融资买入额（回补用） ----------
+    def fetch_margin_buy_sse(self, start: date, end: date) -> FetchResult:
+        """上交所区间融资买入额（元）。"""
+        started = time.perf_counter()
+        frame = self._fetch_one(
+            ak.stock_margin_sse,
+            "stock_margin_sse",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+        )
+        self._throttle()
+        normalized = _normalize_margin_buy_sse(frame)
+        return FetchResult(
+            rows=len(normalized),
+            total=len(normalized),
+            failed=0,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"data": normalized, "source": self.name},
+        )
+
+    def fetch_margin_buy_szse(self, trade_date: date) -> FetchResult:
+        """深交所单日融资买入额（源单位亿元 → 元）。"""
+        started = time.perf_counter()
+        frame = self._fetch_one(
+            ak.stock_margin_szse,
+            "stock_margin_szse",
+            date=trade_date.strftime("%Y%m%d"),
+        )
+        self._throttle()
+        normalized = _normalize_margin_buy_szse(frame, trade_date)
+        available = not normalized.empty and normalized.iloc[0]["margin_buy_amount"] is not None
+        return FetchResult(
+            rows=1 if available else 0,
+            total=1,
+            failed=0 if available else 1,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"data": normalized, "source": self.name},
         )
 
     # ---------- A6 指数 ----------

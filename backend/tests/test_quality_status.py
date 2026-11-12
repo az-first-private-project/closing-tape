@@ -269,6 +269,15 @@ def test_daily_pipeline_and_catch_up_include_valuation() -> None:
     )
 
 
+def test_market_regime_pipeline_order() -> None:
+    """macro_rates → market_factors → temperature → regime → report。"""
+    steps = pipeline.DEFAULT_DAILY_STEPS
+    assert steps.index("macro_rates") < steps.index("market_factors")
+    assert steps.index("market_factors") < steps.index("temperature")
+    assert steps.index("temperature") < steps.index("regime")
+    assert steps.index("regime") < steps.index("report")
+
+
 def test_run_task_bulk_failures_mark_quality_failed(monkeypatch) -> None:
     """全市场回补重试后仍有失败：写 quality_failed，返回 partial，不能洗成成功。"""
 

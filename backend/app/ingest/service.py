@@ -75,6 +75,7 @@ from app.db.models.fact import (
     FactMoneyflow,
     FactSectorDaily,
     FactStockDaily,
+    MacroRate,
     MarginTrading,
     MarketIndex,
 )
@@ -2244,6 +2245,80 @@ async def _previous_margin_balance(
 
 
 # ============================================================
+# 宏观利率（中债国债收益率）
+# ============================================================
+async def collect_macro_rates(
+    trade_date: date, db: AsyncSession | None = None
+) -> FetchResult:
+    """中债 1Y/10Y 国债收益率（日频）。
+
+    中债接口按自然日返回，节假日没有曲线行；这里回看 15 个自然日并 upsert
+    已有行，既覆盖 T+1 发布延迟，也保证幂等。整段失败不阻断后续管线。
+    """
+    started = time.perf_counter()
+    trade_date = _as_date(trade_date)
+    task, dataset = "macro_rates", "macro_rates"
+
+    async with _advisory_lock("macro_rates") as acquired:
+        if not acquired:
+            return await _skip_with_job(task, dataset, trade_date, "lock_busy")
+        job = _JobTracker(task, dataset, trade_date=trade_date)
+        await job.begin()
+
+        try:
+            if not await _is_trade_day(db, trade_date):
+                await job.finish("skipped", error="non_trade_day")
+                return _skipped_result(task, "non_trade_day", trade_date=trade_date.isoformat())
+
+            chain = get_provider_chain()
+            fetched = await chain.fetch_bond_yields(
+                trade_date - timedelta(days=15),
+                trade_date,
+                timeout=config.FETCH_TIMEOUT_SEC,
+            )
+            frame = fetched.detail.get("data")
+            rows: list[dict[str, Any]] = []
+            if frame is not None and not getattr(frame, "empty", True):
+                for record in frame.to_dict("records"):
+                    day = _as_date_optional(record.get("trade_date"))
+                    if day is None or day > trade_date:
+                        continue
+                    rows.append({
+                        "trade_date": day,
+                        "cn_1y": record.get("cn_1y"),
+                        "cn_10y": record.get("cn_10y"),
+                        "term_spread": record.get("term_spread"),
+                        "src": "chinabond",
+                    })
+            if not rows:
+                raise ProviderError("中债国债收益率归一化后为空")
+
+            report = QualityReport(
+                dataset=dataset, rows=len(rows), expected=len(rows), coverage=1.0
+            )
+            async with _db_scope(db) as session:
+                written = await upsert_rows(
+                    session, MacroRate, rows, ["trade_date"]
+                )
+                await record_quality(
+                    session, dataset, report,
+                    max(row["trade_date"] for row in rows), QualityStatus.OK,
+                )
+            await job.finish("success", done=len(rows), rows_written=written)
+            return FetchResult(
+                rows=written,
+                total=len(rows),
+                failed=fetched.failed,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                detail={"source": fetched.source, "latest": rows[-1]["trade_date"].isoformat()},
+            )
+        except Exception as exc:
+            await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
+            await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+
+
+# ============================================================
 # A6 指数日线
 # ============================================================
 async def collect_indices(
@@ -2649,6 +2724,7 @@ __all__ = [
     "collect_moneyflow",
     "collect_indices",
     "collect_margin",
+    "collect_macro_rates",
     "run_daily_ingest",
     "verify_adj_factors",
 ]
