@@ -29,6 +29,8 @@ DATASET_META: dict[str, tuple[str, int, bool]] = {
     "moneyflow": ("个股资金流", 30, False),
     "valuation": ("历史估值(PE/PB/股息率)", 24 * 30, False),
     "index_daily": ("指数日线", 30, False),
+    "broad_indices": ("宽基指数", 30, False),
+    "style_indices": ("风格指数", 30, False),
     "margin": ("融资融券", 30, False),
     "macro_rates": ("国债收益率", 48, False),
     "market_factors": ("市场因子", 30, False),

@@ -3,6 +3,7 @@
  * /            新闻首页
  * /article/:id 新闻详情
  * /dashboard   盘后分析（原 /dashboard-v3）
+ * /index-compare 指数对比（创业板50 / 红利低波50 风格轮动）
  * /algo-center 选股中心
  * /ladder      策略天梯（重定向到 /algo-center#ladder）
  * /paper       纸面组合跟踪
@@ -22,6 +23,7 @@ import Layout from './components/Layout'
 const HomePage = lazy(() => import('./pages/HomePage'))
 const DetailPage = lazy(() => import('./pages/DetailPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const IndexComparePage = lazy(() => import('./pages/IndexComparePage'))
 const AlgoCenter = lazy(() => import('./pages/AlgoCenter'))
 const PaperPage = lazy(() => import('./pages/PaperPage'))
 const StockDetailPage = lazy(() => import('./pages/StockDetailPage'))
@@ -37,6 +39,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/article/:id" element={<DetailPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/index-compare" element={<IndexComparePage />} />
         <Route path="/algo-center" element={<AlgoCenter />} />
         <Route path="/ladder" element={<Navigate to="/algo-center#ladder" replace />} />
         <Route path="/paper" element={<PaperPage />} />

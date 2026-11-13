@@ -35,7 +35,9 @@ function safeRead(): StatusEvent[] {
         typeof item === 'object' &&
         item !== null &&
         typeof (item as StatusEvent).id === 'string' &&
-        typeof (item as StatusEvent).at === 'number',
+        typeof (item as StatusEvent).at === 'number' &&
+        // 旧版本把「数据未就绪」记成了接口异常，属于预期业务态，读取时直接丢弃
+        (item as StatusEvent).code !== 'DATA_NOT_READY',
     )
   } catch {
     return []

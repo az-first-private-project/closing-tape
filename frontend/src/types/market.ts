@@ -376,3 +376,156 @@ export interface MarketOverview {
   caveats: string[]
   freshness: Freshness[]
 }
+
+// ============================================================
+// 指数对比 / 风格轮动（V7 T3 / GET /market/index-compare）
+// ============================================================
+
+export interface IndexCompareThresholds {
+  low: number
+  high: number
+  /** 滚动分位 / 固定分位 */
+  method: string
+  window_days: number
+  min_periods: number
+  fixed_low: number
+  fixed_high: number
+  sample_q20: number
+  sample_q80: number
+  sample_percentile: number
+}
+
+export interface IndexCompareHistoryPoint {
+  date: string
+  R: number
+}
+
+export interface IndexCompareChart {
+  series_note: string
+  annotations: string[]
+  readout: string
+  history: IndexCompareHistoryPoint[]
+}
+
+export interface IndexCompareAllocation {
+  cyb50_target: number
+  hl50_target: number
+  cyb50_current: number | null
+  hl50_current: number | null
+  batches: number
+  step_pct: number
+  action: string
+  rebalance_trigger: string
+  note: string
+}
+
+export interface IndexCompareMeta {
+  index_dates: Record<string, string>
+  common_start: string
+  common_end: string
+  counts: Record<string, number>
+  sources: Record<string, string[]>
+  window_days: number
+  min_periods: number
+  is_stale: boolean
+  index_names: Record<string, string>
+}
+
+export interface IndexCompareResult {
+  date: string
+  R: number
+  closes: { cyb50: number; hl50: number }
+  percentile: number
+  zone: '低估区' | '均衡区' | '高估区'
+  thresholds: IndexCompareThresholds
+  headline: string
+  chart: IndexCompareChart
+  allocation: IndexCompareAllocation
+  risk: string
+  disclaimer: string
+  meta: IndexCompareMeta
+  caveats: string[]
+  freshness: Freshness[]
+}
+
+// ============================================================
+// 牛熊位置 × 估值（V7 T4 / GET /market/bull-bear）
+// ============================================================
+
+export interface BroadValuationIndex {
+  code: string
+  name: string
+  pe: number
+  earnings_yield: number
+  drawdown: number
+  ytd: number
+  annualized: number
+  volatility: number
+  start: string
+}
+
+export interface BroadMomentum {
+  code: string
+  name: string
+  m1: number | null
+  m3: number | null
+  m6: number | null
+  m12: number | null
+}
+
+export interface BroadNormalizedPoint {
+  date: string
+  [code: string]: string | number | null
+}
+
+export interface BroadDrawdownPoint {
+  date: string
+  drawdown: number
+}
+
+export interface BroadKeyNode {
+  date: string
+  label: string
+  type: 'top' | 'bottom'
+}
+
+export interface BroadValuation {
+  snapshot_date: string
+  price_as_of: string
+  required_sentence: string
+  summary: {
+    above_ma200: number
+    total: number
+    avg_drawdown: number
+    avg_drawdown_5y: number
+  }
+  erp: {
+    erp: number
+    percentile: number
+    dividend_premium: number
+    dividend_percentile: number
+    sample_start: string
+    sample_end: string
+    note: string
+  }
+  indices: BroadValuationIndex[]
+  normalized: Record<'3y' | '10y' | 'full', BroadNormalizedPoint[]>
+  momentum: BroadMomentum[]
+  drawdown_history: BroadDrawdownPoint[]
+  key_nodes: BroadKeyNode[]
+  ranges: Record<'3y' | '10y' | 'full', string>
+  insights: string[]
+  analogy: string
+  caveats: string[]
+  disclaimer: string
+  meta: {
+    codes: string[]
+    index_names: Record<string, string>
+    sources: Record<string, string[]>
+    snapshot_date: string
+    price_as_of: string
+    price_range: { start: string; end: string }
+    normalized_frequency: string
+  }
+  freshness: Freshness[]
+}

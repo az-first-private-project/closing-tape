@@ -23,8 +23,9 @@ logger = get_logger(__name__)
 INGEST_TASKS = {
     "calendar", "universe", "snapshot", "backfill", "history_fast",
     "moneyflow_history", "valuation_fast", "rebuild", "sector", "sector_members",
-    "sector_fallback", "moneyflow", "valuation", "index", "margin", "features",
-    "scores", "sector_scores", "report", "algos", "signal_perf", "all",
+    "sector_fallback", "moneyflow", "valuation", "index", "broad_indices",
+    "style_indices", "margin", "features", "scores", "sector_scores", "report",
+    "algos", "signal_perf", "all",
 }
 # 这些任务耗时较长，默认建议后台跑
 HEAVY_TASKS = {
@@ -61,6 +62,26 @@ async def trigger_ingest(
     from app.pipeline import run_task
     return await run_task(task, trade_date=trade_date, start=start, end=end,
                           codes=codes, db=db)
+
+
+@router.post("/catch-up")
+async def trigger_catch_up(
+    background_tasks: BackgroundTasks,
+    _admin: AdminDep = None,
+) -> dict:
+    """手动触发「检查并补跑最近缺失交易日」。
+
+    复用启动补跑同一套逻辑（advisory lock + 历史口径补区间 + 逐日重算），
+    后台执行，不阻塞当前请求；进度见 GET /api/v1/meta/jobs。
+    """
+    from app.catch_up import run_catch_up_in_background
+
+    background_tasks.add_task(run_catch_up_in_background, delay_sec=0.0)
+    return {
+        "status": "accepted",
+        "mode": "background",
+        "hint": "已提交补缺检查，进度见任务监控 / GET /api/v1/meta/jobs",
+    }
 
 
 @router.post("/seed-demo")

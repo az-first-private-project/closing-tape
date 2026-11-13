@@ -126,7 +126,8 @@ async def run(args) -> int:
             completed.pop(key, None)
 
     pending = [day for day in days
-               if f"{day.isoformat()}" not in completed and day not in db_days]
+               if f"{day.isoformat()}" not in completed
+               and (args.force or day not in db_days)]
     logger.info(
         "因子回补：区间 %s ~ %s，交易日 %d，需计算 %d，已完成 %d",
         start, end, len(days), len(pending), len(completed),

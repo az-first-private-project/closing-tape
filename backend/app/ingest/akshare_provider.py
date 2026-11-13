@@ -959,6 +959,51 @@ def _normalize_index(
     return frame[list(INDEX_COLUMNS)]
 
 
+def _normalize_csi_index(
+    df: pd.DataFrame | None,
+    index_code: str,
+    index_name: str,
+) -> pd.DataFrame:
+    """中证指数历史（``stock_zh_index_hist_csindex``）归一化。
+
+    列名：日期/开盘/最高/最低/收盘/成交量/成交金额。
+    与新浪指数保持同一 ``INDEX_COLUMNS`` 口径，成交额单位沿用源返回值
+    （该字段只做展示，不参与比价 R 的计算）。
+    """
+    if df is None or getattr(df, "empty", True):
+        return _empty_frame(INDEX_COLUMNS)
+    records: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        trade_date = _to_date(_pick(row, ("日期", "date")))
+        close = _num(_pick(row, ("收盘", "close")))
+        if trade_date is None or close is None:
+            continue
+        records.append({
+            "index_code": index_code,
+            "index_name": index_name,
+            "trade_date": trade_date,
+            "open": _num(_pick(row, ("开盘", "open"))),
+            "high": _num(_pick(row, ("最高", "high"))),
+            "low": _num(_pick(row, ("最低", "low"))),
+            "close": close,
+            "volume": _to_int(_num(_pick(row, ("成交量", "volume")))),
+            "amount": _num(_pick(row, ("成交金额", "amount"))),
+        })
+    if not records:
+        return _empty_frame(INDEX_COLUMNS)
+    frame = pd.DataFrame(records, columns=[
+        "index_code", "index_name", "trade_date", "open", "high", "low", "close",
+        "volume", "amount",
+    ])
+    frame = frame.sort_values("trade_date").reset_index(drop=True)
+    frame["pre_close"] = frame["close"].shift(1)
+    close_series = pd.to_numeric(frame["close"], errors="coerce")
+    pre_close_series = pd.to_numeric(frame["pre_close"], errors="coerce")
+    valid = close_series.notna() & pre_close_series.notna() & (pre_close_series > 0)
+    frame["pct_chg"] = ((close_series / pre_close_series - 1) * 100).where(valid).round(3)
+    return frame[list(INDEX_COLUMNS)]
+
+
 def _normalize_tencent_index(
     rows: Sequence[Sequence[Any]] | None,
     index_code: str,
@@ -2168,6 +2213,138 @@ class AkshareProvider(BaseProvider):
             failed=0 if available else 1,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
             detail={"data": normalized, "source": self.name},
+        )
+
+    # ---------- 风格轮动指数 ----------
+    def fetch_style_indices(self, start: date, end: date) -> FetchResult:
+        """创业板50（新浪）+ 红利低波50（中证指数）历史日线。
+
+        两个源独立降级：任一失败不阻断另一个；调用方按 code 做质量校验。
+        中证接口返回的是价格指数点位，不做 ETF/其它指数替代。
+        """
+        started = time.perf_counter()
+        frames: list[pd.DataFrame] = []
+        sources: dict[str, str] = {}
+        failed = 0
+
+        try:
+            raw = self._fetch_one(
+                ak.stock_zh_index_daily,
+                "stock_zh_index_daily[sz399673]",
+                symbol="sz399673",
+            )
+            self._throttle()
+            frame = _normalize_index(raw, "sz399673", "创业板50")
+            frame = frame[
+                (frame["trade_date"] >= start) & (frame["trade_date"] <= end)
+            ].copy()
+            frame["src"] = "sina"
+            if frame.empty:
+                failed += 1
+                logger.warning("创业板50 日线在 %s~%s 为空", start, end)
+            else:
+                frames.append(frame)
+                sources["sz399673"] = "sina"
+        except ProviderError as exc:
+            failed += 1
+            logger.warning("创业板50 日线获取失败：%s", exc)
+
+        try:
+            raw = self._fetch_one(
+                ak.stock_zh_index_hist_csindex,
+                "stock_zh_index_hist_csindex[H30269]",
+                symbol="H30269",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+            )
+            self._throttle()
+            frame = _normalize_csi_index(raw, "H30269", "红利低波50")
+            frame = frame[
+                (frame["trade_date"] >= start) & (frame["trade_date"] <= end)
+            ].copy()
+            frame["src"] = "csindex"
+            if frame.empty:
+                failed += 1
+                logger.warning("红利低波50 日线在 %s~%s 为空", start, end)
+            else:
+                frames.append(frame)
+                sources["H30269"] = "csindex"
+        except ProviderError as exc:
+            failed += 1
+            logger.warning("红利低波50 日线获取失败：%s", exc)
+
+        frame = (
+            pd.concat(frames, ignore_index=True)
+            if frames else _empty_frame(INDEX_COLUMNS)
+        )
+        return FetchResult(
+            rows=len(frame),
+            total=len(frame),
+            failed=failed,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"data": frame, "source": self.name, "sources": sources},
+        )
+
+    # ---------- 牛熊估值 6 宽基 ----------
+    def fetch_broad_indices(self, start: date, end: date) -> FetchResult:
+        """6 个宽基指数历史日线（文件硬约束口径）。
+
+        中证红利（000922）用中证指数历史接口；其余 5 个用新浪。
+        单指数失败不阻断其它指数，调用方按 code 做质量校验。
+        """
+        from app.core.constants import BROAD_INDEX_MAP
+
+        started = time.perf_counter()
+        frames: list[pd.DataFrame] = []
+        sources: dict[str, str] = {}
+        failed = 0
+
+        for index_code, index_name in BROAD_INDEX_MAP.items():
+            try:
+                if index_code == "sh000922":
+                    raw = self._fetch_one(
+                        ak.stock_zh_index_hist_csindex,
+                        "stock_zh_index_hist_csindex[000922]",
+                        symbol="000922",
+                        start_date=start.strftime("%Y%m%d"),
+                        end_date=end.strftime("%Y%m%d"),
+                    )
+                    self._throttle()
+                    frame = _normalize_csi_index(raw, index_code, index_name)
+                    source = "csindex"
+                else:
+                    raw = self._fetch_one(
+                        ak.stock_zh_index_daily,
+                        f"stock_zh_index_daily[{index_code}]",
+                        symbol=index_code,
+                    )
+                    self._throttle()
+                    frame = _normalize_index(raw, index_code, index_name)
+                    source = "sina"
+                frame = frame[
+                    (frame["trade_date"] >= start) & (frame["trade_date"] <= end)
+                ].copy()
+                if frame.empty:
+                    failed += 1
+                    logger.warning("%s 日线在 %s~%s 为空", index_code, start, end)
+                    continue
+                frame["src"] = source
+                frames.append(frame)
+                sources[index_code] = source
+            except ProviderError as exc:
+                failed += 1
+                logger.warning("%s 日线获取失败：%s", index_code, exc)
+
+        frame = (
+            pd.concat(frames, ignore_index=True)
+            if frames else _empty_frame(INDEX_COLUMNS)
+        )
+        return FetchResult(
+            rows=len(frame),
+            total=len(frame),
+            failed=failed,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            detail={"data": frame, "source": self.name, "sources": sources},
         )
 
     # ---------- A6 指数 ----------

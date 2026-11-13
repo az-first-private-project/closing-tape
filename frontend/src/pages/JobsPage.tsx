@@ -7,7 +7,9 @@
  */
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Pause, Play, RefreshCw } from 'lucide-react'
+import { Database, Pause, Play, RefreshCw } from 'lucide-react'
+import { ApiError } from '../api/client'
+import { triggerCatchUp } from '../api/meta'
 import { useFreshness } from '../hooks/useFreshness'
 import { useJobs } from '../hooks/useJobs'
 import FreshnessBadge from '../components/FreshnessBadge'
@@ -137,6 +139,13 @@ export default function JobsPage() {
   const [paused, setPaused] = useState(false)
   const [statusFilter, setStatusFilter] = useState('')
   const [page, setPage] = useState(1)
+  const [catchUp, setCatchUp] = useState<{
+    status: 'idle' | 'submitting' | 'accepted' | 'error'
+    message: string
+  }>({ status: 'idle', message: '' })
+  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem('gfna-admin-key') ?? '')
+  const [keyPanelOpen, setKeyPanelOpen] = useState(false)
+  const [keyInput, setKeyInput] = useState('')
 
   const freshnessQuery = useFreshness()
   const jobsQuery = useJobs(
@@ -155,6 +164,57 @@ export default function JobsPage() {
   const totalPages = Math.max(1, Math.ceil(jobsTotal / JOB_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
   const failedCount = useMemo(() => jobs.filter((job) => job.status === 'failed').length, [jobs])
+
+  const submitCatchUp = async (key: string) => {
+    setCatchUp({ status: 'submitting', message: '' })
+    try {
+      await triggerCatchUp(key || undefined)
+      setKeyPanelOpen(false)
+      setCatchUp({
+        status: 'accepted',
+        message: '已提交后台补数，通常需要 10–30 分钟；完成后任务列表会出现记录',
+      })
+      void freshnessQuery.refetch()
+      void jobsQuery.refetch()
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        // 密钥失效/未配置：清掉旧值，改用页面内输入条，不使用被浏览器禁用的 prompt()
+        sessionStorage.removeItem('gfna-admin-key')
+        setAdminKey('')
+        setKeyPanelOpen(true)
+        setCatchUp({
+          status: 'error',
+          message: '管理密钥无效，请重新输入',
+        })
+        return
+      }
+      setCatchUp({
+        status: 'error',
+        message: error instanceof Error ? error.message : '提交补数失败',
+      })
+    }
+  }
+
+  const handleCatchUp = () => {
+    if (!adminKey) {
+      setKeyPanelOpen(true)
+      setCatchUp({ status: 'idle', message: '请输入管理密钥后继续' })
+      return
+    }
+    void submitCatchUp(adminKey)
+  }
+
+  const handleKeySubmit = () => {
+    const key = keyInput.trim()
+    if (!key) {
+      setCatchUp({ status: 'error', message: '请输入管理密钥' })
+      return
+    }
+    sessionStorage.setItem('gfna-admin-key', key)
+    setAdminKey(key)
+    setKeyInput('')
+    void submitCatchUp(key)
+  }
 
   return (
     <motion.div
@@ -200,6 +260,15 @@ export default function JobsPage() {
             {paused ? '恢复自动刷新' : '暂停自动刷新'}
           </button>
           <button
+            onClick={() => void handleCatchUp()}
+            disabled={catchUp.status === 'submitting'}
+            className="btn btn-sm h-9"
+            title="检查最近缺失交易日并在后台补跑（复用启动补缺逻辑）"
+          >
+            <Database className={`h-3.5 w-3.5 ${catchUp.status === 'submitting' ? 'animate-pulse' : ''}`} />
+            {catchUp.status === 'submitting' ? '提交中…' : '一键补数'}
+          </button>
+          <button
             onClick={() => {
               void freshnessQuery.refetch()
               void jobsQuery.refetch()
@@ -213,6 +282,53 @@ export default function JobsPage() {
           </div>
         }
       />
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>每日 15:36 自动更新；后端启动后会自动补最近缺失交易日。</span>
+        {catchUp.message && (
+          <span className={catchUp.status === 'error' ? 'text-alert' : 'text-foreground'}>
+            {catchUp.message}
+          </span>
+        )}
+      </div>
+
+      {keyPanelOpen && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+          <span className="text-[11px] text-muted-foreground">
+            管理密钥（<span className="font-mono">backend/.env</span> 的 ADMIN_API_KEY）
+          </span>
+          <input
+            type="password"
+            value={keyInput}
+            onChange={(event) => setKeyInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                handleKeySubmit()
+              }
+            }}
+            placeholder="X-Admin-Key"
+            autoComplete="off"
+            aria-label="管理密钥"
+            className="field !h-8 w-44 !py-0 text-[12px]"
+          />
+          <button
+            type="button"
+            onClick={handleKeySubmit}
+            disabled={catchUp.status === 'submitting'}
+            className="btn btn-sm h-8"
+          >
+            {catchUp.status === 'submitting' ? '提交中…' : '确认并补数'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setKeyPanelOpen(false)}
+            className="btn btn-sm h-8"
+          >
+            取消
+          </button>
+        </div>
+      )}
 
       {/* ========== 数据集新鲜度总览 ========== */}
       <div className="space-y-2">

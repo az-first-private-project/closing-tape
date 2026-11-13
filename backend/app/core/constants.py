@@ -19,6 +19,9 @@ BOARD_GEM = "创业板"      # 300 / 301
 BOARD_STAR = "科创板"     # 688 / 689
 BOARD_BSE = "北交所"      # 4xxxxx / 8xxxxx / 920xxx
 
+#: 股票池只保留沪深主板 / 创业板 / 科创板；北交所与其它标的不采集
+POOL_BOARDS = (BOARD_MAIN, BOARD_GEM, BOARD_STAR)
+
 # 涨停幅度（普通股；ST 另行处理）
 LIMIT_PCT: dict[str, float] = {
     BOARD_MAIN: 0.10,
@@ -61,6 +64,83 @@ INDEX_MAP: dict[str, tuple[str, bool]] = {
     "^IXIC": ("纳斯达克", False),
 }
 BENCHMARK_INDEX = "sh000300"
+
+#: 风格轮动看板的两个指数（不进入常规 INDEX_MAP，避免改变盘后分析指数卡）
+STYLE_INDEX_MAP: dict[str, str] = {
+    "sz399673": "创业板50",
+    "H30269": "红利低波50",
+}
+
+#: 风格轮动阈值：提示词默认固定阈值（生产优先用滚动 20/80 分位）
+STYLE_ROTATION_FIXED_LOW = 0.18
+STYLE_ROTATION_FIXED_HIGH = 0.30
+STYLE_ROTATION_WINDOW_DAYS = 750
+STYLE_ROTATION_MIN_PERIODS = 250
+
+# ==================== 牛熊位置 × 估值（V7 T4）====================
+#: 文件硬约束：只允许这 6 个宽基指数；不得出现上证50、中证1000
+BROAD_INDEX_MAP: dict[str, str] = {
+    "sh000300": "沪深300",
+    "sh000922": "中证红利",
+    "sh000001": "上证指数",
+    "sh000905": "中证500",
+    "sz399006": "创业板指",
+    "sh000688": "科创50",
+}
+BROAD_INDEX_SOURCES = {
+    "sh000300": "sina",
+    "sh000922": "csindex",
+    "sh000001": "sina",
+    "sh000905": "sina",
+    "sz399006": "sina",
+    "sh000688": "sina",
+}
+#: 文件硬数据快照（2026-11-13，腾讯自选股行情）。所有页面数字必须与这份一致。
+BROAD_INDEX_SNAPSHOT_DATE = "2026-11-13"
+BROAD_INDEX_SNAPSHOT: dict[str, dict[str, object]] = {
+    "sh000300": {"pe": 13.44, "earnings_yield": 7.44, "drawdown": -31.7,
+                 "ytd": -13.3, "annualized": 6.65, "volatility": 17.7,
+                 "start": "2005-01-04"},
+    "sh000922": {"pe": 9.14, "earnings_yield": 10.94, "drawdown": -11.5,
+                 "ytd": 0.1, "annualized": 8.15, "volatility": 14.7,
+                 "start": "2006-05-08"},
+    "sh000001": {"pe": 16.55, "earnings_yield": 6.04, "drawdown": -40.3,
+                 "ytd": -8.4, "annualized": 4.42, "volatility": 14.5,
+                 "start": "2006-05-08"},
+    "sh000905": {"pe": 27.54, "earnings_yield": 3.63, "drawdown": -44.0,
+                 "ytd": -13.4, "annualized": 8.64, "volatility": 27.3,
+                 "start": "2006-05-08"},
+    "sz399006": {"pe": 44.09, "earnings_yield": 2.27, "drawdown": -44.5,
+                 "ytd": -24.3, "annualized": 5.71, "volatility": 35.7,
+                 "start": "2010-06-01"},
+    "sh000688": {"pe": 94.15, "earnings_yield": 1.06, "drawdown": -42.0,
+                 "ytd": -4.8, "annualized": 3.36, "volatility": 43.1,
+                 "start": "2020-01-02"},
+}
+BROAD_ERP_SNAPSHOT = {
+    "erp": 3.5698,
+    "percentile": 78.9,
+    "dividend_premium": 2.513,
+    "dividend_percentile": 56.8,
+    "sample_start": "2016-11-15",
+    "sample_end": "2026-11-12",
+}
+BROAD_SUMMARY = {
+    "above_ma200": 0,
+    "total": 6,
+    "avg_drawdown": -35.7,
+    "avg_drawdown_5y": -26.3,
+}
+BROAD_KEY_NODES = (
+    ("2007-10", "2007 顶", "top"),
+    ("2008-11", "2008 底", "bottom"),
+    ("2015-06", "2015 顶", "top"),
+    ("2016-01", "2016 底", "bottom"),
+    ("2018-12", "2018 底", "bottom"),
+    ("2021-02", "2021 顶", "top"),
+    ("2024-02", "2024 底", "bottom"),
+    ("2026-06", "2026 顶", "top"),
+)
 
 # ==================== 板块类型 ====================
 SECTOR_INDUSTRY = "industry"
@@ -277,6 +357,14 @@ def is_stock_code(code: str) -> bool:
     return False
 
 
+def is_pool_stock_code(code: str) -> bool:
+    """是否进入股票池：只保留沪深主板 / 创业板 / 科创板。
+
+    北交所（4/8/920）虽然也是 A 股，但按产品要求不采集、不进入股票池。
+    """
+    return is_stock_code(code) and board_of(code) in POOL_BOARDS
+
+
 def trading_year_range(start: date, end: date) -> list[int]:
     """返回需要建分区的年份列表（含两端）。"""
     return list(range(start.year, end.year + 1))
@@ -284,8 +372,13 @@ def trading_year_range(start: date, end: date) -> list[int]:
 
 __all__ = [
     "exchange_of", "board_of", "limit_pct_of", "limit_prices", "is_st_name",
-    "is_index_code", "is_stock_code", "trading_year_range", "LIMIT_PCT",
-    "ST_LIMIT_PCT",
-    "BOARD_MAIN", "BOARD_GEM", "BOARD_STAR", "BOARD_BSE", "INDEX_MAP",
-    "BENCHMARK_INDEX", "SECTOR_INDUSTRY", "SECTOR_CONCEPT",
+    "is_index_code", "is_stock_code", "is_pool_stock_code", "trading_year_range",
+    "LIMIT_PCT", "ST_LIMIT_PCT",
+    "BOARD_MAIN", "BOARD_GEM", "BOARD_STAR", "BOARD_BSE", "POOL_BOARDS", "INDEX_MAP",
+    "BENCHMARK_INDEX", "STYLE_INDEX_MAP", "STYLE_ROTATION_FIXED_LOW",
+    "STYLE_ROTATION_FIXED_HIGH", "STYLE_ROTATION_WINDOW_DAYS",
+    "STYLE_ROTATION_MIN_PERIODS", "SECTOR_INDUSTRY", "SECTOR_CONCEPT",
+    "BROAD_INDEX_MAP", "BROAD_INDEX_SOURCES", "BROAD_INDEX_SNAPSHOT_DATE",
+    "BROAD_INDEX_SNAPSHOT", "BROAD_ERP_SNAPSHOT", "BROAD_SUMMARY",
+    "BROAD_KEY_NODES",
 ]

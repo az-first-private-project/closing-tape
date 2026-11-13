@@ -26,9 +26,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import config
+from app.core.constants import BENCHMARK_INDEX
 from app.core.logging import get_logger
 from app.core.status import TaskStatus
-from app.db.models import FactStockDaily, TradeCalendar
+from app.db.models import (
+    FactMarketDaily,
+    FactSectorDaily,
+    FactStockDaily,
+    MarketIndex,
+    MarketRegimeDaily,
+    MarketTemperatureDaily,
+    TradeCalendar,
+)
 
 logger = get_logger("catch_up")
 
@@ -42,14 +51,16 @@ RANGE_STEPS = ("history_fast", "valuation_fast", "moneyflow_history")
 # 若先写会让 sector_scores/report 用到当天收盘后才披露的信息（未来函数）；
 # 放在末尾既补齐漏跑日的数据行，又可供下一交易日的评分使用。
 DAY_STEPS = (
-    "index", "sector", "sector_agg", "valuation", "features", "scores",
-    "macro_rates", "market_factors", "sector_scores", "temperature", "regime",
-    "report", "algos", "margin",
+    "index", "broad_indices", "style_indices", "sector", "sector_agg", "valuation",
+    "features", "scores", "macro_rates", "market_factors", "sector_scores",
+    "temperature", "regime", "report", "algos", "margin",
 )
 # 全市场单日行数下限（约 5000+ 只；低于此值视为残缺日）
 _MIN_DAILY_ROWS = 3000
 # 残缺判定：不足上一交易日的 80%
 _COMPLETENESS_RATIO = 0.8
+# 板块日线单日行数下限（行业+概念正常 400+；低于 50 视为未采到）
+_MIN_SECTOR_ROWS = 50
 
 
 # ============================================================
@@ -119,6 +130,42 @@ def find_incomplete_days(
     return incomplete
 
 
+def stock_days_complete(
+    days: Sequence[date], counts: Mapping[date, int]
+) -> bool:
+    """行情日线是否已完整（只用来决定是否还需要跑 history_fast）。
+
+    下游数据集缺失、但行情已完整时，不应该再逐只重拉 5000+ 只股票历史，
+    否则启动补缺会被 20–30 分钟的网络回补拖住。
+    """
+    return all(int(counts.get(day) or 0) >= _MIN_DAILY_ROWS for day in days)
+
+
+def merge_downstream_gaps(
+    days: Sequence[date],
+    base_incomplete: Sequence[date],
+    *,
+    index_days: set[date],
+    sector_counts: Mapping[date, int],
+    factor_days: set[date],
+    temperature_days: set[date],
+    regime_days: set[date],
+    min_sector_rows: int = _MIN_SECTOR_ROWS,
+) -> list[date]:
+    """把「行情完整但下游没跑」的日子并入残日列表。"""
+    incomplete = set(base_incomplete)
+    for day in days:
+        if (
+            day not in index_days
+            or int(sector_counts.get(day) or 0) < min_sector_rows
+            or day not in factor_days
+            or day not in temperature_days
+            or day not in regime_days
+        ):
+            incomplete.add(day)
+    return sorted(incomplete)
+
+
 async def _recent_incomplete_days(
     db: AsyncSession, upto: date, scan_days: int = config.CATCH_UP_SCAN_DAYS
 ) -> list[date]:
@@ -147,7 +194,58 @@ async def _recent_incomplete_days(
             )
         ).all()
     )
-    return find_incomplete_days(days, counts)
+    # 下游数据集缺失同样视为残日：只看 stock_daily 会漏掉“行情已补、因子/温度/状态没跑”的日子
+    index_days = set(
+        (
+            await db.execute(
+                select(MarketIndex.trade_date).where(
+                    MarketIndex.index_code == BENCHMARK_INDEX,
+                    MarketIndex.trade_date.in_(days),
+                )
+            )
+        ).scalars()
+    )
+    sector_counts = dict(
+        (
+            await db.execute(
+                select(FactSectorDaily.trade_date, func.count())
+                .where(FactSectorDaily.trade_date.in_(days))
+                .group_by(FactSectorDaily.trade_date)
+            )
+        ).all()
+    )
+    factor_days = set(
+        (
+            await db.execute(
+                select(FactMarketDaily.trade_date).where(FactMarketDaily.trade_date.in_(days))
+            )
+        ).scalars()
+    )
+    temperature_days = set(
+        (
+            await db.execute(
+                select(MarketTemperatureDaily.trade_date).where(
+                    MarketTemperatureDaily.trade_date.in_(days)
+                )
+            )
+        ).scalars()
+    )
+    regime_days = set(
+        (
+            await db.execute(
+                select(MarketRegimeDaily.trade_date).where(MarketRegimeDaily.trade_date.in_(days))
+            )
+        ).scalars()
+    )
+    return merge_downstream_gaps(
+        days,
+        find_incomplete_days(days, counts),
+        index_days=index_days,
+        sector_counts=sector_counts,
+        factor_days=factor_days,
+        temperature_days=temperature_days,
+        regime_days=regime_days,
+    )
 
 
 async def _catch_up_state(db: AsyncSession) -> dict:
@@ -191,6 +289,21 @@ async def _catch_up_state(db: AsyncSession) -> dict:
 # 执行
 # ============================================================
 
+async def _stock_days_complete(db: AsyncSession, days: Sequence[date]) -> bool:
+    if not days:
+        return True
+    counts = dict(
+        (
+            await db.execute(
+                select(FactStockDaily.trade_date, func.count())
+                .where(FactStockDaily.trade_date.in_(list(days)))
+                .group_by(FactStockDaily.trade_date)
+            )
+        ).all()
+    )
+    return stock_days_complete(days, counts)
+
+
 async def _execute_catch_up(
     days: list[date], db: AsyncSession, *, today: date, snapshot_ok: bool
 ) -> dict:
@@ -200,7 +313,15 @@ async def _execute_catch_up(
     results: dict[str, dict] = {}
     first, last = days[0], days[-1]
 
-    for step in RANGE_STEPS:
+    stock_complete = await _stock_days_complete(db, days)
+    range_steps = (
+        tuple(step for step in RANGE_STEPS if step != "history_fast")
+        if stock_complete else RANGE_STEPS
+    )
+    if stock_complete:
+        logger.info("行情日线已完整，跳过 history_fast 区间回补，直接补下游数据集")
+
+    for step in range_steps:
         results[step] = await run_task(step, start=first, end=last, db=db)
         logger.info("补跑区间 %s~%s：%s → %s", first, last, step,
                     results[step].get("status"))
@@ -208,10 +329,11 @@ async def _execute_catch_up(
     for day in days:
         if day == today and snapshot_ok:
             summary = await run_daily_pipeline(day, db, steps=(
-                "calendar", "universe", "index", "sector", "sector_members",
-                "snapshot", "moneyflow", "sector_agg", "margin", "valuation",
-                "features", "scores", "sector_scores", "macro_rates",
-                "market_factors", "temperature", "regime", "report", "algos",
+                "calendar", "universe", "index", "broad_indices", "style_indices",
+                "sector", "sector_members", "snapshot", "moneyflow", "sector_agg",
+                "margin", "valuation", "features", "scores", "sector_scores",
+                "macro_rates", "market_factors", "temperature", "regime", "report",
+                "algos",
             ))
             failed = [
                 key for key, value in summary["steps"].items()

@@ -12,9 +12,10 @@ from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import POOL_BOARDS
 from app.core.errors import InvalidParamError, NotFoundError
 from app.core.pagination import pagination_meta
 from app.db.models import (
@@ -52,7 +53,10 @@ async def search_stocks(
 ) -> dict:
     """代码前缀或名称包含匹配。停牌/退市标的也返回，但带 status 标记。"""
     pattern = f"%{q}%"
-    filters = or_(DimStock.code.like(f"{q}%"), DimStock.name.like(pattern))
+    filters = and_(
+        or_(DimStock.code.like(f"{q}%"), DimStock.name.like(pattern)),
+        DimStock.board.in_(POOL_BOARDS),
+    )
     total = (await db.execute(
         select(func.count()).select_from(DimStock).where(filters)
     )).scalar_one()
@@ -151,7 +155,7 @@ async def get_stock_detail(
     """个股快照。响应结构见 docs/V5-API-CONTRACT.md 4.1。"""
     code = code.zfill(6)
     dim = (await db.execute(select(DimStock).where(DimStock.code == code))).scalar_one_or_none()
-    if dim is None:
+    if dim is None or dim.board not in POOL_BOARDS:
         raise NotFoundError(f"标的不存在: {code}", detail={"code": code})
 
     resolved = trade_date or await _latest_trade_date(db)

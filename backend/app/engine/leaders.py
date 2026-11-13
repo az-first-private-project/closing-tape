@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import POOL_BOARDS, STATUS_NORMAL
 from app.db.models.dim import DimSectorMember, DimStock
 from app.db.models.fact import FactStockDaily
 from app.engine._db import session_ctx
@@ -335,6 +336,8 @@ async def sector_members_with_quotes(
                 DimSectorMember.effective_to.is_(None),
                 DimSectorMember.effective_to > trade_date,
             ),
+            DimStock.status == STATUS_NORMAL,
+            DimStock.board.in_(POOL_BOARDS),
         )
     )
 

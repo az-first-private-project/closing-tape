@@ -79,6 +79,7 @@ def _stock_frame() -> pd.DataFrame:
         ("000004", "软件", 40.0, 2.0),
         ("000005", "煤炭", 50.0, -2.0),
         ("000006", "白酒", 60.0, 0.5),
+        ("920001", "北交所", 70.0, 1.0),
     ]:
         for i in range(70):
             rows.append({
@@ -113,6 +114,7 @@ def test_daily_cross_section_counts_and_industry_metrics() -> None:
         [(code, ind) for code, ind in [
             ("000001", "银行"), ("000002", "半导体"), ("000003", "电力"),
             ("000004", "软件"), ("000005", "煤炭"), ("000006", "白酒"),
+            ("920001", "北交所"),
         ]],
         columns=["code", "industry_l1"],
     )

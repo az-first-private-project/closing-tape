@@ -20,7 +20,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import BENCHMARK_INDEX, INDEX_MAP
+from app.core.constants import (
+    BENCHMARK_INDEX,
+    BROAD_INDEX_MAP,
+    INDEX_MAP,
+    STYLE_INDEX_MAP,
+    STYLE_ROTATION_WINDOW_DAYS,
+)
 from app.core.errors import DataUnavailableError, InvalidParamError
 from app.core.logging import get_logger
 from app.db.models import (
@@ -28,6 +34,8 @@ from app.db.models import (
     MarketIndex, MarketRegimeDaily, MarketTemperatureDaily, SectorScore,
 )
 from app.db.session import get_db
+from app.engine.broad_valuation import build_broad_valuation
+from app.engine.index_compare import build_index_compare
 from app.engine.index_perf import WINDOW_KEYS, window_returns
 from app.engine.market_temperature import weekly_summary
 from app.services.freshness import get_freshness_items
@@ -466,6 +474,99 @@ async def _is_historical(trade_date: date, db: AsyncSession) -> bool:
         select(func.max(MarketRegimeDaily.trade_date))
     )).scalar()
     return bool(latest and trade_date < latest)
+
+
+@router.get("/index-compare")
+async def get_index_compare(
+    trade_date: Optional[date] = Query(None, description="截止交易日，默认最新共同交易日"),
+    window_days: int = Query(
+        STYLE_ROTATION_WINDOW_DAYS, ge=250, le=1500,
+        description="滚动分位窗口（交易日）",
+    ),
+    chart_days: int = Query(
+        STYLE_ROTATION_WINDOW_DAYS, ge=60, le=1500,
+        description="前端折线保留的交易日数",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """创业板50 / 红利低波50 风格轮动看板数据（V7 T3）。
+
+    R、滚动 20/80 分位、当前百分位、三态仓位全部由后端计算；
+    前端只负责渲染，不自行推算。
+    """
+    stmt = (
+        select(
+            MarketIndex.index_code,
+            MarketIndex.trade_date,
+            MarketIndex.close,
+            MarketIndex.src,
+        )
+        .where(MarketIndex.index_code.in_(tuple(STYLE_INDEX_MAP)))
+        .order_by(MarketIndex.trade_date)
+    )
+    if trade_date is not None:
+        stmt = stmt.where(MarketIndex.trade_date <= trade_date)
+    rows = [
+        {
+            "index_code": row[0],
+            "trade_date": row[1],
+            "close": _f(row[2]),
+            "src": row[3],
+        }
+        for row in (await db.execute(stmt)).all()
+    ]
+    try:
+        payload = build_index_compare(
+            rows,
+            trade_date=trade_date,
+            window_days=window_days,
+            chart_days=chart_days,
+        )
+    except ValueError as exc:
+        raise DataUnavailableError(
+            str(exc),
+            next_action="运行 style_indices 任务或 scripts/backfill_style_indices.py",
+        ) from exc
+    payload["freshness"] = await get_freshness_items(db, ["style_indices"])
+    return payload
+
+
+@router.get("/bull-bear")
+async def get_bull_bear_valuation(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """牛熊位置 × 估值（V7 T4）。
+
+    严格 6 个宽基指数；PE/ERP 用文件硬数据快照（2026-11-13），
+    价格、回撤、动量由本地指数库计算。不得出现上证50、中证1000。
+    """
+    rows = [
+        {
+            "index_code": row[0],
+            "trade_date": row[1],
+            "close": _f(row[2]),
+            "src": row[3],
+        }
+        for row in (await db.execute(
+            select(
+                MarketIndex.index_code,
+                MarketIndex.trade_date,
+                MarketIndex.close,
+                MarketIndex.src,
+            )
+            .where(MarketIndex.index_code.in_(tuple(BROAD_INDEX_MAP)))
+            .order_by(MarketIndex.trade_date)
+        )).all()
+    ]
+    try:
+        payload = build_broad_valuation(rows)
+    except ValueError as exc:
+        raise DataUnavailableError(
+            str(exc),
+            next_action="运行 broad_indices 任务或 scripts/backfill_broad_indices.py",
+        ) from exc
+    payload["freshness"] = await get_freshness_items(db, ["broad_indices"])
+    return payload
 
 
 @router.get("/sector/{sector_code}")

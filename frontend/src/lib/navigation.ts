@@ -6,6 +6,7 @@
  */
 import {
   Activity,
+  ArrowLeftRight,
   BarChart3,
   Brain,
   Info,
@@ -26,6 +27,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '新闻情报', icon: BarChart3, end: true, keywords: ['首页', '新闻', '资讯'] },
   { to: '/dashboard', label: '盘后分析', icon: TrendingUp, keywords: ['大盘', '温度', '板块'] },
+  { to: '/index-compare', label: '指数对比', icon: ArrowLeftRight, keywords: ['风格', '轮动', '创业板50', '红利低波'] },
   { to: '/algo-center', label: '选股中心', icon: Brain, keywords: ['策略', '天梯', '共识', '回测'] },
   { to: '/paper', label: '纸面跟踪', icon: LineChart, keywords: ['组合', '净值'] },
   { to: '/watchlist', label: '自选', icon: Star, keywords: ['自选股', '提醒'] },

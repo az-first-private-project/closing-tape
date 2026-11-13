@@ -487,6 +487,14 @@ class Provider(Protocol):
         """深交所单日融资买入额（元）。"""
         ...
 
+    def fetch_style_indices(self, start: date, end: date) -> FetchResult:
+        """风格轮动指数：创业板50 + 红利低波50 历史日线。"""
+        ...
+
+    def fetch_broad_indices(self, start: date, end: date) -> FetchResult:
+        """牛熊估值 6 宽基指数历史日线。"""
+        ...
+
     # ---- A6 指数 ----
     def fetch_index_daily(self, trade_date: date, include_us: bool = False) -> FetchResult:
         """指数日线（A 股四指数 + 沪深300；可选美股）。"""
@@ -546,6 +554,12 @@ class BaseProvider:
 
     def fetch_margin_buy_szse(self, trade_date: date) -> FetchResult:
         self._unsupported("fetch_margin_buy_szse")
+
+    def fetch_style_indices(self, start: date, end: date) -> FetchResult:
+        self._unsupported("fetch_style_indices")
+
+    def fetch_broad_indices(self, start: date, end: date) -> FetchResult:
+        self._unsupported("fetch_broad_indices")
 
     def fetch_index_daily(self, trade_date: date, include_us: bool = False) -> FetchResult:
         self._unsupported("fetch_index_daily")
@@ -766,6 +780,16 @@ class ProviderChain:
         self, trade_date: date, *, timeout: float | None = None
     ) -> FetchResult:
         return await self.call("fetch_margin_buy_szse", trade_date, timeout=timeout)
+
+    async def fetch_style_indices(
+        self, start: date, end: date, *, timeout: float | None = None
+    ) -> FetchResult:
+        return await self.call("fetch_style_indices", start, end, timeout=timeout)
+
+    async def fetch_broad_indices(
+        self, start: date, end: date, *, timeout: float | None = None
+    ) -> FetchResult:
+        return await self.call("fetch_broad_indices", start, end, timeout=timeout)
 
     async def fetch_index_daily(
         self, trade_date: date, include_us: bool = False, *, timeout: float | None = None

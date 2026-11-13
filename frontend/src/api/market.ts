@@ -3,7 +3,9 @@
  */
 import { request } from './client'
 import type {
+  BroadValuation,
   DashboardData,
+  IndexCompareResult,
   IndexSeriesResponse,
   MarketOverview,
   SectorDetail,
@@ -74,4 +76,30 @@ export function fetchMarketOverview(tradeDate?: string): Promise<MarketOverview>
   return request<MarketOverview>('/market/overview', {
     query: { trade_date: tradeDate ?? undefined },
   })
+}
+
+/**
+ * 指数对比 / 风格轮动（V7 T3）
+ * 后端返回 R、滚动分位、三态仓位与解读文案；前端不自行计算。
+ */
+export function fetchIndexCompare(
+  tradeDate?: string,
+  windowDays?: number,
+  chartDays?: number,
+): Promise<IndexCompareResult> {
+  return request<IndexCompareResult>('/market/index-compare', {
+    query: {
+      trade_date: tradeDate ?? undefined,
+      window_days: windowDays,
+      chart_days: chartDays,
+    },
+  })
+}
+
+/**
+ * 牛熊位置 × 估值（V7 T4）
+ * 6 个宽基指数；PE/ERP 为文件快照，价格/回撤/动量为本地指数库。
+ */
+export function fetchBullBearValuation(): Promise<BroadValuation> {
+  return request<BroadValuation>('/market/bull-bear')
 }

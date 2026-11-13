@@ -23,7 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.constants import BENCHMARK_INDEX, DEFENSIVE_INDUSTRIES
+from app.core.constants import (
+    BENCHMARK_INDEX,
+    DEFENSIVE_INDUSTRIES,
+    POOL_BOARDS,
+    STATUS_NORMAL,
+    is_pool_stock_code,
+)
 from app.core.logging import get_logger
 from app.db.models.dim import DimStock
 from app.db.models.fact import (
@@ -193,6 +199,12 @@ async def _load_stocks(
         .where(FactStockDaily.trade_date >= start)
         .where(FactStockDaily.trade_date <= end)
         .where(FactStockDaily.close.isnot(None))
+        .where(FactStockDaily.code.in_(
+            select(DimStock.code).where(
+                DimStock.status == STATUS_NORMAL,
+                DimStock.board.in_(POOL_BOARDS),
+            )
+        ))
     )).all()
     frame = pd.DataFrame(rows, columns=[
         "code", "trade_date", "close", "high", "amount", "float_cap",
@@ -267,7 +279,11 @@ def _daily_cross_section(
     """按交易日聚合全 A 广度、估值、行业集中度、防御篮子收益。"""
     if stocks.empty:
         return pd.DataFrame(columns=["trade_date"])
-    frame = _stock_rolling(stocks)
+    # 双保险：即使调用方传入未过滤的原始行情，也不让北交所进入广度/温度口径
+    frame = stocks[stocks["code"].map(is_pool_stock_code)].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=["trade_date"])
+    frame = _stock_rolling(frame)
     tradable = frame[~frame["is_suspended"].fillna(False).astype(bool)].copy()
 
     # 行业映射只用于集中度与防御篮子；缺失行业的股票不参与这两项

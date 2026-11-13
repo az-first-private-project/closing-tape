@@ -52,13 +52,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import config
 from app.core.constants import (
+    BROAD_INDEX_MAP,
     INDEX_MAP,
     STATUS_DELISTED,
     STATUS_NORMAL,
+    STYLE_INDEX_MAP,
     board_of,
     exchange_of,
+    is_pool_stock_code,
     is_st_name,
-    is_stock_code,
     limit_prices,
 )
 from app.core.errors import (
@@ -678,12 +680,20 @@ def _limit_flags(
     )
 
 
-def _non_stock_active_codes(existing: dict[str, dict[str, Any]]) -> list[str]:
-    """存量里被错误标成活跃的非 A 股标的（定转/B 股），同步时一并停用。"""
+def _out_of_pool_active_codes(existing: dict[str, dict[str, Any]]) -> list[str]:
+    """存量里仍被标成活跃、但不属于股票池的标的（北交所/定转/B 股）。"""
     return [
         code for code, item in existing.items()
-        if item.get("status") == STATUS_NORMAL and not is_stock_code(code)
+        if item.get("status") == STATUS_NORMAL and not is_pool_stock_code(code)
     ]
+
+
+def _filter_pool_frame(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+    """股票池原始清单只保留沪深主板/创业板/科创板（去掉北交所等）。"""
+    if frame is None or getattr(frame, "empty", True) or "code" not in frame.columns:
+        return frame
+    codes = frame["code"].astype(str).str.zfill(6)
+    return frame[codes.map(is_pool_stock_code)].reset_index(drop=True)
 
 
 def _build_universe_rows(
@@ -704,7 +714,7 @@ def _build_universe_rows(
         code = str(record.get("code") or "").zfill(6)
         if not code or not code.isdigit() or len(code) != 6:
             continue
-        if not is_stock_code(code):
+        if not is_pool_stock_code(code):
             skipped_non_stock.append(code)
             continue
         old = existing.get(code, {})
@@ -753,9 +763,9 @@ def _build_universe_rows(
             }
         )
     if skipped_non_stock:
-        # 北交所定向可转债（810xxx）与 B 股不是 A 股股票，不能进股票池
+        # 北交所/定转/B 股不属于股票池，不能进 dim_stock
         logger.info(
-            "股票池剔除非 A 股标的 %d 个：%s",
+            "股票池剔除非沪深主板/创业板/科创板标的 %d 个：%s",
             len(skipped_non_stock), ",".join(sorted(set(skipped_non_stock))[:10]),
         )
     return rows
@@ -784,6 +794,8 @@ def _snapshot_rows(frame: pd.DataFrame | None, trade_date: date) -> list[dict[st
         if not code.isdigit() or len(code) != 6 or code in seen:
             continue
         seen.add(code)
+        if not is_pool_stock_code(code):
+            continue
         close = record.get("close")
         pre_close = record.get("pre_close")
         volume = record.get("volume")
@@ -834,6 +846,8 @@ def _history_rows(
     当日快照会补上最新交易日的估值。
     """
     rows: list[dict[str, Any]] = []
+    if not is_pool_stock_code(code):
+        return rows
     for record in _records(frame):
         trade_date = _as_date_optional(record.get("trade_date"))
         if trade_date is None:
@@ -909,8 +923,8 @@ def _moneyflow_rows(
         code = str(record.get("code") or "").zfill(6)
         if not code.isdigit() or len(code) != 6 or code in seen:
             continue
-        # 资金流排行会混入 810xxx 定向可转债、B 股，进入 fact_moneyflow 会污染聚合
-        if not is_stock_code(code):
+        # 资金流排行会混入 810xxx 定向可转债、B 股与北交所，进入 fact_moneyflow 会污染聚合
+        if not is_pool_stock_code(code):
             continue
         seen.add(code)
         rows.append(
@@ -987,11 +1001,12 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
         try:
             chain = get_provider_chain()
             fetched = await chain.fetch_stock_universe()
-            frame = fetched.detail.get("data")
+            frame = _filter_pool_frame(fetched.detail.get("data"))
 
             existing = await _load_existing_stocks(db)
             active_before = sum(
-                1 for item in existing.values() if item.get("status") == STATUS_NORMAL
+                1 for code, item in existing.items()
+                if item.get("status") == STATUS_NORMAL and is_pool_stock_code(code)
             )
             report = check_universe(frame, active_before)
             if not report.ok:
@@ -1004,7 +1019,7 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
                 )
 
             rows = _build_universe_rows(frame, existing)
-            stale_non_stock = _non_stock_active_codes(existing)
+            stale_non_stock = _out_of_pool_active_codes(existing)
             async with _db_scope(db) as session:
                 written = await upsert_rows(session, DimStock, rows, ["code"])
                 if stale_non_stock:
@@ -1017,7 +1032,7 @@ async def sync_stock_universe(db: AsyncSession | None = None) -> FetchResult:
                         .values(status=STATUS_DELISTED)
                     )
                     logger.info(
-                        "股票池停用存量非 A 股标的 %d 个：%s",
+                        "股票池停用存量非股票池标的 %d 个：%s",
                         len(stale_non_stock), ",".join(stale_non_stock[:10]),
                     )
                 await record_quality(
@@ -2319,6 +2334,252 @@ async def collect_macro_rates(
 
 
 # ============================================================
+# 风格轮动指数（创业板50 / 红利低波50）
+# ============================================================
+_STYLE_INDEX_COLUMNS = (
+    "index_code", "index_name", "trade_date", "open", "high", "low", "close",
+    "pre_close", "pct_chg", "volume", "amount", "src",
+)
+
+
+def _style_index_rows(
+    frame: pd.DataFrame | None, requested_date: date
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in _records(frame):
+        code = str(record.get("index_code") or "")
+        if code not in STYLE_INDEX_MAP:
+            continue
+        day = _as_date_optional(record.get("trade_date"))
+        if day is None or day > requested_date:
+            continue
+        close = _clean(record.get("close"))
+        if close is None:
+            continue
+        volume = record.get("volume")
+        rows.append({
+            "index_code": code,
+            "index_name": record.get("index_name") or STYLE_INDEX_MAP[code],
+            "trade_date": day,
+            "open": _clean(record.get("open")),
+            "high": _clean(record.get("high")),
+            "low": _clean(record.get("low")),
+            "close": close,
+            "pre_close": _clean(record.get("pre_close")),
+            "pct_chg": _clean(record.get("pct_chg")),
+            "volume": int(volume) if volume is not None else None,
+            "amount": _clean(record.get("amount")),
+            "src": str(record.get("src") or "akshare")[:16],
+        })
+    return rows
+
+
+async def collect_style_indices(
+    trade_date: date, db: AsyncSession | None = None
+) -> FetchResult:
+    """创业板50 + 红利低波50 日线（风格轮动看板的数据源）。
+
+    两个源独立降级；允许单市场当日缺失（中证指数可能 T+1 更新），
+    质量报告记 partial，不阻塞另一只指数落库。
+    """
+    started = time.perf_counter()
+    trade_date = _as_date(trade_date)
+    task, dataset = "style_indices", "style_indices"
+
+    async with _advisory_lock("style_indices") as acquired:
+        if not acquired:
+            return await _skip_with_job(task, dataset, trade_date, "lock_busy")
+        job = _JobTracker(task, dataset, trade_date=trade_date)
+        await job.begin()
+
+        try:
+            if not await _is_trade_day(db, trade_date):
+                await job.finish("skipped", error="non_trade_day")
+                return _skipped_result(task, "non_trade_day", trade_date=trade_date.isoformat())
+
+            chain = get_provider_chain()
+            fetched = await chain.fetch_style_indices(
+                trade_date - timedelta(days=30),
+                trade_date,
+                timeout=config.FETCH_TIMEOUT_SEC,
+            )
+            frame = fetched.detail.get("data")
+            rows = _style_index_rows(frame, trade_date)
+            if not rows:
+                raise ProviderError("风格指数归一化后为空")
+
+            codes = {row["index_code"] for row in rows}
+            report = QualityReport(
+                dataset=dataset,
+                rows=len(rows),
+                expected=2,
+                coverage=round(len(codes) / 2, 4),
+            )
+            if len(codes) < 2:
+                report.add(
+                    "style_index_missing",
+                    count=2 - len(codes),
+                    severity="warning",
+                    message="创业板50 / 红利低波50 有一个当日未更新",
+                )
+
+            async with _db_scope(db) as session:
+                written = await upsert_rows(
+                    session, MarketIndex, rows, ["index_code", "trade_date"]
+                )
+                await record_quality(
+                    session, dataset, report, trade_date,
+                    QualityStatus.OK if report.ok else QualityStatus.STALE,
+                )
+
+            latest_dates: dict[str, str] = {}
+            for code in STYLE_INDEX_MAP:
+                latest = max(
+                    (row["trade_date"] for row in rows if row["index_code"] == code),
+                    default=None,
+                )
+                latest_dates[code] = latest.isoformat() if latest else ""
+            await job.finish(
+                "success" if report.ok else "partial",
+                done=len(rows), failed=0, rows_written=written,
+            )
+            return FetchResult(
+                rows=written,
+                total=len(rows),
+                failed=fetched.failed,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                detail={
+                    "source": fetched.source,
+                    "codes": sorted(codes),
+                    "latest_dates": latest_dates,
+                    "sources": fetched.detail.get("sources"),
+                },
+            )
+        except Exception as exc:
+            await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
+            await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+
+
+# ============================================================
+# 牛熊估值 6 宽基指数
+# ============================================================
+def _broad_index_rows(
+    frame: pd.DataFrame | None, requested_date: date
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in _records(frame):
+        code = str(record.get("index_code") or "")
+        if code not in BROAD_INDEX_MAP:
+            continue
+        day = _as_date_optional(record.get("trade_date"))
+        if day is None or day > requested_date:
+            continue
+        close = _clean(record.get("close"))
+        if close is None:
+            continue
+        volume = record.get("volume")
+        rows.append({
+            "index_code": code,
+            "index_name": BROAD_INDEX_MAP[code],
+            "trade_date": day,
+            "open": _clean(record.get("open")),
+            "high": _clean(record.get("high")),
+            "low": _clean(record.get("low")),
+            "close": close,
+            "pre_close": _clean(record.get("pre_close")),
+            "pct_chg": _clean(record.get("pct_chg")),
+            "volume": int(volume) if volume is not None else None,
+            "amount": _clean(record.get("amount")),
+            "src": str(record.get("src") or "akshare")[:16],
+        })
+    return rows
+
+
+async def collect_broad_indices(
+    trade_date: date, db: AsyncSession | None = None
+) -> FetchResult:
+    """牛熊估值模块的 6 个宽基指数日线（文件硬约束：6 个，不多不少）。"""
+    started = time.perf_counter()
+    trade_date = _as_date(trade_date)
+    task, dataset = "broad_indices", "broad_indices"
+
+    async with _advisory_lock("broad_indices") as acquired:
+        if not acquired:
+            return await _skip_with_job(task, dataset, trade_date, "lock_busy")
+        job = _JobTracker(task, dataset, trade_date=trade_date)
+        await job.begin()
+
+        try:
+            if not await _is_trade_day(db, trade_date):
+                await job.finish("skipped", error="non_trade_day")
+                return _skipped_result(task, "non_trade_day", trade_date=trade_date.isoformat())
+
+            chain = get_provider_chain()
+            fetched = await chain.fetch_broad_indices(
+                trade_date - timedelta(days=30),
+                trade_date,
+                timeout=config.FETCH_TIMEOUT_SEC,
+            )
+            frame = fetched.detail.get("data")
+            rows = _broad_index_rows(frame, trade_date)
+            if not rows:
+                raise ProviderError("宽基指数归一化后为空")
+
+            codes = {row["index_code"] for row in rows}
+            report = QualityReport(
+                dataset=dataset,
+                rows=len(rows),
+                expected=len(BROAD_INDEX_MAP),
+                coverage=round(len(codes) / len(BROAD_INDEX_MAP), 4),
+            )
+            if len(codes) < len(BROAD_INDEX_MAP):
+                report.add(
+                    "broad_index_missing",
+                    count=len(BROAD_INDEX_MAP) - len(codes),
+                    severity="warning",
+                    message="6 个宽基指数有缺失",
+                )
+
+            async with _db_scope(db) as session:
+                written = await upsert_rows(
+                    session, MarketIndex, rows, ["index_code", "trade_date"]
+                )
+                await record_quality(
+                    session, dataset, report, trade_date,
+                    QualityStatus.OK if report.ok else QualityStatus.STALE,
+                )
+
+            latest_dates: dict[str, str] = {}
+            for code in BROAD_INDEX_MAP:
+                latest = max(
+                    (row["trade_date"] for row in rows if row["index_code"] == code),
+                    default=None,
+                )
+                latest_dates[code] = latest.isoformat() if latest else ""
+            await job.finish(
+                "success" if report.ok else "partial",
+                done=len(rows), failed=0, rows_written=written,
+            )
+            return FetchResult(
+                rows=written,
+                total=len(rows),
+                failed=fetched.failed,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                detail={
+                    "source": fetched.source,
+                    "codes": sorted(codes),
+                    "latest_dates": latest_dates,
+                    "sources": fetched.detail.get("sources"),
+                },
+            )
+        except Exception as exc:
+            await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
+            await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+
+
+# ============================================================
 # A6 指数日线
 # ============================================================
 async def collect_indices(
@@ -2723,6 +2984,8 @@ __all__ = [
     "collect_sector_members",
     "collect_moneyflow",
     "collect_indices",
+    "collect_style_indices",
+    "collect_broad_indices",
     "collect_margin",
     "collect_macro_rates",
     "run_daily_ingest",

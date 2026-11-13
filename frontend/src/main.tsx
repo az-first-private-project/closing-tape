@@ -23,11 +23,11 @@ function readNextAction(detail: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-/** U09：把接口异常记入会话状态中心；ABORTED 是主动取消，不记 */
+/** U09：把接口异常记入会话状态中心；ABORTED 是主动取消，DATA_NOT_READY 是业务未就绪，都不记 */
 function recordRequestError(error: unknown): void {
   const path = `${window.location.pathname}${window.location.search}`
   if (error instanceof ApiError) {
-    if (error.code === 'ABORTED') return
+    if (error.code === 'ABORTED' || error.code === 'DATA_NOT_READY') return
     recordStatus({
       level: error.isRetryable ? 'error' : 'warning',
       title: error.isRetryable ? '接口暂时不可用' : '接口请求未完成',

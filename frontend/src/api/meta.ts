@@ -47,3 +47,16 @@ export async function fetchJobs(query: JobQuery = {}): Promise<ListPage<Job>> {
 export function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health', { baseUrl: '' })
 }
+
+/**
+ * 一键补数：检查最近缺失交易日并在后台补跑（复用启动补缺逻辑）。
+ * 配置了 ADMIN_API_KEY 时需传 X-Admin-Key；仅本机/管理密钥可调用。
+ */
+export function triggerCatchUp(
+  adminKey?: string,
+): Promise<{ status: string; mode: string; hint: string }> {
+  return request<{ status: string; mode: string; hint: string }>('/admin/catch-up', {
+    method: 'POST',
+    headers: adminKey ? { 'X-Admin-Key': adminKey } : undefined,
+  })
+}

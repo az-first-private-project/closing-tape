@@ -144,8 +144,12 @@ def _patch_pipeline(monkeypatch, *, fail_step: str | None = None,
                       "steps": list(steps or [])})
         return {"trade_date": day.isoformat(), "steps": {}}
 
+    async def fake_stock_complete(db, days):
+        return False
+
     monkeypatch.setattr(pipeline, "run_task", fake_run_task)
     monkeypatch.setattr(pipeline, "run_daily_pipeline", fake_pipeline)
+    monkeypatch.setattr(cu, "_stock_days_complete", fake_stock_complete)
     return calls
 
 
@@ -268,3 +272,74 @@ def test_run_catch_up_lock_busy(monkeypatch) -> None:
     assert summary["status"] == "skipped"
     assert summary["reason"] == "lock_busy"
     assert executed == []
+
+
+# ============================================================
+# ④ 管理端点注册（一键补数）
+# ============================================================
+def test_admin_catch_up_route_registered() -> None:
+    from app.api.v1 import admin
+
+    paths = {getattr(route, "path", "") for route in admin.router.routes}
+    assert "/api/v1/admin/catch-up" in paths
+    assert "/api/v1/admin/ingest/{task}" in paths
+
+
+# ============================================================
+# ④b 下游数据集缺口
+# ============================================================
+def test_merge_downstream_gaps_flags_missing_datasets() -> None:
+    days = [D1, D2, D3]
+    complete = cu.merge_downstream_gaps(
+        days, [],
+        index_days={D1, D2, D3},
+        sector_counts={D1: 450, D2: 460, D3: 470},
+        factor_days={D1, D2, D3},
+        temperature_days={D1, D2, D3},
+        regime_days={D1, D2, D3},
+    )
+    assert complete == []
+
+    assert cu.merge_downstream_gaps(
+        days, [],
+        index_days={D2, D3},
+        sector_counts={D1: 450, D2: 460, D3: 470},
+        factor_days={D1, D2, D3},
+        temperature_days={D1, D2, D3},
+        regime_days={D1, D2, D3},
+    ) == [D1]
+
+    assert cu.merge_downstream_gaps(
+        days, [D2],
+        index_days={D1, D2, D3},
+        sector_counts={D1: 0, D2: 460, D3: 470},
+        factor_days={D1, D3},
+        temperature_days={D1, D2},
+        regime_days={D1, D2, D3},
+    ) == [D1, D2, D3]
+
+
+
+# ============================================================
+# ②b 行情已完整时跳过大区间日线回补
+# ============================================================
+def test_stock_days_complete_helper() -> None:
+    assert cu.stock_days_complete([D1, D2], {D1: 5000, D2: 5100})
+    assert not cu.stock_days_complete([D1, D2], {D1: 5000, D2: 100})
+    assert not cu.stock_days_complete([D1, D2], {D1: 5000})
+
+
+def test_execute_skips_history_when_stock_complete(monkeypatch) -> None:
+    calls = _patch_pipeline(monkeypatch)
+
+    async def fake_complete(db, days):
+        return True
+
+    monkeypatch.setattr(cu, "_stock_days_complete", fake_complete)
+    summary = asyncio.run(
+        cu._execute_catch_up([D1], object(), today=D2, snapshot_ok=True)
+    )
+    tasks = [call["task"] for call in calls]
+    assert "history_fast" not in tasks
+    assert "valuation_fast" in tasks
+    assert summary["status"] == "success"

@@ -26,10 +26,10 @@ from app.services.freshness import write_freshness
 logger = get_logger(__name__)
 
 DEFAULT_DAILY_STEPS = (
-    "calendar", "universe", "index", "sector", "sector_members", "snapshot",
-    "moneyflow", "sector_agg", "margin", "valuation", "features", "scores",
-    "sector_scores", "macro_rates", "market_factors", "temperature", "regime",
-    "report", "algos", "signal_perf",
+    "calendar", "universe", "index", "broad_indices", "style_indices", "sector",
+    "sector_members", "snapshot", "moneyflow", "sector_agg", "margin", "valuation",
+    "features", "scores", "sector_scores", "macro_rates", "market_factors",
+    "temperature", "regime", "report", "algos", "signal_perf",
 )
 
 # 支持 codes 定向执行的 task：这些任务的 rows 只是局部代码，不能代表数据集全量状态。
@@ -52,6 +52,8 @@ TASK_DATASET = {
     "valuation_fast": "valuation",
     "rebuild": "stock_features",
     "index": "index_daily",
+    "broad_indices": "broad_indices",
+    "style_indices": "style_indices",
     "sector": "sector_daily",
     "sector_members": "sector_members",
     "sector_fallback": "sector_daily",
@@ -379,6 +381,14 @@ async def _dispatch(
     if task == "index":
         from app.ingest.service import collect_indices
         return await collect_indices(resolved, db)
+
+    if task == "broad_indices":
+        from app.ingest.service import collect_broad_indices
+        return await collect_broad_indices(resolved, db)
+
+    if task == "style_indices":
+        from app.ingest.service import collect_style_indices
+        return await collect_style_indices(resolved, db)
 
     if task == "sector":
         # 板块日线统一同花顺口径（与 dim_sector_member 成分名单一致）；

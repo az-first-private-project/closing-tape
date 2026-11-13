@@ -20,6 +20,8 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import POOL_BOARDS, STATUS_NORMAL
+from app.db.models.dim import DimStock
 from app.db.models.fact import FactStockDaily
 
 
@@ -55,6 +57,12 @@ async def load_breadth(
     ).where(
         FactStockDaily.trade_date == trade_date,
         FactStockDaily.close.isnot(None),
+        FactStockDaily.code.in_(
+            select(DimStock.code).where(
+                DimStock.status == STATUS_NORMAL,
+                DimStock.board.in_(POOL_BOARDS),
+            )
+        ),
     )
     if exclude_suspended:
         stmt = stmt.where(FactStockDaily.is_suspended.is_(False))
