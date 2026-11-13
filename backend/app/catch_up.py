@@ -305,15 +305,25 @@ async def _stock_days_complete(db: AsyncSession, days: Sequence[date]) -> bool:
 
 
 async def _execute_catch_up(
-    days: list[date], db: AsyncSession, *, today: date, snapshot_ok: bool
+    days: list[date],
+    db: AsyncSession,
+    *,
+    today: date,
+    snapshot_ok: bool,
+    stock_complete: bool | None = None,
 ) -> dict:
-    """按缺口逐日补跑；单步失败不中断后续（run_task 自身不抛异常）。"""
+    """按缺口逐日补跑；单步失败不中断后续（run_task 自身不抛异常）。
+
+    ``stock_complete`` 允许测试直接注入“行情是否已完整”，避免纯顺序测试
+    为了一个只读判断去构造数据库会话。
+    """
     from app.pipeline import run_daily_pipeline, run_task
 
     results: dict[str, dict] = {}
     first, last = days[0], days[-1]
 
-    stock_complete = await _stock_days_complete(db, days)
+    if stock_complete is None:
+        stock_complete = await _stock_days_complete(db, days)
     range_steps = (
         tuple(step for step in RANGE_STEPS if step != "history_fast")
         if stock_complete else RANGE_STEPS
